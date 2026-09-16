@@ -6,7 +6,7 @@ Shared development and maintenance rules for independently released Nix and NixO
 
 The development shell and CI definitions target x86_64 Linux and aarch64 Linux. The policy repository has no VM suites. Member VM suites run separately on suitable x86_64 Linux builders.
 
-Status: initial local preparation. No member is enrolled, no family pin pair is approved, and member migrations are deferred. The root lockfile pins this repository's bootstrap tooling; it does not approve those revisions for the family. See [preparation status](docs/preparation.md).
+Status: `nixos-cross-config` is selected for the first member migration. No member is enrolled and no family pin pair is approved. The root lockfile pins this repository's bootstrap tooling; it does not approve those revisions for the family. See [preparation status](docs/preparation.md) and the [first migration record](docs/cross-config-adoption.md).
 
 ## Quickstart
 

@@ -2,7 +2,7 @@
 
 ## Current boundary
 
-Q37 authorizes preparation of this repository only. All seven members remain pending adoption, and no shared pair is approved. Member selection, migration order, GitHub publication, merge-gate activation, and write credentials remain subsequent setup work.
+The 2026-09-16 member-selection instruction authorizes `nixos-cross-config` as the first migration, extending Q37's earlier preparation boundary. All seven members remain pending adoption, and no shared pair is approved. The [migration record](cross-config-adoption.md) tracks its candidate and remaining hosted setup. The other six members remain outside this migration.
 
 ## Pin candidates and approval
 

@@ -1,5 +1,11 @@
 # Preparation status
 
+## First member migration
+
+On 2026-09-16, the maintainer selected `nixos-cross-config` as the first migration. Its [migration record](cross-config-adoption.md) tracks the implementation, validation, and remaining activation work. The policy revision is recorded while adoption remains pending; the other six member repositories remain unchanged.
+
+The policy repository is now published at `6208eb8c11a338a96e07002dc45696a5e32abad8`. Its current default branch is `docs/agent-skills`, and `main` is absent. The reusable workflow needs a reviewed `main` for central records before member CI can run. The sections below retain the original preparation and review history.
+
 ## Scope
 
 Prepare `nixos-project-policy` as a new sibling repository. Q35 adopted the coding/documentation baseline, Q36 adopted formatting for applicable first-party languages, and Q37 deferred member migrations. The [interview record](normalization-design.md) preserves all accepted decisions.

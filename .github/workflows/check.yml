@@ -1,0 +1,112 @@
+name: Shared policy
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        required: true
+        type: string
+      policy_revision:
+        description: Full commit, identical to the caller's uses reference
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  records:
+    name: Policy records
+    runs-on: ubuntu-24.04
+    outputs:
+      revision: ${{ steps.snapshot.outputs.revision }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: petohorvath/nixos-project-policy
+          ref: main
+          path: policy-state
+          persist-credentials: false
+      - id: snapshot
+        run: |
+          revision=$(git -C policy-state rev-parse HEAD)
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+  policy:
+    name: Policy (${{ matrix.system }})
+    needs: records
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            system: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            system: aarch64-linux
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: project
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: petohorvath/nixos-project-policy
+          ref: ${{ inputs.policy_revision }}
+          path: policy
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: petohorvath/nixos-project-policy
+          ref: ${{ needs.records.outputs.revision }}
+          path: policy-state
+          persist-credentials: false
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.34.6/install
+      - name: Report checked revisions
+        run: |
+          git -C project rev-parse HEAD
+          git -C policy rev-parse HEAD
+          git -C policy-state rev-parse HEAD
+      - name: Check shared requirements
+        env:
+          PROJECT: ${{ inputs.project }}
+        run: |
+          nix run --no-update-lock-file ./policy -- --policy-root ./policy-state check ./project --project "$PROJECT" --readiness --shell
+      - name: Run formatting and Nix lint outside the member flake
+        run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state lint ./project
+      - run: nix flake check ./project --no-update-lock-file --print-build-logs
+      - name: Check PR title
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state title "$PR_TITLE"
+  vm:
+    name: VM tests (x86_64-linux)
+    needs: records
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: project
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: petohorvath/nixos-project-policy
+          ref: ${{ inputs.policy_revision }}
+          path: policy
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: petohorvath/nixos-project-policy
+          ref: ${{ needs.records.outputs.revision }}
+          path: policy-state
+          persist-credentials: false
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.34.6/install
+          enable_kvm: true
+      - name: Run applicable VM suites
+        env:
+          PROJECT: ${{ inputs.project }}
+        run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state vm ./project --project "$PROJECT"

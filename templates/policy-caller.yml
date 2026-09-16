@@ -1,0 +1,19 @@
+name: Project checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    # Replace both revision placeholders with the same approved full commit.
+    uses: petohorvath/nixos-project-policy/.github/workflows/check.yml@POLICY_COMMIT
+    with:
+      project: PROJECT_NAME
+      policy_revision: POLICY_COMMIT

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "policyRepository": "petohorvath/nixos-project-policy",
+  "stableBranch": "nixos-26.05",
+  "systems": ["x86_64-linux", "aarch64-linux"],
+  "requiredTools": ["nix", "nil", "nixfmt", "statix", "deadnix"],
+  "readmeSections": ["Support", "Quickstart", "Development", "Contributing", "Documentation"],
+  "projects": {
+    "nix-libnet": {
+      "repository": "petohorvath/nix-libnet",
+      "adopted": false,
+      "policyRevision": null,
+      "vmTargets": []
+    },
+    "nix-nftypes": {
+      "repository": "petohorvath/nix-nftypes",
+      "adopted": false,
+      "policyRevision": null,
+      "vmTargets": []
+    },
+    "nixos-cross-config": {
+      "repository": "petohorvath/nixos-cross-config",
+      "adopted": false,
+      "policyRevision": null,
+      "vmTargets": []
+    },
+    "nixos-nftzones": {
+      "repository": "petohorvath/nixos-nftzones",
+      "adopted": false,
+      "policyRevision": null,
+      "vmTargets": ["vm-tests", "vm-tests-unstable"]
+    },
+    "nixos-registry": {
+      "repository": "petohorvath/nixos-registry",
+      "adopted": false,
+      "policyRevision": null,
+      "vmTargets": []
+    },
+    "nixos-shields": {
+      "repository": "petohorvath/nixos-shields",
+      "adopted": false,
+      "policyRevision": null,
+      "vmTargets": []
+    },
+    "nixos-wanwatch": {
+      "repository": "petohorvath/nixos-wanwatch",
+      "adopted": false,
+      "policyRevision": null,
+      "vmTargets": ["vm-tests", "vm-tests-unstable"]
+    }
+  }
+}

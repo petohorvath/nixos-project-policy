@@ -21,7 +21,7 @@
     "nixos-cross-config": {
       "repository": "petohorvath/nixos-cross-config",
       "adopted": false,
-      "policyRevision": "6208eb8c11a338a96e07002dc45696a5e32abad8",
+      "policyRevision": "eecc24f9b1e87943d0266ef60c835a5ad35c78b7",
       "vmTargets": []
     },
     "nixos-nftzones": {

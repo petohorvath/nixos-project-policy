@@ -50,9 +50,8 @@ def lockfile():
         "nodes": {
             "entry": {
                 "inputs": {
-                    "stable": "arbitrary-node",
-                    "unstable": "rolling",
-                    "alias": ["stable"],
+                    "nixpkgs": "arbitrary-node",
+                    "nixpkgs-unstable": "rolling",
                 }
             },
             "arbitrary-node": nixpkgs(STABLE, "nixos-26.05"),
@@ -74,21 +73,23 @@ class LockTests(unittest.TestCase):
                 policy.LockGraph(lock)
 
     def test_follows_resolves_from_nonstandard_root(self):
-        graph = policy.LockGraph(lockfile())
+        lock = lockfile()
+        lock["nodes"]["entry"]["inputs"]["alias"] = ["nixpkgs"]
+        graph = policy.LockGraph(lock)
         self.assertEqual(graph.resolve(["alias"]), "arbitrary-node")
         self.assertEqual(len(graph.reachable()), 3)
 
     def test_nested_follows(self):
         lock = lockfile()
         lock["nodes"]["entry"]["inputs"]["library"] = "library"
-        lock["nodes"]["library"] = {"inputs": {"pkgs": ["stable"]}}
+        lock["nodes"]["library"] = {"inputs": {"pkgs": ["nixpkgs"]}}
         self.assertEqual(
             policy.LockGraph(lock).resolve(["library", "pkgs"]), "arbitrary-node"
         )
 
     def test_alias_cycles_fail(self):
         lock = lockfile()
-        lock["nodes"]["entry"]["inputs"]["stable"] = ["alias"]
+        lock["nodes"]["entry"]["inputs"].update(nixpkgs=["alias"], alias=["nixpkgs"])
         with self.assertRaisesRegex(ValueError, "Cyclic follows"):
             policy.LockGraph(lock).reachable()
 
@@ -497,6 +498,70 @@ class ProjectTests(unittest.TestCase):
 
     def test_complete_static_contract_passes(self):
         self.assertEqual(self.inspect()["issues"], [])
+
+    def test_nonstandard_nixpkgs_input_names_fail(self):
+        for channel, expected_name, wrong_name, node in [
+            ("stable", "nixpkgs", "stable", "arbitrary-node"),
+            ("unstable", "nixpkgs-unstable", "unstable", "rolling"),
+        ]:
+            with self.subTest(channel=channel):
+                lock = lockfile()
+                inputs = lock["nodes"]["entry"]["inputs"]
+                del inputs[expected_name]
+                inputs[wrong_name] = node
+                self.write("flake.lock", json.dumps(lock))
+                self.assertIn(
+                    f"flake.lock: {channel} nixpkgs input {wrong_name!r} "
+                    f"must be named {expected_name!r}",
+                    self.inspect()["issues"],
+                )
+
+    def test_swapped_nixpkgs_channels_fail(self):
+        lock = lockfile()
+        lock["nodes"]["entry"]["inputs"] = {
+            "nixpkgs": "rolling",
+            "nixpkgs-unstable": "arbitrary-node",
+        }
+        self.write("flake.lock", json.dumps(lock))
+        self.assertEqual(self.inspect()["status"], "fail")
+        self.assertEqual(len(self.inspect()["issues"]), 2)
+
+    def test_nixpkgs_naming_does_not_require_unused_inputs(self):
+        for input_name in ["nixpkgs", "nixpkgs-unstable"]:
+            with self.subTest(input_name=input_name):
+                lock = lockfile()
+                del lock["nodes"]["entry"]["inputs"][input_name]
+                self.write("flake.lock", json.dumps(lock))
+                self.assertEqual(self.inspect()["issues"], [])
+
+    def test_canonical_follows_can_use_third_party_input_names(self):
+        lock = lockfile()
+        lock["nodes"]["entry"]["inputs"].update(
+            library="library", nixpkgs=["library", "pkgs"]
+        )
+        lock["nodes"]["library"] = {"inputs": {"pkgs": "arbitrary-node"}}
+        self.write("flake.lock", json.dumps(lock))
+        self.assertEqual(self.inspect()["issues"], [])
+
+    def test_noncanonical_root_nixpkgs_alias_fails(self):
+        lock = lockfile()
+        lock["nodes"]["entry"]["inputs"]["pkgs"] = ["nixpkgs"]
+        self.write("flake.lock", json.dumps(lock))
+        self.assertIn(
+            "flake.lock: stable nixpkgs input 'pkgs' must be named 'nixpkgs'",
+            self.inspect()["issues"],
+        )
+
+    def test_example_nixpkgs_input_names_are_checked(self):
+        lock = lockfile()
+        inputs = lock["nodes"]["entry"]["inputs"]
+        inputs["unstable"] = inputs.pop("nixpkgs-unstable")
+        self.write("examples/flake.lock", json.dumps(lock))
+        self.assertIn(
+            "examples/flake.lock: unstable nixpkgs input 'unstable' "
+            "must be named 'nixpkgs-unstable'",
+            self.inspect()["issues"],
+        )
 
     def test_changed_example_lock_fails(self):
         lock = lockfile()

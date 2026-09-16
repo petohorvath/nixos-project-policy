@@ -261,6 +261,7 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
     for path in locks:
         lock = LockGraph(read_json(path))
         lock_pins = []
+        channels = {}
         for node_id, node in lock.reachable().items():
             identity = repository_identity(node)
             if identity == config["policyRepository"].lower():
@@ -282,6 +283,7 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
                 }
                 if len(matches) == 1:
                     channel = matches.pop()
+            channels[node_id] = channel
             observation = {
                 "lockfile": str(path.relative_to(root)),
                 "node": node_id,
@@ -299,6 +301,16 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
                 )
             else:
                 lock_pins.append(observation)
+        for input_name, reference in lock.nodes[lock.root].get("inputs", {}).items():
+            channel = channels.get(lock.resolve(reference))
+            expected_name = {"stable": "nixpkgs", "unstable": "nixpkgs-unstable"}.get(
+                channel
+            )
+            if expected_name is not None and input_name != expected_name:
+                issues.append(
+                    f"{path.relative_to(root)}: {channel} nixpkgs input "
+                    f"{input_name!r} must be named {expected_name!r}"
+                )
         if (
             lock_pins
             and pairs

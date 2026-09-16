@@ -6,7 +6,7 @@ Shared development and maintenance rules for independently released Nix and NixO
 
 The development shell and CI definitions target x86_64 Linux and aarch64 Linux. The policy repository has no VM suites. Member VM suites run separately on suitable x86_64 Linux builders.
 
-Status: `nixos-cross-config` is selected for the first member migration. No member is enrolled and no family pin pair is approved. The root lockfile pins this repository's bootstrap tooling; it does not approve those revisions for the family. See [preparation status](docs/preparation.md) and the [first migration record](docs/cross-config-adoption.md).
+The [project records](policy/projects.json) identify enrolled members, and [pin records](policy/pins.json) identify the approved baseline and update batches. The root lockfile pins this repository's tooling; it does not approve those revisions for the family.
 
 ## Quickstart
 
@@ -38,8 +38,8 @@ Use root `nix fmt` and `nix flake check`. The latter runs checker tests, formatt
 
 - [Shared policy](POLICY.md): requirements and their scope.
 - [Checker reference](docs/checker.md): commands, records, coverage, and limitations.
-- [Maintenance](docs/maintenance.md): pin candidates, approval, recovery, and later enrollment.
-- [Preparation status](docs/preparation.md): completed work and deferred activation.
+- [Maintenance](docs/maintenance.md): pin candidates, approval, recovery, and enrollment.
+- [Changelog](CHANGELOG.md): release-facing changes.
 - [Glossary](CONTEXT.md): project-family terminology.
 - [Design decisions](docs/normalization-design.md) and [ADRs](docs/adr/0001-independent-projects.md): accepted choices and rationale.
 

@@ -33,6 +33,6 @@ Inspect a project with `nix run .# -- check ../PROJECT --project PROJECT`. Add `
 
 The [shared Nix rules](../POLICY.md#nix-code-and-tests) apply to this repository's expressions, scripts, workflows, and documentation. Use modern `nix` subcommands and the root flake entrypoints. The check constructor takes named arguments, with its callers above its implementation. Package and formatter expressions declare their dependencies as arguments and are instantiated through `pkgs.callPackage`.
 
-The `writing-nix-code` skill prefers flake-parts. This small flake keeps plain Nix composition, with separate package and formatter expressions; no additional framework dependency is needed for its current outputs. This is a deliberate departure from that preference, not a requirement for member projects. The `importApply` rule does not apply to these package functions, which return derivations rather than modules.
+Root `flake.nix` declares `systems`, the `nixpkgs` and `nixpkgs-unstable` inputs, and each public output. Local package and formatter expressions provide the implementation through plain Nix composition.
 
 The shell probe uses `nix eval --impure --expr builtins.currentSystem` only to identify the host platform before selecting its formatter output. Dependency and build evaluation still use the locked flake. Command usage, module boundaries, and naming require source review in addition to formatting and lint checks.

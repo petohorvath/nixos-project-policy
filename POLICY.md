@@ -1,6 +1,6 @@
 # Shared project policy
 
-This is the initial policy contract agreed in the [design interview](docs/normalization-design.md). Publication and adoption are separate from agreement on its rules. Member projects link to an approved immutable revision of this document. [Preparation status](docs/preparation.md) records the current adoption state.
+This document defines the shared requirements. The [design](docs/normalization-design.md) explains their architecture and rationale. Member projects link to an approved immutable revision of this document. Central [project records](policy/projects.json) and [pin records](policy/pins.json) determine adoption and pin approval.
 
 ## Independence and scope
 
@@ -14,13 +14,19 @@ Provide a default `devShells` output in root `flake.nix`, with root `.envrc` act
 
 Support development on `x86_64-linux` and `aarch64-linux`. Preserve existing Darwin outputs as best effort and document their lack of required CI coverage. Runtime support remains part of each project's public contract.
 
+Keep an easy-to-find `systems` binding in root `flake.nix`. Declare the applicable top-level outputs explicitly there, including `devShells`, `formatter`, `checks`, `packages`, and library or module outputs that the project provides. Local helpers may implement them, but must not hide the flake interface behind an imported aggregate. Do not add empty outputs or artificial packages solely to populate namespaces.
+
 The default shell supplies Nix CLI, nil, nixfmt, statix, deadnix, the applicable formatters, and project-specific tools. Common tools come from the shared stable pin. Document needed unstable overrides and technical replacements, including Shields' matched Nix/plugin wrapper. The effective executable and its compatibility matter when a wrapper replaces a stock tool.
+
+Include language-specific tools only for first-party code that needs them. For example, Ruff belongs in projects with Python sources. Remove obsolete tools and formatter configuration when their sources are removed.
 
 Root `nix fmt` formats applicable first-party Nix, Go, shell, Markdown, YAML, and JSON files. Include `.envrc` and applicable extensionless scripts. Projects own their formatter configuration; retain useful project-specific conventions and explicit formatter ordering. Exclude vendor/generated files, lockfiles, and fixtures whose exact serialized text is part of a test. Preserve existing Markdown wrapping during focused edits and use one source line per paragraph in new prose files.
 
 ## Dependencies and compatibility
 
 Use the exact approved stable and unstable nixpkgs revisions wherever a project selects those inputs, including development, checks, builds, and independently locked examples. Both stable and unstable are pinned: a branch name alone is not immutable. Projects without an input need not add it solely for conformity. External consumers may override nixpkgs; historical releases retain their original locks.
+
+Name stable nixpkgs inputs `nixpkgs` and unstable inputs `nixpkgs-unstable`. Apply this convention to each first-party flake, including independently locked examples and root inputs that use `follows`. Lock node identifiers and input names owned by third-party dependencies need not match these names. Internal channel labels such as `stable` and `unstable` may still identify checks and pin records.
 
 Keep dependencies between members acyclic, including test and tooling dependencies. Put integration tests in the higher-level consumer or a separate integration project. Review source-level imports as well as lock graphs. Normally consume member releases at tags locked to exact commits. Track temporary commits needed for changes spanning projects and replace them with released dependencies through PRs.
 
@@ -40,6 +46,8 @@ Use consistent names, explicit module-scope references, and argument shapes suit
 
 Register meaningful tests for behavior changes and keep their organization aligned with the code. Preserve existing test and coverage commitments unless explicitly changed through compatibility review. The family does not mandate TDD, one test framework, or a universal coverage percentage.
 
+Benchmarks are optional and require a concrete project need; policy adoption does not require a benchmark suite or a `dev/` directory. Add or retain performance tooling only when it serves the project's agreed scope.
+
 Fix real statix and deadnix findings before requiring their gates. Narrow, documented suppressions may cover intentional code or false positives. Broad disabling is not compliance.
 
 Root `nix flake check` runs applicable non-VM checks for the host platform. Keep VM execution and its build dependencies outside default checks. Provide explicit VM commands where applicable. Required CI covers formatting/lint and relevant evaluation/unit/integration checks on both Linux architectures, with pinned stable and unstable compatibility where relevant. Applicable VM suites gate merges on x86_64 Linux. Documentation-only PRs may use relevant documentation, formatting, and policy checks.
@@ -49,6 +57,8 @@ Root `nix flake check` runs applicable non-VM checks for the host platform. Keep
 Start the README with the project's purpose. Include support/status, quickstart, and links to development, contribution, and detailed documentation. The initial checker uses `Support`, `Quickstart`, `Development`, `Contributing`, and `Documentation` headings. Detailed guides and reference material follow the project's needs. Create glossaries and ADRs when meaningful terminology or architectural decisions need recording.
 
 Write direct explanations with clear subjects, useful examples, and concise paragraphs. Tag fenced code blocks with their language. Keep project instructions accurate and agent guidance concise, pointing to authoritative rules when needed. A contributor must not need this maintainer's global skills or workstation paths to understand the policy.
+
+Keep documentation focused on current usage, design, structure, and architectural decisions. Keep a changelog for release-facing changes and migration notes. Use Git commits, issues, PRs, and CI results for implementation history and validation evidence; do not duplicate them in dated progress logs, completed implementation plans, or separate review and validation reports. Central machine-readable adoption and pin records remain operational state.
 
 ## Changes, releases, and licenses
 
@@ -70,4 +80,4 @@ Keep checking code and the approved pin record here. Run common checks locally f
 
 Human review covers architecture, prose, public compatibility, caller changes, and limitations of mechanical checks. Required status names alone do not prove which workflow code ran. The [checker reference](docs/checker.md) identifies implemented checks and remaining review responsibilities.
 
-After initial adoption, prepare and test new requirements while the existing policy stays active. Activate a requirement only when all affected projects are ready. Current preparation covers this repository only; member enrollment and migration order remain separate decisions.
+After initial adoption, prepare and test new requirements while the existing policy stays active. Activate a requirement only when all affected projects are ready. Member enrollment and migration scope require explicit selection.

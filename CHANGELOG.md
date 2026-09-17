@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0
 
 - Record the shared project policy and accepted design decisions.
 - Provide root development tools, formatting, checker tests, and CI definitions.

@@ -1,10 +1,13 @@
 {
   "schemaVersion": 1,
-  "approved": null,
+  "approved": {
+    "stable": "c3eea5b2156db11c7eeeada3dc737711255b253e",
+    "unstable": "ef34387ddd751e1ab8857adf4676492d32eb24ec"
+  },
   "batches": [
     {
       "id": "2026-09-16-cross-config-adoption",
-      "status": "candidate",
+      "status": "approved",
       "pins": {
         "stable": "c3eea5b2156db11c7eeeada3dc737711255b253e",
         "unstable": "ef34387ddd751e1ab8857adf4676492d32eb24ec"

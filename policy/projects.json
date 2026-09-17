@@ -19,7 +19,12 @@
       "repository": "petohorvath/nixos-cross-config",
       "adopted": false,
       "vmTargets": [],
-      "policyVersion": "v0.1.0"
+      "policyVersion": "v0.1.0",
+      "requiredChecks": [
+        "policy / Policy records",
+        "policy / Policy (x86_64-linux)",
+        "policy / Policy (aarch64-linux)"
+      ]
     },
     "nixos-nftzones": {
       "repository": "petohorvath/nixos-nftzones",

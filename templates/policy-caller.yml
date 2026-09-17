@@ -12,8 +12,8 @@ permissions:
 
 jobs:
   policy:
-    # Replace both revision placeholders with the same approved full commit.
-    uses: petohorvath/nixos-project-policy/.github/workflows/check.yml@POLICY_COMMIT
+    # Replace both version placeholders with the same published immutable release tag.
+    uses: petohorvath/nixos-project-policy/.github/workflows/check.yml@POLICY_VERSION
     with:
       project: PROJECT_NAME
-      policy_revision: POLICY_COMMIT
+      policy_version: POLICY_VERSION

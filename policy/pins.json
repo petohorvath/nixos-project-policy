@@ -1,5 +1,17 @@
 {
   "schemaVersion": 1,
   "approved": null,
-  "batches": []
+  "batches": [
+    {
+      "id": "2026-09-16-cross-config-adoption",
+      "status": "candidate",
+      "pins": {
+        "stable": "c3eea5b2156db11c7eeeada3dc737711255b253e",
+        "unstable": "ef34387ddd751e1ab8857adf4676492d32eb24ec"
+      },
+      "projects": {
+        "nixos-cross-config": "62fbffd6f9f710e67c125fb9f8ef0bbdf0ef6857"
+      }
+    }
+  ]
 }

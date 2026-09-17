@@ -23,7 +23,7 @@ jobs:
       - name: Audit public checkouts and adopted merge gates
         env:
           GH_TOKEN: ${{ secrets.MEMBER_AUDIT_TOKEN }}
-        run: nix run --no-update-lock-file .# -- audit "$RUNNER_TEMP/projects" --fetch --github > audit.json
+        run: nix run --no-update-lock-file .# -- --policy-root . audit "$RUNNER_TEMP/projects" --fetch --github > audit.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

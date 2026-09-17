@@ -6,7 +6,9 @@ Shared development and maintenance rules for independently released Nix and NixO
 
 The development shell and CI definitions target x86_64 Linux and aarch64 Linux. The policy repository has no VM suites. Member VM suites run separately on suitable x86_64 Linux builders.
 
-Status: initial local preparation. No member is enrolled, no family pin pair is approved, and member migrations are deferred. The root lockfile pins this repository's bootstrap tooling; it does not approve those revisions for the family. See [preparation status](docs/preparation.md).
+The current [project records](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/projects.json) identify enrolled members, and current [pin records](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/pins.json) identify the approved baseline and update batches. The root lockfile pins this repository's tooling; it does not approve those revisions for the family.
+
+Policy releases version the shared rules and checker code. Members select an exact release tag such as `v0.1.0`; checks read shared pins and enrollment from current records on `main`. A nixpkgs update does not require a policy release. [VERSION](VERSION) identifies the prepared version; publication follows the [release procedure](docs/maintenance.md#releases).
 
 ## Quickstart
 
@@ -21,7 +23,7 @@ nix run .# -- validate
 `nix develop` is the explicit shell entrypoint. To inspect existing sibling checkouts without changing them:
 
 ```bash
-nix run .# -- audit ..
+nix run .# -- --policy-root . audit ..
 ```
 
 An audit distinguishes `pending-adoption` from passing compliance. A direct member `check` fails until the required baseline and adoption configuration exist.
@@ -38,8 +40,8 @@ Use root `nix fmt` and `nix flake check`. The latter runs checker tests, formatt
 
 - [Shared policy](POLICY.md): requirements and their scope.
 - [Checker reference](docs/checker.md): commands, records, coverage, and limitations.
-- [Maintenance](docs/maintenance.md): pin candidates, approval, recovery, and later enrollment.
-- [Preparation status](docs/preparation.md): completed work and deferred activation.
+- [Maintenance](docs/maintenance.md): pin candidates, approval, recovery, and enrollment.
+- [Changelog](CHANGELOG.md): release-facing changes.
 - [Glossary](CONTEXT.md): project-family terminology.
 - [Design decisions](docs/normalization-design.md) and [ADRs](docs/adr/0001-independent-projects.md): accepted choices and rationale.
 

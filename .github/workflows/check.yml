@@ -6,8 +6,8 @@ on:
       project:
         required: true
         type: string
-      policy_revision:
-        description: Full commit, identical to the caller's uses reference
+      policy_version:
+        description: Exact release tag, identical to the caller's uses reference
         required: true
         type: string
 
@@ -20,7 +20,24 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       revision: ${{ steps.snapshot.outputs.revision }}
+      checker_revision: ${{ steps.snapshot.outputs.checker_revision }}
     steps:
+      - name: Verify immutable policy release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          POLICY_VERSION: ${{ inputs.policy_version }}
+        run: |
+          [[ "$POLICY_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          release=$(gh api "repos/petohorvath/nixos-project-policy/releases/tags/$POLICY_VERSION")
+          jq -e --arg version "$POLICY_VERSION" '
+            .tag_name == $version and .immutable == true and .draft == false and .prerelease == false
+          ' <<< "$release"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: petohorvath/nixos-project-policy
+          ref: refs/tags/${{ inputs.policy_version }}
+          path: policy
+          persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: petohorvath/nixos-project-policy
@@ -28,9 +45,15 @@ jobs:
           path: policy-state
           persist-credentials: false
       - id: snapshot
+        env:
+          POLICY_VERSION: ${{ inputs.policy_version }}
         run: |
+          test "$(cat policy/VERSION)" = "${POLICY_VERSION#v}"
           revision=$(git -C policy-state rev-parse HEAD)
+          checker_revision=$(git -C policy rev-parse HEAD)
           printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+          printf 'checker_revision=%s\n' "$checker_revision" >> "$GITHUB_OUTPUT"
+          printf 'Policy %s: %s\nRecords: %s\n' "$POLICY_VERSION" "$checker_revision" "$revision"
   policy:
     name: Policy (${{ matrix.system }})
     needs: records
@@ -51,7 +74,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: petohorvath/nixos-project-policy
-          ref: ${{ inputs.policy_revision }}
+          ref: ${{ needs.records.outputs.checker_revision }}
           path: policy
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -93,7 +116,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: petohorvath/nixos-project-policy
-          ref: ${{ inputs.policy_revision }}
+          ref: ${{ needs.records.outputs.checker_revision }}
           path: policy
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

@@ -11,6 +11,6 @@ writeShellApplication {
     nix
   ];
   text = ''
-    exec ${python3}/bin/python ${../tools/policy.py} --policy-root ${../.} "$@"
+    exec ${python3}/bin/python ${../.}/tools/policy.py "$@"
   '';
 }

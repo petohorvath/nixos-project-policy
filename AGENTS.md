@@ -2,7 +2,7 @@
 
 Before changing code, documentation, policy records, or workflows, read [POLICY.md](POLICY.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
-For checker or record-format changes, read [docs/checker.md](docs/checker.md). For pin updates, enrollment, or recovery, read [docs/maintenance.md](docs/maintenance.md). Current work and deferred activation are recorded in [docs/preparation.md](docs/preparation.md).
+For checker or record-format changes, read [docs/checker.md](docs/checker.md). For pin updates, enrollment, or recovery, read [docs/maintenance.md](docs/maintenance.md).
 
 Complete changes with the relevant behavioral tests, `nix fmt`, and `nix flake check`. Report validation limits explicitly. Member migrations require a separate user decision; work in this repository does not authorize them.
 

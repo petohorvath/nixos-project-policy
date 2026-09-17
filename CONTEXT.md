@@ -16,6 +16,9 @@ _Avoid_: Subproject, product component
 The independently versioned `nixos-project-policy` project, which holds shared requirements, approved dependency revisions, and the implementation of policy checks.
 _Avoid_: Global skills, shared project library
 
+**Policy release**:
+An immutable version of the shared rules and the implementation of policy checks, separate from the current shared pins and member enrollment state.
+
 **Policy check**:
 A check that a member project meets shared requirements, such as using approved dependency revisions and providing the required development tools.
 _Avoid_: External check

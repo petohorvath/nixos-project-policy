@@ -8,7 +8,7 @@ Run `direnv allow` after reviewing `.envrc`. Alternatively, enter the same shell
 
 ## Tools and checks
 
-The stable lock supplies Nix, nil, nixfmt, statix, deadnix, treefmt, shfmt, Prettier, Git, Python/PyYAML, Ruff, and actionlint. Python, Ruff, and actionlint are this project's additions. No unstable tool override is currently needed. `flake.lock` records exact bootstrap revisions; `policy/pins.json` separately records family approval.
+The stable lock supplies Nix, nil, nixfmt, statix, deadnix, treefmt, shfmt, Prettier, Git, jq, Python/PyYAML, Ruff, and actionlint. Python, Ruff, jq, and actionlint support this project's checker and workflow tests. No unstable tool override is currently needed. `flake.lock` records exact bootstrap revisions; `policy/pins.json` separately records family approval.
 
 ```bash
 nix fmt
@@ -23,16 +23,17 @@ For a focused test run:
 nix develop --command python -m unittest discover -s tests -v
 nix fmt -- --ci
 nix run .# -- validate
+nix run .# -- --version
 ```
 
 The formatter covers Nix, shell, Markdown, YAML, JSON, and Python present in this repository. Go formatting belongs in projects containing first-party Go. Markdown uses preserved wrapping so focused edits do not reflow existing paragraphs. Formatting checks operate on writable source copies without Git metadata.
 
-Inspect a project with `nix run .# -- check ../PROJECT --project PROJECT`. Add `--shell` only when executing that project's development environment is intended. The default check reads files; neither it nor a local audit changes member sources or lockfiles. See [checker commands](checker.md).
+Inspect a project with `nix run .# -- --policy-root . check ../PROJECT --project PROJECT`, using a trusted checkout of current central records. Add `--shell` only when executing that project's development environment is intended. The default check reads files; neither it nor a local audit changes member sources or lockfiles. See [checker commands](checker.md).
 
 ## Nix conventions
 
 The [shared Nix rules](../POLICY.md#nix-code-and-tests) apply to this repository's expressions, scripts, workflows, and documentation. Use modern `nix` subcommands and the root flake entrypoints. The check constructor takes named arguments, with its callers above its implementation. Package and formatter expressions declare their dependencies as arguments and are instantiated through `pkgs.callPackage`.
 
-The `writing-nix-code` skill prefers flake-parts. This small flake keeps plain Nix composition, with separate package and formatter expressions; no additional framework dependency is needed for its current outputs. This is a deliberate departure from that preference, not a requirement for member projects. The `importApply` rule does not apply to these package functions, which return derivations rather than modules.
+Root `flake.nix` declares `systems`, the `nixpkgs` and `nixpkgs-unstable` inputs, and each public output. Local package and formatter expressions provide the implementation through plain Nix composition.
 
 The shell probe uses `nix eval --impure --expr builtins.currentSystem` only to identify the host platform before selecting its formatter output. Dependency and build evaluation still use the locked flake. Command usage, module boundaries, and naming require source review in addition to formatting and lint checks.

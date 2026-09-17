@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.1
+
+- Read merge settings through GraphQL when GitHub omits them from a read-only REST response, so compliant repositories pass the audit.
+- Treat incomplete or inaccessible merge settings as inspection errors and continue rejecting verified merge-policy violations.
+- Enroll `nixos-cross-config` and complete its initial approved pin rollout.
+
+### Migration
+
+Members retain their selected policy releases and current pins. The central audit continues to use each member's selected checker. Audit credentials still need only Administration, Contents, and Metadata read access.
+
 ## 0.1.0
 
 - Record the shared project policy and accepted design decisions.

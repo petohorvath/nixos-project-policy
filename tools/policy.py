@@ -766,13 +766,14 @@ def inspect_released_project(root, name, repository, version, records_root):
 def check_github(project):
     repository = project["repository"]
     info = github_get(f"repos/{repository}")
+    merge_settings = github_merge_settings(repository, info)
     branch = quote(info["default_branch"], safe="")
     rules = github_get(f"repos/{repository}/rules/branches/{branch}")
     issues = []
     if (
-        not info.get("allow_squash_merge")
-        or info.get("allow_merge_commit")
-        or info.get("allow_rebase_merge")
+        not merge_settings["allow_squash_merge"]
+        or merge_settings["allow_merge_commit"]
+        or merge_settings["allow_rebase_merge"]
     ):
         issues.append("github: configure squash as the only merge method")
     pr_rule = any(rule["type"] == "pull_request" for rule in rules)
@@ -801,7 +802,47 @@ def check_github(project):
     return issues
 
 
+def github_merge_settings(repository, info):
+    fields = ("allow_squash_merge", "allow_merge_commit", "allow_rebase_merge")
+    if all(isinstance(info.get(field), bool) for field in fields):
+        return info
+
+    # Read-only tokens can inspect these settings through GraphQL even when
+    # GitHub omits them from the REST repository response.
+    owner, name = repository.split("/", 1)
+    result = github_request(
+        "graphql",
+        {
+            "query": """query($owner: String!, $name: String!) {
+                repository(owner: $owner, name: $name) {
+                    allow_squash_merge: squashMergeAllowed
+                    allow_merge_commit: mergeCommitAllowed
+                    allow_rebase_merge: rebaseMergeAllowed
+                }
+            }""",
+            "variables": {"owner": owner, "name": name},
+        },
+    )
+    data = (
+        result.get("data")
+        if isinstance(result, dict) and not result.get("errors")
+        else None
+    )
+    settings = data.get("repository") if isinstance(data, dict) else None
+    if not isinstance(settings, dict) or not all(
+        isinstance(settings.get(field), bool) for field in fields
+    ):
+        raise ValueError(
+            f"GitHub merge inspection unavailable for {repository}; settings are unknown"
+        )
+    return settings
+
+
 def github_get(path):
+    return github_request(path)
+
+
+def github_request(path, payload=None):
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -812,9 +853,14 @@ def github_get(path):
             "GitHub inspection requires a token in GH_TOKEN or GITHUB_TOKEN with Administration, Contents, and Metadata read access to enrolled members; configure the MEMBER_AUDIT_TOKEN secret for maintenance"
         )
     headers["Authorization"] = f"Bearer {token}"
+    data = None
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(payload).encode()
     try:
         with urlopen(
-            Request(f"https://api.github.com/{path}", headers=headers), timeout=30
+            Request(f"https://api.github.com/{path}", data=data, headers=headers),
+            timeout=30,
         ) as response:
             return json.load(response)
     except HTTPError as error:

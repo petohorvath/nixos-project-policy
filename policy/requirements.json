@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "systems": ["x86_64-linux", "aarch64-linux"],
+  "requiredTools": ["nix", "nil", "nixfmt", "statix", "deadnix"],
+  "readmeSections": ["Support", "Quickstart", "Development", "Contributing", "Documentation"]
+}

@@ -1,10 +1,10 @@
 # Checker reference
 
-The checker runs from the policy repository or its packaged `nixos-project-policy` executable. Local commands default to the bundled records. The global `--policy-root PATH` option selects a separate trusted checkout of current records. Passing project tests alone does not establish family compliance.
+The checker runs from a selected policy release or its packaged `nixos-project-policy` executable. `--version` reports its version. The global `--policy-root PATH` option selects a trusted checkout of current records and is required for `check`, `audit`, and `vm`. These commands never silently use a release's historical pin snapshot. Other commands default to bundled records when no path is given. Passing project tests alone does not establish family compliance.
 
 ## Commands
 
-| Command after `nix run .# --`                 | Behavior                                                                                                                                    |
+| Command after `nix run .# -- --policy-root .` | Behavior                                                                                                                                    |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `validate`                                    | Validate the policy records; report whether approved pins exist. This is not an adoption check.                                             |
 | `check PATH --project NAME`                   | Inspect a registered member checkout and fail on missing requirements or an unapproved baseline.                                            |
@@ -18,7 +18,17 @@ The checker runs from the policy repository or its packaged `nixos-project-polic
 | `candidate --stable COMMIT --unstable COMMIT` | Emit an unapproved pair of exact commits. It neither writes locks nor registers or approves a batch.                                        |
 | `title TITLE`                                 | Validate Conventional Commit PR-title syntax.                                                                                               |
 
-Commands print JSON, including a digest of the records actually used. Exit 0 means the requested operation succeeded; readiness checks, candidate validation, and audits of pending members can succeed without establishing compliance. Exit 1 means enforced checks failed. Exit 2 means the request, record, or inspection could not be processed. Reports include checked project commits when Git metadata is available. Reusable CI separately logs the exact checker and record checkout revisions.
+Commands print JSON with `checkerVersion`, `policyRecordsRevision` when Git metadata is available, and `policyRecordsDigest` for the records actually used. Member reports also identify their registered `policyVersion`. Exit 0 means the requested operation succeeded; readiness checks, candidate validation, and audits of pending members can succeed without establishing compliance. Exit 1 means enforced checks failed. Exit 2 means the request, record, or inspection could not be processed. Reports include checked project commits when Git metadata is available. Reusable CI separately logs the exact checker and record checkout revisions.
+
+After publication, a selected release can check a member against a separate current records checkout:
+
+```bash
+nix run github:petohorvath/nixos-project-policy/v0.1.0 -- \
+  --policy-root ../nixos-project-policy-records \
+  check ../nixos-cross-config --project nixos-cross-config --readiness
+```
+
+Update that trusted records checkout from `main` before a current compliance check. Use a previously captured record commit only when reproducing an earlier result. Local commands do not fetch records or prove that a checkout is current. A direct `check` requires the executing checker version to match the member's registered policy release. Audits invoke a different selected release through `nix run` when an enrolled member needs it, passing the same current records checkout. Pending members are assessed with the executing checker for enrollment preparation. Release lookup or execution failures are inspection errors. Each member's CI uses its selected release.
 
 A normal `check` fails while adoption is pending. `--readiness` allows enrollment validation and returns `ready` when all inspected requirements pass against approved pins. It does not waive pin approval, the recorded policy revision, caller checks, or shell checks. Registered candidates return `candidate-ready`, with or without `--batch`; pending members still need `--readiness`. Only an adopted member checked against an approved baseline or allowed rollout pair can return `pass`. `--shell` preserves these distinctions. An audit reports pending members as `pending-adoption` with their readiness result in `assessment`.
 
@@ -28,9 +38,11 @@ CI and runtime probes use `--no-update-lock-file` by itself to reject a required
 
 ## Central records
 
-`policy/projects.json` records the project identities, required tools, Linux systems, README headings, VM targets, adoption state, and policy revisions. Every non-null `policyRevision` must be a full immutable commit, including revisions prepared for pending members. A pending member may leave it null until enrollment preparation, but cannot pass readiness checks without one. Enrolled projects also need `requiredChecks`, the exact GitHub status names verified during adoption. A pending project has `adopted: false`; that state never means compliance.
+`policy/projects.json` uses schema version 2 and records project identities, the stable update branch, VM targets, adoption state, and selected policy releases. Every non-null `policyVersion` must be an exact `vMAJOR.MINOR.PATCH` release tag, including versions prepared for pending members. Branch names, abbreviated versions, prereleases, and commit hashes are rejected. A pending member may leave it null until enrollment preparation, but cannot pass readiness checks without one. Enrolled projects also need `requiredChecks`, the exact GitHub status names verified during adoption. A pending project has `adopted: false`; that state never means compliance.
 
-`policy/pins.json` contains `approved`, either null or an exact stable/unstable pair, and `batches`. Initially no pair is approved. The policy repository's own bootstrap lock does not change that state.
+`policy/requirements.json` uses schema version 1 and belongs to the checker release. It defines required tools, Linux systems, and README headings. The checker reads this file beside its own code, even when `--policy-root` selects different current records. Placing these requirements back in current project records is rejected, so a record change cannot silently change a release's rules.
+
+`policy/pins.json` uses schema version 1 and contains `approved`, either null or an exact stable/unstable pair, and `batches`. Initially no pair is approved. The policy repository's own bootstrap lock does not change that state. Pin changes use the same checker release with new current records and member locks.
 
 A batch records its ID, state, proposed `pins`, optional `previous` pair, and a `projects` map from affected member names to exact tested commits. States are `candidate`, `approved`, `rolling`, `paused`, `complete`, and `withdrawn`. Pair values contain only exact stable and unstable commit strings. The checker automatically selects the unique candidate registered for the matching clean source commit and names it in `candidateBatch`; `--batch` explicitly requests one for local testing. A caller cannot supply arbitrary approved pins. An active rollout must remain tied to the central approved baseline.
 
@@ -42,7 +54,9 @@ The checker resolves version-7 lock graphs, including root-relative `follows`, a
 
 Each first-party lock's root inputs must name stable nixpkgs `nixpkgs` and unstable `nixpkgs-unstable`, including inputs resolved through `follows`. Lock node identifiers and transitive input names remain unrestricted. An absent channel need not be added. Branch declarations identify channels; an exact revision can identify one when it matches a single channel in the allowed pin pairs. Source review also covers first-party flakes without independent locks.
 
-Structural checks cover the root development entrypoint, required documentation files, README sections, and immutable shared-rule links. Caller checks require the registered immutable reusable-workflow revision, with a matching `policy_revision` input. The PR trigger must declare exactly `types: [opened, synchronize, reopened, edited]`, in any order, so title edits refresh the Conventional Commit result. Branch, path, and other trigger filters remain unsupported. The caller job must have no `if` condition or `needs` dependencies: a skipped prerequisite would prevent it from running. The initial caller intentionally runs for every PR; optimized documentation-only job selection can be added with tests later.
+Structural checks cover the root development entrypoint, required documentation files, README sections, and links to the selected release's `POLICY.md`. Caller checks require the registered release tag in the reusable-workflow reference, with a matching `policy_version` input. The PR trigger must declare exactly `types: [opened, synchronize, reopened, edited]`, in any order, so title edits refresh the Conventional Commit result. Branch, path, and other trigger filters remain unsupported. The caller job must have no `if` condition or `needs` dependencies: a skipped prerequisite would prevent it from running. The initial caller intentionally runs for every PR; optimized documentation-only job selection can be added with tests later.
+
+The reusable workflow verifies through GitHub that the selected release is published, immutable, and not a prerelease. It checks out the exact tag, checks that `VERSION` matches, and captures its commit alongside the current `main` record commit. All policy and VM jobs use those two captured commits. A missing release, mutable release, unavailable API response, or version mismatch stops the workflow. Local structural checks do not attest remote publication or immutability.
 
 The GitHub audit checks squash-only merging, a PR requirement, and configured required status names through rulesets or branch protection. Required status names do not attest the workflow implementation. Bypass lists, second-person review settings, full permission inventories, and release publication configuration still need setup review.
 
@@ -52,7 +66,7 @@ The reusable workflow runs policy checks, external formatting/Nix lint, and ordi
 
 ## CI integration
 
-Use [templates/policy-caller.yml](../templates/policy-caller.yml) only after a policy commit has been published and approved. Replace both revision placeholders with the same full commit and set the member name. The reusable workflow checks out caller code and pinned checker code separately. A preliminary job captures the policy repository's current `main` revision; all jobs read records from that same immutable snapshot. This lets approvals and rollout state change independently of the pinned checker implementation. The policy repository's main branch therefore needs the agreed human and CI merge controls before activation.
+Use [templates/policy-caller.yml](../templates/policy-caller.yml) with the same exact published policy release tag in both version placeholders and set the member name. The reusable workflow checks out caller code and checker code separately. A preliminary job verifies the release and captures the release commit and current `main` record commit; all jobs use those snapshots. This lets approvals and rollout state change independently of the selected policy release. The policy repository's `main` branch needs the agreed human and CI merge controls before activation.
 
 Standard PR checkout tests GitHub's candidate merge commit, which is the clean commit a candidate batch must register. Registering that commit changes only the central records; it does not change the member's pinned workflow reference or add a temporary batch field to its caller. After the record PR merges, rerun the member PR checks to capture the new record snapshot. Once the pair is approved, ordinary merge-commit checks use the approved baseline. Caller changes remain subject to human review and drift audits.
 

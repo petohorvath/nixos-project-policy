@@ -19,6 +19,10 @@ import yaml
 
 
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
+POLICY_VERSION = re.compile(
+    r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z"
+)
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 PR_ACTIVITIES = {"opened", "synchronize", "reopened", "edited"}
 ACTIVE_BATCH_STATES = {"approved", "rolling", "paused"}
@@ -37,9 +41,11 @@ EXCLUDED_DIRS = {
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="nixos-project-policy", description=__doc__)
+    version = (SOURCE_ROOT / "VERSION").read_text().strip()
+    parser.add_argument("--version", action="version", version=f"%(prog)s {version}")
     parser.add_argument(
-        "--policy-root", type=Path, default=Path(__file__).resolve().parents[1]
+        "--policy-root", type=Path, help="Trusted checkout of current central records"
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("validate", help="Validate the central records")
@@ -91,7 +97,14 @@ def main(argv=None):
     candidate.add_argument("--unstable", required=True)
     args = parser.parse_args(argv)
     try:
-        config, pins = load_policy(args.policy_root)
+        require_policy_version(f"v{version}")
+        if args.command in {"check", "audit", "vm"} and args.policy_root is None:
+            raise ValueError(
+                f"{args.command} requires --policy-root with current central records; "
+                "a policy release's bundled pins do not establish current approval"
+            )
+        records_root = args.policy_root or SOURCE_ROOT
+        config, pins = load_policy(records_root)
         if args.command == "validate":
             result = {"status": "valid", "approvedPins": pins["approved"] is not None}
         elif args.command == "title":
@@ -125,6 +138,12 @@ def main(argv=None):
                 "targets": targets,
             }
         elif args.command == "check":
+            selected = config["projects"][args.project]["policyVersion"]
+            if selected is not None and selected != f"v{version}":
+                raise ValueError(
+                    f"Project {args.project} selects policy {selected}; "
+                    f"run that release instead of checker v{version}"
+                )
             result = inspect_project(
                 args.project_dir,
                 args.project,
@@ -140,9 +159,28 @@ def main(argv=None):
                 if result["issues"]:
                     result["status"] = "fail"
         else:
-            result = audit_family(args.workspace, config, pins, args.fetch, args.github)
+            result = audit_family(
+                args.workspace,
+                config,
+                pins,
+                args.fetch,
+                args.github,
+                records_root=records_root,
+            )
+        result["checkerVersion"] = f"v{version}"
+        result["policyRecordsRevision"] = git_revision(records_root)
         result["policyRecordsDigest"] = hashlib.sha256(
-            json.dumps({"projects": config, "pins": pins}, sort_keys=True).encode()
+            json.dumps(
+                {
+                    "projects": {
+                        key: value
+                        for key, value in config.items()
+                        if key not in {"systems", "requiredTools", "readmeSections"}
+                    },
+                    "pins": pins,
+                },
+                sort_keys=True,
+            ).encode()
         ).hexdigest()
         print(json.dumps(result, indent=2, sort_keys=True))
         return {"fail": 1, "error": 2}.get(result.get("status"), 0)
@@ -162,8 +200,18 @@ def load_policy(root):
     pins = read_json(root / "policy/pins.json")
     if not isinstance(config, dict) or not isinstance(pins, dict):
         raise ValueError("Policy records must be JSON objects")
-    if config.get("schemaVersion") != 1 or pins.get("schemaVersion") != 1:
+    if config.get("schemaVersion") != 2 or pins.get("schemaVersion") != 1:
         raise ValueError("Unsupported policy record schema")
+    requirements = read_json(SOURCE_ROOT / "policy/requirements.json")
+    if requirements.get("schemaVersion") != 1:
+        raise ValueError("Unsupported policy requirements schema")
+    # Requirements belong to the selected checker release, never the live records.
+    for field in ("systems", "requiredTools", "readmeSections"):
+        if field in config:
+            raise ValueError(
+                f"{field} belongs in the release's policy/requirements.json"
+            )
+        config[field] = requirements[field]
     if not REPOSITORY.fullmatch(config["policyRepository"]):
         raise ValueError("Invalid policy repository")
     if config["systems"] != ["x86_64-linux", "aarch64-linux"]:
@@ -181,8 +229,8 @@ def load_policy(root):
         for target in project["vmTargets"]:
             if not re.fullmatch(r"[a-z0-9-]+", target):
                 raise ValueError(f"Invalid VM target for {name}")
-        if project["policyRevision"] is not None or project["adopted"]:
-            require_revision(project["policyRevision"])
+        if project["policyVersion"] is not None or project["adopted"]:
+            require_policy_version(project["policyVersion"])
         if project["adopted"]:
             if not project.get("requiredChecks"):
                 raise ValueError(
@@ -227,7 +275,7 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
     if name not in config["projects"]:
         raise ValueError(f"Unknown project: {name}")
     project = config["projects"][name]
-    issues = check_structure(root, config, project["policyRevision"])
+    issues = check_structure(root, config, project["policyVersion"])
     revision = git_revision(root)
     candidate = candidate_for(pins, name, revision, batch_id)
     if candidate:
@@ -326,7 +374,7 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
     ):
         issues.append("pins: project lockfiles do not share one allowed pair")
     issues.extend(
-        check_caller(root, config["policyRepository"], project["policyRevision"], name)
+        check_caller(root, config["policyRepository"], project["policyVersion"], name)
     )
     if not project["adopted"] and not readiness:
         issues.append(
@@ -342,6 +390,7 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
         status = "pass"
     return {
         "project": name,
+        "policyVersion": project["policyVersion"],
         "revision": revision,
         "candidateBatch": candidate["id"] if candidate else None,
         "status": status,
@@ -351,7 +400,7 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
     }
 
 
-def check_structure(root, config, revision=None):
+def check_structure(root, config, version=None):
     issues = []
     for file in [
         "flake.nix",
@@ -385,21 +434,27 @@ def check_structure(root, config, revision=None):
         r"https://github\.com/"
         + re.escape(config["policyRepository"])
         + "/blob/"
-        + (re.escape(revision) if revision else r"[0-9a-f]{40}")
-        + "/"
+        + (
+            re.escape(version)
+            if version
+            else POLICY_VERSION.pattern.removesuffix(r"\Z")
+        )
+        + r"/POLICY\.md(?:[)#\s]|$)"
     )
     for file in ["CONTRIBUTING.md", "AGENTS.md"]:
         path = root / file
         if path.exists() and not rule_link.search(path.read_text()):
-            issues.append(f"documentation: {file} needs an immutable shared-rules link")
+            issues.append(
+                f"documentation: {file} needs the registered policy release's POLICY.md link"
+            )
     return issues
 
 
-def check_caller(root, repository, revision, project_name=None):
+def check_caller(root, repository, version, project_name=None):
     issues = []
-    if revision is None:
-        issues.append("ci: no approved policy workflow revision is recorded")
-    expected = f"{repository}/.github/workflows/check.yml@{revision}"
+    if version is None:
+        issues.append("ci: no policy release version is recorded")
+    expected = f"{repository}/.github/workflows/check.yml@{version}"
     for path in sorted((root / ".github/workflows").glob("*")):
         if path.suffix not in {".yml", ".yaml"}:
             continue
@@ -418,7 +473,7 @@ def check_caller(root, repository, revision, project_name=None):
             if (
                 has_pr
                 and isinstance(job, dict)
-                and revision
+                and version
                 and job.get("uses") == expected
             ):
                 if job.get("if"):
@@ -443,15 +498,15 @@ def check_caller(root, repository, revision, project_name=None):
                     issues.append(
                         "ci: policy PR trigger must declare exactly opened, synchronize, reopened, edited activities without other filters"
                     )
-                if job.get("with", {}).get("policy_revision") != revision:
+                if job.get("with", {}).get("policy_version") != version:
                     issues.append(
-                        "ci: policy_revision must equal the immutable workflow reference"
+                        "ci: policy_version must equal the registered release tag"
                     )
                 if project_name and job.get("with", {}).get("project") != project_name:
                     issues.append("ci: caller must select its own registered project")
                 return issues
     issues.append(
-        "ci: missing unconditional PR caller at the approved workflow revision"
+        "ci: missing unconditional PR caller at the registered policy release"
     )
     return issues
 
@@ -600,9 +655,12 @@ def fingerprints(root):
     }
 
 
-def audit_family(workspace, config, pins, fetch=False, github=False):
+def audit_family(
+    workspace, config, pins, fetch=False, github=False, *, records_root=None
+):
     reports = []
     graph = {}
+    checker_version = f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}"
     for name, project in config["projects"].items():
         root = workspace / name
         if fetch and not root.exists():
@@ -621,6 +679,19 @@ def audit_family(workspace, config, pins, fetch=False, github=False):
             )
         if not root.exists():
             report = {"project": name, "status": "fail", "issues": ["checkout missing"]}
+        elif (
+            records_root is not None
+            and project["adopted"]
+            and project["policyVersion"] != checker_version
+        ):
+            report = inspect_released_project(
+                root,
+                name,
+                config["policyRepository"],
+                project["policyVersion"],
+                records_root,
+            )
+            graph[name] = report.get("dependencies", [])
         else:
             report = inspect_project(root, name, config, pins, readiness=True)
             graph[name] = report["dependencies"]
@@ -634,7 +705,7 @@ def audit_family(workspace, config, pins, fetch=False, github=False):
                 report["issues"].append(f"github: {error}")
                 report["status"] = "error"
             else:
-                if report["issues"]:
+                if report["issues"] and report["status"] != "error":
                     report["status"] = "fail"
         reports.append(report)
     cycles = dependency_cycles(graph)
@@ -648,6 +719,48 @@ def audit_family(workspace, config, pins, fetch=False, github=False):
         "projects": reports,
         "cycles": cycles,
     }
+
+
+def inspect_released_project(root, name, repository, version, records_root):
+    require_policy_version(version)
+    command = [
+        "nix",
+        "run",
+        "--no-update-lock-file",
+        f"github:{repository}/{version}",
+        "--",
+        "--policy-root",
+        str(records_root.resolve()),
+        "check",
+        str(root.resolve()),
+        "--project",
+        name,
+    ]
+    try:
+        process = subprocess.run(
+            command, capture_output=True, text=True, timeout=900, check=False
+        )
+        if process.returncode not in {0, 1}:
+            raise ValueError(process.stderr.strip() or "Released checker could not run")
+        report = json.loads(process.stdout)
+        if (
+            not isinstance(report, dict)
+            or report.get("project") != name
+            or report.get("checkerVersion") != version
+            or report.get("status") not in {"pass", "fail", "candidate-ready"}
+            or (report["status"] == "fail") != (process.returncode == 1)
+            or not isinstance(report.get("issues"), list)
+            or not isinstance(report.get("dependencies"), list)
+        ):
+            raise ValueError("Released checker returned an incompatible report")
+        return report
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        return {
+            "project": name,
+            "policyVersion": version,
+            "status": "error",
+            "issues": [f"policy release: {error}"],
+        }
 
 
 def check_github(project):
@@ -831,6 +944,11 @@ def validate_pair(pair):
         raise ValueError("A pin pair must contain stable and unstable revisions")
     for revision in pair.values():
         require_revision(revision)
+
+
+def require_policy_version(value):
+    if not isinstance(value, str) or not POLICY_VERSION.fullmatch(value):
+        raise ValueError("Policy versions must be exact release tags such as v0.1.0")
 
 
 def require_revision(value):

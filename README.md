@@ -6,7 +6,9 @@ Shared development and maintenance rules for independently released Nix and NixO
 
 The development shell and CI definitions target x86_64 Linux and aarch64 Linux. The policy repository has no VM suites. Member VM suites run separately on suitable x86_64 Linux builders.
 
-The [project records](policy/projects.json) identify enrolled members, and [pin records](policy/pins.json) identify the approved baseline and update batches. The root lockfile pins this repository's tooling; it does not approve those revisions for the family.
+The current [project records](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/projects.json) identify enrolled members, and current [pin records](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/pins.json) identify the approved baseline and update batches. The root lockfile pins this repository's tooling; it does not approve those revisions for the family.
+
+Policy releases version the shared rules and checker code. Members select an exact release tag such as `v0.1.0`; checks read shared pins and enrollment from current records on `main`. A nixpkgs update does not require a policy release. [VERSION](VERSION) identifies the prepared version; publication follows the [release procedure](docs/maintenance.md#releases).
 
 ## Quickstart
 
@@ -21,7 +23,7 @@ nix run .# -- validate
 `nix develop` is the explicit shell entrypoint. To inspect existing sibling checkouts without changing them:
 
 ```bash
-nix run .# -- audit ..
+nix run .# -- --policy-root . audit ..
 ```
 
 An audit distinguishes `pending-adoption` from passing compliance. A direct member `check` fails until the required baseline and adoption configuration exist.

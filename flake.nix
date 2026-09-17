@@ -24,7 +24,11 @@
           checks = {
             tests = mkCheck {
               name = "policy-tests";
-              packages = [ python ];
+              packages = [
+                python
+                pkgs.bash
+                pkgs.jq
+              ];
               script = ''
                 python -m unittest discover -s tests -v
                 python tools/policy.py validate
@@ -78,6 +82,7 @@
               pkgs.statix
               pkgs.deadnix
               pkgs.git
+              pkgs.jq
               pkgs.shfmt
               pkgs.prettier
               pkgs.ruff

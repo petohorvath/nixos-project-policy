@@ -1,6 +1,6 @@
 # Shared project policy
 
-This document defines the shared requirements. The [design](docs/normalization-design.md) explains their architecture and rationale. Member projects link to an approved immutable revision of this document. Central [project records](policy/projects.json) and [pin records](policy/pins.json) determine adoption and pin approval.
+This document defines the shared requirements. The [design](docs/normalization-design.md) explains their architecture and rationale. Member projects link to this document at their selected policy release. Current central [project records](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/projects.json) and [pin records](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/pins.json) determine adoption and pin approval; copies bundled with a release are historical snapshots.
 
 ## Independence and scope
 
@@ -77,6 +77,12 @@ Use MIT for the original code in nix-nftypes, nixos-cross-config, nixos-nftzones
 ## Enforcement and policy changes
 
 Keep checking code and the approved pin record here. Run common checks locally from this repository and in member CI through an immutable reusable-workflow reference. Require the relevant results in GitHub merge gates and audit pins, policy references, documentation structure, dependency direction, and CI configuration for drift.
+
+Select policy releases through exact `vMAJOR.MINOR.PATCH` tags, such as `v0.1.0`. Record each member's selection as `policyVersion` in the current project records. Member documentation links, the reusable-workflow `uses` reference, and its `policy_version` input must name that release. Branches, abbreviated versions, prereleases, and bare commit references do not select a policy release. Publish policy releases with GitHub release immutability enabled; never move or reuse a released version.
+
+The selected policy release supplies the written rules, required tools, documentation requirements, checker code, and workflow. Current records on the policy repository's `main` branch supply shared pins, pin update batches, enrollment, and each member's selected policy version and CI targets. Capture one record commit for every job in a CI run and report both the policy release's commit and the record commit. Pin checks compare actual lockfile commits against those current records. Local member checks must explicitly select a trusted current record checkout with `--policy-root`.
+
+Change shared pins through a pin update batch without changing the policy version or member workflow references. Changes to rules, checker behavior, workflows, or their public interfaces require a new policy release before members use them. Keep current record schemas compatible with policy releases still selected by enrolled members; coordinate checker upgrades before an incompatible record change.
 
 Human review covers architecture, prose, public compatibility, caller changes, and limitations of mechanical checks. Required status names alone do not prove which workflow code ran. The [checker reference](docs/checker.md) identifies implemented checks and remaining review responsibilities.
 

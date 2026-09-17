@@ -6,7 +6,7 @@ The project family consists of independently usable Nix and NixOS projects. Each
 
 Member flakes do not depend on the policy repository. The policy flake does not depend on members: its checker accepts their checkouts as test subjects. This keeps development and builds independent of shared maintenance infrastructure. Member dependencies remain acyclic, with integration tests owned by a consumer or a separate integration project.
 
-A member's small GitHub Actions workflow calls an immutable revision of the policy workflow. That CI reference supplies common enforcement without adding policy code to member development shells or Nix builds. See [ADR 0001](adr/0001-independent-projects.md), [ADR 0002](adr/0002-versioned-policy-repository.md), and [ADR 0005](adr/0005-external-policy-enforcement.md).
+A member's small GitHub Actions workflow calls an exact policy release tag. That CI reference supplies common enforcement without adding policy code to member development shells or Nix builds. See [ADR 0001](adr/0001-independent-projects.md), [ADR 0002](adr/0002-versioned-policy-repository.md), and [ADR 0005](adr/0005-external-policy-enforcement.md).
 
 ## Development interface
 
@@ -18,7 +18,7 @@ Projects select tools for the languages and tasks they maintain. A pure library 
 
 Member lockfiles select actual dependencies. Central pin records describe the approved pair and coordinated update batches; changing a record does not change member locks. A batch identifies exact candidate revisions and tested member commits, so approval can follow validation across the affected projects. See [ADR 0003](adr/0003-shared-nixpkgs-pins.md) and the [maintenance procedure](maintenance.md).
 
-CI pins checker code independently from central records. Each run captures one current record revision for all jobs, allowing pin approvals and rollout state to change without rewriting every caller. Readiness, candidate validation, and adopted compliance are distinct results. Passing project tests alone does not establish adoption.
+CI verifies that the selected policy release is published and immutable, then captures its exact commit and one current record commit for all jobs. The release supplies rules and checker code; current records supply shared pins, pin update batches, and member enrollment. A nixpkgs update changes member locks and current records without a policy release or caller change. Readiness, candidate validation, and adopted compliance are distinct results. Passing project tests alone does not establish adoption.
 
 Mechanical checks cover reliable structural properties, lock graphs, shell tools, callers, and configured merge gates. Human review covers architecture, compatibility, prose, and the meaning of test coverage. Required status names do not establish which workflow implementation ran, so caller review and drift audits remain necessary. The [checker reference](checker.md) defines the implemented boundary.
 

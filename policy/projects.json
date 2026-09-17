@@ -1,52 +1,49 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "policyRepository": "petohorvath/nixos-project-policy",
   "stableBranch": "nixos-26.05",
-  "systems": ["x86_64-linux", "aarch64-linux"],
-  "requiredTools": ["nix", "nil", "nixfmt", "statix", "deadnix"],
-  "readmeSections": ["Support", "Quickstart", "Development", "Contributing", "Documentation"],
   "projects": {
     "nix-libnet": {
       "repository": "petohorvath/nix-libnet",
       "adopted": false,
-      "policyRevision": null,
-      "vmTargets": []
+      "vmTargets": [],
+      "policyVersion": null
     },
     "nix-nftypes": {
       "repository": "petohorvath/nix-nftypes",
       "adopted": false,
-      "policyRevision": null,
-      "vmTargets": []
+      "vmTargets": [],
+      "policyVersion": null
     },
     "nixos-cross-config": {
       "repository": "petohorvath/nixos-cross-config",
       "adopted": false,
-      "policyRevision": "eecc24f9b1e87943d0266ef60c835a5ad35c78b7",
-      "vmTargets": []
+      "vmTargets": [],
+      "policyVersion": "v0.1.0"
     },
     "nixos-nftzones": {
       "repository": "petohorvath/nixos-nftzones",
       "adopted": false,
-      "policyRevision": null,
-      "vmTargets": ["vm-tests", "vm-tests-unstable"]
+      "vmTargets": ["vm-tests", "vm-tests-unstable"],
+      "policyVersion": null
     },
     "nixos-registry": {
       "repository": "petohorvath/nixos-registry",
       "adopted": false,
-      "policyRevision": null,
-      "vmTargets": []
+      "vmTargets": [],
+      "policyVersion": null
     },
     "nixos-shields": {
       "repository": "petohorvath/nixos-shields",
       "adopted": false,
-      "policyRevision": null,
-      "vmTargets": []
+      "vmTargets": [],
+      "policyVersion": null
     },
     "nixos-wanwatch": {
       "repository": "petohorvath/nixos-wanwatch",
       "adopted": false,
-      "policyRevision": null,
-      "vmTargets": ["vm-tests", "vm-tests-unstable"]
+      "vmTargets": ["vm-tests", "vm-tests-unstable"],
+      "policyVersion": null
     }
   }
 }

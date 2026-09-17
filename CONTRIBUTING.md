@@ -10,4 +10,4 @@ For a new requirement, document its scope, exceptions, mechanical checks, and re
 
 Keep documentation about current behavior and design. Put implementation and validation history in commits, PRs, and CI results, and release-facing changes in [CHANGELOG.md](CHANGELOG.md).
 
-For a release, prepare a PR with the intended SemVer version, changelog, and migration notes. Human merge authorizes publication after the release commit passes checks.
+For a policy release, set `VERSION` to the intended SemVer version and prepare a PR with the changelog and migration notes. Public contracts include the rules, checker CLI and report meanings, reusable-workflow inputs, and record schemas. Human merge authorizes publication after the release commit passes checks; follow [release maintenance](docs/maintenance.md#releases). Pin updates and enrollment changes update current records without a policy version bump.

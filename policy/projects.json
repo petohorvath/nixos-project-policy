@@ -17,7 +17,7 @@
     },
     "nixos-cross-config": {
       "repository": "petohorvath/nixos-cross-config",
-      "adopted": false,
+      "adopted": true,
       "vmTargets": [],
       "policyVersion": "v0.1.0",
       "requiredChecks": [

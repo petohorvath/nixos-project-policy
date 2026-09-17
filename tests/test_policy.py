@@ -21,7 +21,7 @@ UNSTABLE = "b" * 40
 NEW_STABLE = "c" * 40
 NEW_UNSTABLE = "d" * 40
 CHECKER = "e" * 40
-RELEASE = "v0.1.0"
+RELEASE = f"v{(policy.SOURCE_ROOT / 'VERSION').read_text().strip()}"
 SOURCE = "f" * 40
 PAIR = {"stable": STABLE, "unstable": UNSTABLE}
 NEW_PAIR = {"stable": NEW_STABLE, "unstable": NEW_UNSTABLE}
@@ -664,6 +664,126 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(report["projects"][0]["status"], "pass")
         self.assertEqual(report["projects"][0]["issues"], [])
 
+    def audit_merge_settings(self, rest_settings, graphql_result):
+        repository = "https://api.github.com/repos/owner/example"
+        data = {
+            repository: {"default_branch": "main", **rest_settings},
+            f"{repository}/rules/branches/main": [
+                {"type": "pull_request"},
+                {
+                    "type": "required_status_checks",
+                    "parameters": {"required_status_checks": [{"context": "Policy"}]},
+                },
+            ],
+        }
+
+        def response(request, **kwargs):
+            self.assertEqual(request.get_header("Authorization"), "Bearer audit-token")
+            if request.full_url == "https://api.github.com/graphql":
+                self.assertEqual(request.get_method(), "POST")
+                payload = json.loads(request.data)
+                self.assertEqual(
+                    payload["variables"], {"owner": "owner", "name": "example"}
+                )
+                for field in [
+                    "squashMergeAllowed",
+                    "mergeCommitAllowed",
+                    "rebaseMergeAllowed",
+                ]:
+                    self.assertIn(field, payload["query"])
+                if isinstance(graphql_result, Exception):
+                    raise graphql_result
+                return io.StringIO(json.dumps(graphql_result))
+            return io.StringIO(json.dumps(data[request.full_url]))
+
+        with (
+            patch.dict(os.environ, {"GH_TOKEN": "audit-token"}),
+            patch.object(policy, "urlopen", side_effect=response),
+        ):
+            return self.run_policy("audit", str(self.root.parent), "--github")
+
+    def test_github_audit_resolves_hidden_merge_settings(self):
+        squash_only = {
+            "allow_squash_merge": True,
+            "allow_merge_commit": False,
+            "allow_rebase_merge": False,
+        }
+        incomplete = [{}, {"allow_squash_merge": True}]
+        for field in squash_only:
+            incomplete.append(
+                {key: value for key, value in squash_only.items() if key != field}
+            )
+            for invalid in [None, "false", 0]:
+                incomplete.append({**squash_only, field: invalid})
+        for rest_settings in incomplete:
+            for changed in [None, *squash_only]:
+                with self.subTest(rest=rest_settings, changed=changed):
+                    settings = dict(squash_only)
+                    if changed:
+                        settings[changed] = not settings[changed]
+                    status, report = self.audit_merge_settings(
+                        rest_settings, {"data": {"repository": settings}}
+                    )
+                    self.assertEqual(status, 1 if changed else 0)
+                    self.assertEqual(
+                        report["projects"][0]["status"], "fail" if changed else "pass"
+                    )
+                    self.assertEqual(
+                        report["projects"][0]["issues"],
+                        ["github: configure squash as the only merge method"]
+                        if changed
+                        else [],
+                    )
+
+    def test_github_audit_keeps_unknown_merge_settings_as_inspection_errors(self):
+        squash_only = {
+            "allow_squash_merge": True,
+            "allow_merge_commit": False,
+            "allow_rebase_merge": False,
+        }
+        invalid = [
+            None,
+            [],
+            {},
+            {"data": None},
+            {"data": []},
+            {"data": {"repository": None}},
+        ]
+        invalid.append(
+            {"data": {"repository": squash_only}, "errors": [{"message": "Denied"}]}
+        )
+        for field in squash_only:
+            invalid.append(
+                {
+                    "data": {
+                        "repository": {
+                            key: value
+                            for key, value in squash_only.items()
+                            if key != field
+                        }
+                    }
+                }
+            )
+            for value in [None, "false", 0]:
+                invalid.append({"data": {"repository": {**squash_only, field: value}}})
+        for code in [401, 403, 404]:
+            invalid.append(
+                HTTPError("https://api.github.com/graphql", code, "Denied", {}, None)
+            )
+        for result in invalid:
+            with self.subTest(result=result):
+                status, report = self.audit_merge_settings({}, result)
+                self.assertEqual(status, 2)
+                self.assertEqual(report["status"], "error")
+                self.assertEqual(report["projects"][0]["status"], "error")
+                self.assertIn(
+                    "settings are unknown", " ".join(report["projects"][0]["issues"])
+                )
+                self.assertNotIn(
+                    "github: configure squash as the only merge method",
+                    report["projects"][0]["issues"],
+                )
+
     def test_complete_static_contract_passes(self):
         self.assertEqual(self.inspect()["issues"], [])
 
@@ -980,7 +1100,10 @@ class WorkflowTests(unittest.TestCase):
             )
             stub.chmod(0o755)
             output = root / "output"
-            for version, passes in [("0.1.0", True), ("0.2.0", False)]:
+            for version, passes in [
+                (RELEASE.removeprefix("v"), True),
+                ("0.2.0", False),
+            ]:
                 with self.subTest(version=version):
                     (root / "policy/VERSION").write_text(version + "\n")
                     output.write_text("")

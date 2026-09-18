@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   records:
-    name: Policy records
+    name: Verify policy version and load shared pins
     runs-on: ubuntu-24.04
     outputs:
       revision: ${{ steps.snapshot.outputs.revision }}
@@ -55,11 +55,13 @@ jobs:
           printf 'checker_revision=%s\n' "$checker_revision" >> "$GITHUB_OUTPUT"
           printf 'Policy %s: %s\nRecords: %s\n' "$POLICY_VERSION" "$checker_revision" "$revision"
   policy:
-    name: Policy (${{ matrix.system }})
+    name: ${{ matrix.check }} (${{ matrix.system }})
     needs: records
     strategy:
       fail-fast: false
       matrix:
+        check: [Compliance, Formatting and lint, Project tests]
+        system: [x86_64-linux, aarch64-linux]
         include:
           - runner: ubuntu-24.04
             system: x86_64-linux
@@ -92,15 +94,19 @@ jobs:
           git -C policy rev-parse HEAD
           git -C policy-state rev-parse HEAD
       - name: Check shared requirements
+        if: matrix.check == 'Compliance'
         env:
           PROJECT: ${{ inputs.project }}
         run: |
           nix run --no-update-lock-file ./policy -- --policy-root ./policy-state check ./project --project "$PROJECT" --readiness --shell
       - name: Run formatting and Nix lint outside the member flake
+        if: matrix.check == 'Formatting and lint'
         run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state lint ./project
-      - run: nix flake check ./project --no-update-lock-file --print-build-logs
+      - name: Run project tests
+        if: matrix.check == 'Project tests'
+        run: nix flake check ./project --no-update-lock-file --print-build-logs
       - name: Check PR title
-        if: github.event_name == 'pull_request'
+        if: matrix.check == 'Compliance' && github.event_name == 'pull_request'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state title "$PR_TITLE"

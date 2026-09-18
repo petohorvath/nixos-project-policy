@@ -23,6 +23,7 @@ POLICY_VERSION = re.compile(
     r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z"
 )
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
+REQUIREMENT_FIELDS = ("systems", "requiredTools", "readmeSections", "ci")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 PR_ACTIVITIES = {"opened", "synchronize", "reopened", "edited"}
 ACTIVE_BATCH_STATES = {"approved", "rolling", "paused"}
@@ -213,7 +214,7 @@ def main(argv=None):
                     "projects": {
                         key: value
                         for key, value in config.items()
-                        if key not in {"systems", "requiredTools", "readmeSections"}
+                        if key not in REQUIREMENT_FIELDS
                     },
                     "pins": pins,
                 },
@@ -248,7 +249,7 @@ def load_policy(root):
     if requirements.get("schemaVersion") != 1:
         raise ValueError("Unsupported policy requirements schema")
     # Requirements belong to the selected checker release, never the live records.
-    for field in ("systems", "requiredTools", "readmeSections"):
+    for field in REQUIREMENT_FIELDS:
         if field in config:
             raise ValueError(
                 f"{field} belongs in the release's policy/requirements.json"
@@ -261,6 +262,7 @@ def load_policy(root):
     for tool in config["requiredTools"]:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]*", tool):
             raise ValueError(f"Invalid tool name: {tool}")
+    checker_version = f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}"
     for name, project in config["projects"].items():
         if not re.fullmatch(r"[a-z0-9-]+", name) or not REPOSITORY.fullmatch(
             project["repository"]
@@ -273,11 +275,28 @@ def load_policy(root):
                 raise ValueError(f"Invalid VM target for {name}")
         if project["policyVersion"] is not None or project["adopted"]:
             require_policy_version(project["policyVersion"])
+        checks = project.get("requiredChecks", [])
+        if (
+            not isinstance(checks, list)
+            or any(not isinstance(check, str) or not check.strip() for check in checks)
+            or len(set(checks)) != len(checks)
+        ):
+            raise ValueError(f"Invalid required check names for {name}")
         if project["adopted"]:
-            if not project.get("requiredChecks"):
+            if not checks:
                 raise ValueError(
                     f"Adopted project {name} needs verified required check names"
                 )
+            if project["policyVersion"] == checker_version:
+                required = set(config["ci"]["requiredChecks"])
+                if project["vmTargets"]:
+                    required.add(config["ci"]["vmCheck"])
+                missing = required - set(checks)
+                if missing:
+                    raise ValueError(
+                        f"Adopted project {name} is missing mandatory policy checks: "
+                        + ", ".join(sorted(missing))
+                    )
     if pins["approved"] is not None:
         validate_pair(pins["approved"])
     ids = set()
@@ -420,7 +439,13 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
     ):
         issues.append("pins: project lockfiles do not share one allowed pair")
     issues.extend(
-        check_caller(root, config["policyRepository"], project["policyVersion"], name)
+        check_caller(
+            root,
+            config["policyRepository"],
+            project["policyVersion"],
+            name,
+            caller_name=config["ci"]["callerJobName"],
+        )
     )
     issues.extend(compatibility_gate_issues(project))
     if not project["adopted"] and not readiness:
@@ -524,7 +549,7 @@ def check_structure(root, config, version=None):
     return issues
 
 
-def check_caller(root, repository, version, project_name=None):
+def check_caller(root, repository, version, project_name, *, caller_name):
     issues = []
     if version is None:
         issues.append("ci: no policy release version is recorded")
@@ -550,6 +575,14 @@ def check_caller(root, repository, version, project_name=None):
                 and version
                 and job.get("uses") == expected
             ):
+                if job.get("name") != caller_name:
+                    issues.append(
+                        f"ci: policy caller job must be named '{caller_name}'"
+                    )
+                if "strategy" in job:
+                    issues.append(
+                        "ci: policy caller matrices are not supported; keep fixed status names"
+                    )
                 if job.get("if"):
                     issues.append(
                         "ci: the required policy caller must run for every PR"
@@ -558,10 +591,8 @@ def check_caller(root, repository, version, project_name=None):
                     issues.append(
                         "ci: policy caller dependencies are not supported; run it independently for every PR"
                     )
-                if "strategy" in job or "continue-on-error" in job:
-                    issues.append(
-                        "ci: policy caller must not use a matrix or suppress failures"
-                    )
+                if "continue-on-error" in job:
+                    issues.append("ci: policy caller must not suppress failures")
                 if uses_input_overrides(version) and set(job.get("with", {})) != {
                     "project",
                     "policy_version",
@@ -587,7 +618,7 @@ def check_caller(root, repository, version, project_name=None):
                     issues.append(
                         "ci: policy_version must equal the registered release tag"
                     )
-                if project_name and job.get("with", {}).get("project") != project_name:
+                if job.get("with", {}).get("project") != project_name:
                     issues.append("ci: caller must select its own registered project")
                 return issues
     issues.append(

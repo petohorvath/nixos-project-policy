@@ -36,7 +36,7 @@
       "repository": "petohorvath/nixos-registry",
       "adopted": false,
       "vmTargets": [],
-      "policyVersion": null
+      "policyVersion": "v0.1.1"
     },
     "nixos-shields": {
       "repository": "petohorvath/nixos-shields",

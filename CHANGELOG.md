@@ -7,11 +7,12 @@
 - Add `compatibility` with an explicit trusted record snapshot, resolved-input verification, nonempty host checks, lock preservation checks, and metadata/result evidence outside member sources.
 - Distinguish static validation, approved-pin execution, and candidate execution. Candidates remain bound to exact clean project commits; active rollouts target the central approved pair.
 - Require verified compatibility status registrations for migrated members and retain audits through older members' selected policy releases.
-
-- Run compliance, formatting/lint, and project tests as independent jobs on both Linux architectures, with separate results and reruns.
+- Run compliance, formatting/lint, and project tests as independent jobs on each member's required architectures, with separate results and reruns.
 - Use the caller name `Policy` and name the initial job `Verify policy version and load shared pins`.
 - Define mandatory status names in the policy release. Reject adoption records that omit a required gate, including the VM gate when VM targets are declared, while allowing additional project checks.
 - Reject caller name changes and caller matrices that would change or duplicate the required status names.
+- Let each member select a nonempty subset of supported architectures for ordinary CI through `requiredArchitectures`. Generate the workflow matrix and mandatory status names together with `ci --project NAME`, using job names and runner mappings from the selected release.
+- Run policy-version and shared-pin preparation once, independently of the member's selected architectures. Applicable VM suites continue to use their separate x86_64 gate.
 
 ### Migration
 
@@ -19,9 +20,9 @@ This minor release changes rules, checker reports, and required workflow jobs. P
 
 Run both channels on both native architectures and complete a member trial. Inspect actual statuses on a reviewable PR before registering their exact names or activating merge gates. Static `check` reports now explicitly say compatibility was not run; use the new runner's evidence for compatibility. Shared-pin updates may need new runs without default-lock changes. Project and pin record schemas are unchanged, and members on v0.1.x retain their existing contracts. See the [migration procedure](docs/maintenance.md#migration-to-v020) and [runner reference](docs/checker.md#compatibility-execution-and-evidence).
 
-This release changes the required CI status names. After publication and explicit selection of a member migration, use the updated caller template with `name: Policy`, update policy references and `policyVersion` to `v0.2.0`, and configure `requiredChecks` and GitHub merge gates with the exact names listed in the [checker reference](docs/checker.md#ci-integration). Verify the new statuses before replacing the old gates. Shared pins and member lockfiles need no change solely for this upgrade.
+This release changes the required CI status names. After publication and explicit selection of a member migration, use the updated caller template with `name: Policy`, update policy references and `policyVersion` to `v0.2.0`, and record the required architectures. Run `ci --project NAME` with trusted current records to obtain the mandatory status names, then configure `requiredChecks` and GitHub merge gates with that set as described in the [checker reference](docs/checker.md#ci-integration). Verify the new statuses before replacing the old gates. Shared pins and member lockfiles need no change solely for this upgrade.
 
-Current project records retain schema version 2 and the full `requiredChecks` list, so members still selecting older releases keep their existing names. Policy requirements retain schema version 1 and add release-owned `ci` settings. This preparation does not migrate any member or publish the release.
+Current project records retain schema version 2 and the full `requiredChecks` list, adding `requiredArchitectures` for the new release. Existing records declare both Linux architectures; members still selecting older releases keep their existing requirements and may omit the new field. Policy requirements retain schema version 1 and add release-owned `ci` settings. This preparation does not migrate any member or publish the release.
 
 ## 0.1.1
 

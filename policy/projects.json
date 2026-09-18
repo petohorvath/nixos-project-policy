@@ -5,18 +5,21 @@
   "projects": {
     "nix-libnet": {
       "repository": "petohorvath/nix-libnet",
+      "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
       "adopted": false,
       "vmTargets": [],
       "policyVersion": null
     },
     "nix-nftypes": {
       "repository": "petohorvath/nix-nftypes",
+      "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
       "adopted": false,
       "vmTargets": [],
       "policyVersion": null
     },
     "nixos-cross-config": {
       "repository": "petohorvath/nixos-cross-config",
+      "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
       "adopted": true,
       "vmTargets": [],
       "policyVersion": "v0.1.1",
@@ -28,12 +31,14 @@
     },
     "nixos-nftzones": {
       "repository": "petohorvath/nixos-nftzones",
+      "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
       "adopted": false,
       "vmTargets": ["vm-tests", "vm-tests-unstable"],
       "policyVersion": null
     },
     "nixos-registry": {
       "repository": "petohorvath/nixos-registry",
+      "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
       "adopted": true,
       "vmTargets": [],
       "policyVersion": "v0.1.1",
@@ -45,12 +50,14 @@
     },
     "nixos-shields": {
       "repository": "petohorvath/nixos-shields",
+      "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
       "adopted": false,
       "vmTargets": [],
       "policyVersion": null
     },
     "nixos-wanwatch": {
       "repository": "petohorvath/nixos-wanwatch",
+      "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
       "adopted": false,
       "vmTargets": ["vm-tests", "vm-tests-unstable"],
       "policyVersion": null

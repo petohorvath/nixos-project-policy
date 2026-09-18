@@ -197,6 +197,7 @@ class ProjectFixture(unittest.TestCase):
                     "repository": "owner/example",
                     "adopted": True,
                     "policyVersion": RELEASE,
+                    "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
                     "vmTargets": [],
                     "requiredChecks": list(REQUIRED_CHECKS),
                 }
@@ -456,6 +457,119 @@ class ProjectTests(ProjectFixture):
         project["requiredChecks"].append(VM_CHECK)
         self.assertEqual(self.run_policy("validate")[0], 0)
 
+    def test_ci_plan_uses_the_members_required_architectures_for_jobs_and_gates(self):
+        for architectures in [
+            ["x86_64-linux"],
+            ["aarch64-linux"],
+            ["x86_64-linux", "aarch64-linux"],
+        ]:
+            with self.subTest(architectures=architectures):
+                expected = [
+                    check
+                    for check in REQUIRED_CHECKS
+                    if check == REQUIRED_CHECKS[0]
+                    or check in COMPATIBILITY_CHECKS
+                    or any(check.endswith(f"({system})") for system in architectures)
+                ]
+                self.config["projects"]["example"].update(
+                    requiredArchitectures=architectures, requiredChecks=expected
+                )
+                status, report = self.run_policy("ci", "--project", "example")
+                self.assertEqual(status, 0)
+                self.assertEqual(report["status"], "planned")
+                self.assertEqual(report["requiredChecks"], expected)
+                self.assertEqual(report["policyVersion"], RELEASE)
+                jobs = report["matrix"]["include"]
+                self.assertEqual(len(jobs), 3 * len(architectures))
+                self.assertEqual(
+                    {(job["check"], job["system"]) for job in jobs},
+                    {
+                        (check, system)
+                        for check in [
+                            "Compliance",
+                            "Formatting and lint",
+                            "Project tests",
+                        ]
+                        for system in architectures
+                    },
+                )
+                for job in jobs:
+                    self.assertEqual(
+                        job["runner"],
+                        {
+                            "x86_64-linux": "ubuntu-24.04",
+                            "aarch64-linux": "ubuntu-24.04-arm",
+                        }[job["system"]],
+                    )
+
+    def test_invalid_architecture_selections_cannot_produce_a_ci_matrix(self):
+        for invalid in [
+            None,
+            [],
+            "x86_64-linux",
+            {},
+            [None],
+            [""],
+            [" "],
+            ["x86_64-linux", "x86_64-linux"],
+            ["unknown-linux"],
+        ]:
+            with self.subTest(architectures=invalid):
+                self.config["projects"]["example"]["requiredArchitectures"] = invalid
+                status, report = self.run_policy("ci", "--project", "example")
+                self.assertEqual(status, 2)
+                self.assertIn("requiredArchitectures", report["error"])
+                self.assertNotIn("matrix", report)
+
+    def test_current_release_requires_architectures_even_before_adoption(self):
+        project = self.config["projects"]["example"]
+        del project["requiredArchitectures"]
+        for adopted in [False, True]:
+            with self.subTest(adopted=adopted):
+                project["adopted"] = adopted
+                status, report = self.run_policy("validate")
+                self.assertEqual(status, 2)
+                self.assertIn("needs requiredArchitectures", report["error"])
+
+    def test_vm_gate_keeps_its_platform_when_regular_ci_requires_only_arm(self):
+        checks = [
+            check
+            for check in REQUIRED_CHECKS
+            if check == REQUIRED_CHECKS[0]
+            or check in COMPATIBILITY_CHECKS
+            or check.endswith("(aarch64-linux)")
+        ]
+        self.config["projects"]["example"].update(
+            requiredArchitectures=["aarch64-linux"],
+            vmTargets=["vm-tests"],
+            requiredChecks=[*checks, VM_CHECK],
+        )
+        status, report = self.run_policy("ci", "--project", "example")
+        self.assertEqual(status, 0)
+        self.assertEqual(report["requiredChecks"], [*checks, VM_CHECK])
+        self.assertEqual(
+            {job["system"] for job in report["matrix"]["include"]}, {"aarch64-linux"}
+        )
+
+    def test_ci_planning_requires_the_members_selected_release(self):
+        for version in [None, "v0.1.1"]:
+            with self.subTest(version=version):
+                self.config["projects"]["example"].update(
+                    adopted=False, policyVersion=version
+                )
+                status, report = self.run_policy("ci", "--project", "example")
+                self.assertEqual(status, 2)
+                self.assertNotIn("matrix", report)
+
+    def test_ci_plan_does_not_claim_pin_approval_or_adoption(self):
+        project = self.config["projects"]["example"]
+        project["adopted"] = False
+        del project["requiredChecks"]
+        self.pins["approved"] = None
+        status, report = self.run_policy("ci", "--project", "example")
+        self.assertEqual(status, 0)
+        self.assertEqual(report["status"], "planned")
+
     def test_required_check_names_must_be_a_list_of_unique_nonempty_strings(self):
         for invalid in [None, "Policy", {}, [None], [" "], ["Policy", "Policy"]]:
             with self.subTest(checks=invalid):
@@ -531,6 +645,7 @@ class ProjectTests(ProjectFixture):
         self.config["projects"]["example"].update(
             policyVersion="v0.1.1", requiredChecks=checks
         )
+        del self.config["projects"]["example"]["requiredArchitectures"]
         self.assertEqual(self.run_policy("validate")[0], 0)
         released = {
             "project": "example",
@@ -1638,6 +1753,7 @@ class RecordTests(unittest.TestCase):
             ["audit", "."],
             ["vm", ".", "--project", "example"],
             ["compatibility", ".", "--project", "example", "--channel", "stable"],
+            ["ci", "--project", "example"],
         ]:
             with (
                 self.subTest(command=args[0]),
@@ -1714,13 +1830,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("if", caller)
         self.assertNotIn("needs", caller)
         self.assertNotIn("strategy", caller)
-        matrix = jobs["policy"]["strategy"]["matrix"]
+        plan = policy.ci_plan(
+            {"requiredArchitectures": requirements["systems"], "vmTargets": []},
+            requirements["ci"],
+        )
         names = {f"{caller['name']} / {jobs['records']['name']}"}
-        for check in matrix["check"]:
-            for system in matrix["system"]:
-                name = jobs["policy"]["name"].replace("${{ matrix.check }}", check)
-                name = name.replace("${{ matrix.system }}", system)
-                names.add(f"{caller['name']} / {name}")
+        for job in plan["matrix"]["include"]:
+            name = jobs["policy"]["name"].replace("${{ matrix.check }}", job["check"])
+            name = name.replace("${{ matrix.system }}", job["system"])
+            names.add(f"{caller['name']} / {name}")
         compatibility = jobs["compatibility"]
         for channel in compatibility["strategy"]["matrix"]["channel"]:
             for system in compatibility["strategy"]["matrix"]["system"]:
@@ -1728,7 +1846,11 @@ class WorkflowTests(unittest.TestCase):
                 name = name.replace("${{ matrix.system }}", system)
                 names.add(f"{caller['name']} / {name}")
         self.assertEqual(names, set(REQUIRED_CHECKS))
-        self.assertEqual(set(requirements["ci"]["requiredChecks"]), names)
+        self.assertEqual(set(plan["requiredChecks"]), names)
+        self.assertEqual(
+            requirements["ci"]["requiredChecks"],
+            [REQUIRED_CHECKS[0], *COMPATIBILITY_CHECKS],
+        )
         self.assertEqual(f"{caller['name']} / {jobs['vm']['name']}", VM_CHECK)
         self.assertEqual(requirements["ci"]["vmCheck"], VM_CHECK)
 
@@ -1742,14 +1864,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("if", job)
         self.assertNotIn("continue-on-error", job)
         self.assertEqual(job["strategy"]["fail-fast"], "false")
-        matrix = job["strategy"]["matrix"]
         self.assertEqual(
-            set(matrix["check"]), {"Compliance", "Formatting and lint", "Project tests"}
+            job["strategy"]["matrix"], "${{ fromJSON(needs.records.outputs.matrix) }}"
         )
-        self.assertEqual(set(matrix["system"]), {"x86_64-linux", "aarch64-linux"})
         self.assertEqual(
-            {entry["system"]: entry["runner"] for entry in matrix["include"]},
-            {"x86_64-linux": "ubuntu-24.04", "aarch64-linux": "ubuntu-24.04-arm"},
+            workflow["jobs"]["records"]["outputs"]["matrix"],
+            "${{ steps.ci.outputs.matrix }}",
         )
         self.assertEqual(job["runs-on"], "${{ matrix.runner }}")
         categories = {
@@ -1773,6 +1893,82 @@ class WorkflowTests(unittest.TestCase):
             title["if"],
             "matrix.check == 'Compliance' && github.event_name == 'pull_request'",
         )
+
+    def test_snapshot_job_generates_matrix_from_captured_member_records(self):
+        workflow = yaml.load(
+            (policy.SOURCE_ROOT / ".github/workflows/check.yml").read_text(),
+            Loader=yaml.BaseLoader,
+        )
+        records_job = workflow["jobs"]["records"]
+        self.assertNotIn("strategy", records_job)
+        step = next(step for step in records_job["steps"] if step.get("id") == "ci")
+        self.assertEqual(step["env"]["PROJECT"], "${{ inputs.project }}")
+        self.assertIn("--no-update-lock-file ./policy", step["run"])
+        self.assertIn("--policy-root ./policy-state", step["run"])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            records = root / "policy-state/policy"
+            records.mkdir(parents=True)
+            (records / "pins.json").write_text(
+                json.dumps({"schemaVersion": 1, "approved": PAIR, "batches": []})
+            )
+            stub = root / "nix"
+            stub.write_text(
+                f"#!{sys.executable}\nimport os, sys\n"
+                f"os.execv(sys.executable, [sys.executable, {str(policy.SOURCE_ROOT / 'tools/policy.py')!r}, "
+                "*sys.argv[sys.argv.index('--') + 1:]])\n"
+            )
+            stub.chmod(0o755)
+            output = root / "output"
+            for architectures in [
+                ["x86_64-linux"],
+                ["aarch64-linux"],
+                [],
+                ["unsupported"],
+            ]:
+                with self.subTest(architectures=architectures):
+                    (records / "projects.json").write_text(
+                        json.dumps(
+                            {
+                                "schemaVersion": 2,
+                                "policyRepository": POLICY_REPO,
+                                "projects": {
+                                    "example": {
+                                        "repository": "owner/example",
+                                        "policyVersion": RELEASE,
+                                        "adopted": False,
+                                        "vmTargets": [],
+                                        "requiredArchitectures": architectures,
+                                    }
+                                },
+                            }
+                        )
+                    )
+                    output.write_text("")
+                    process = subprocess.run(
+                        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+                        cwd=root,
+                        env={
+                            **os.environ,
+                            "PATH": f"{temporary}:{os.environ['PATH']}",
+                            "PROJECT": "example",
+                            "GITHUB_OUTPUT": str(output),
+                        },
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if architectures in [["x86_64-linux"], ["aarch64-linux"]]:
+                        self.assertEqual(process.returncode, 0, process.stderr)
+                        matrix = json.loads(output.read_text().removeprefix("matrix="))
+                        self.assertEqual(len(matrix["include"]), 3)
+                        self.assertEqual(
+                            {job["system"] for job in matrix["include"]},
+                            set(architectures),
+                        )
+                    else:
+                        self.assertNotEqual(process.returncode, 0)
+                        self.assertEqual(output.read_text(), "")
 
     def test_release_snapshot_requires_matching_version_and_records_both_commits(self):
         workflow = yaml.load(

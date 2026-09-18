@@ -50,6 +50,10 @@ def main(argv=None):
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("validate", help="Validate the central records")
+    ci = commands.add_parser(
+        "ci", help="Report a member's CI matrix and required gates"
+    )
+    ci.add_argument("--project", required=True)
     title = commands.add_parser("title", help="Check a Conventional Commit PR title")
     title.add_argument("title")
     check = commands.add_parser(
@@ -114,7 +118,7 @@ def main(argv=None):
     try:
         require_policy_version(f"v{version}")
         if (
-            args.command in {"check", "audit", "vm", "compatibility"}
+            args.command in {"check", "audit", "vm", "compatibility", "ci"}
             and args.policy_root is None
         ):
             raise ValueError(
@@ -129,8 +133,25 @@ def main(argv=None):
                 raise ValueError(
                     f"Project {args.project} must select checker v{version}"
                 )
+        if args.command in {"check", "ci"}:
+            selected = config["projects"][args.project]["policyVersion"]
+            if selected is None and args.command == "ci":
+                raise ValueError("CI planning requires a selected policy release")
+            if selected is not None and selected != f"v{version}":
+                raise ValueError(
+                    f"Project {args.project} selects policy {selected}; "
+                    f"run that release instead of checker v{version}"
+                )
         if args.command == "validate":
             result = {"status": "valid", "approvedPins": pins["approved"] is not None}
+        elif args.command == "ci":
+            project = config["projects"][args.project]
+            result = {
+                "status": "planned",
+                "project": args.project,
+                "policyVersion": project["policyVersion"],
+                **ci_plan(project, config["ci"]),
+            }
         elif args.command == "title":
             result = {"status": "pass" if TITLE.fullmatch(args.title) else "fail"}
         elif args.command == "candidate":
@@ -173,12 +194,6 @@ def main(argv=None):
                 "targets": targets,
             }
         elif args.command == "check":
-            selected = config["projects"][args.project]["policyVersion"]
-            if selected is not None and selected != f"v{version}":
-                raise ValueError(
-                    f"Project {args.project} selects policy {selected}; "
-                    f"run that release instead of checker v{version}"
-                )
             result = inspect_project(
                 args.project_dir,
                 args.project,
@@ -257,8 +272,16 @@ def load_policy(root):
         config[field] = requirements[field]
     if not REPOSITORY.fullmatch(config["policyRepository"]):
         raise ValueError("Invalid policy repository")
-    if config["systems"] != ["x86_64-linux", "aarch64-linux"]:
-        raise ValueError("Both agreed Linux systems must be declared")
+    if (
+        not isinstance(config["systems"], list)
+        or not config["systems"]
+        or any(
+            not isinstance(system, str) or not system for system in config["systems"]
+        )
+        or len(set(config["systems"])) != len(config["systems"])
+        or set(config["ci"]["runners"]) != set(config["systems"])
+    ):
+        raise ValueError("Supported systems need unique names and matching CI runners")
     for tool in config["requiredTools"]:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]*", tool):
             raise ValueError(f"Invalid tool name: {tool}")
@@ -275,6 +298,27 @@ def load_policy(root):
                 raise ValueError(f"Invalid VM target for {name}")
         if project["policyVersion"] is not None or project["adopted"]:
             require_policy_version(project["policyVersion"])
+        if "requiredArchitectures" in project:
+            architectures = project["requiredArchitectures"]
+            if (
+                not isinstance(architectures, list)
+                or not architectures
+                or any(
+                    not isinstance(system, str) or not system.strip()
+                    for system in architectures
+                )
+                or len(set(architectures)) != len(architectures)
+            ):
+                raise ValueError(f"Invalid requiredArchitectures for {name}")
+        if project["policyVersion"] == checker_version:
+            if "requiredArchitectures" not in project:
+                raise ValueError(f"Project {name} needs requiredArchitectures")
+            unsupported = set(project["requiredArchitectures"]) - set(config["systems"])
+            if unsupported:
+                raise ValueError(
+                    f"Unsupported requiredArchitectures for {name}: "
+                    + ", ".join(sorted(unsupported))
+                )
         checks = project.get("requiredChecks", [])
         if (
             not isinstance(checks, list)
@@ -288,9 +332,7 @@ def load_policy(root):
                     f"Adopted project {name} needs verified required check names"
                 )
             if project["policyVersion"] == checker_version:
-                required = set(config["ci"]["requiredChecks"])
-                if project["vmTargets"]:
-                    required.add(config["ci"]["vmCheck"])
+                required = set(ci_plan(project, config["ci"])["requiredChecks"])
                 missing = required - set(checks)
                 if missing:
                     raise ValueError(
@@ -329,6 +371,24 @@ def load_policy(root):
                 raise ValueError(f"Unknown project in batch: {name}")
             require_revision(revision)
     return config, pins
+
+
+def ci_plan(project, requirements):
+    jobs = [
+        {"check": check, "system": system, "runner": requirements["runners"][system]}
+        for check in requirements["architectureChecks"]
+        for system in project["requiredArchitectures"]
+    ]
+    checks = [
+        *requirements["requiredChecks"],
+        *(
+            f"{requirements['callerJobName']} / {job['check']} ({job['system']})"
+            for job in jobs
+        ),
+    ]
+    if project["vmTargets"]:
+        checks.append(requirements["vmCheck"])
+    return {"matrix": {"include": jobs}, "requiredChecks": checks}
 
 
 def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False):

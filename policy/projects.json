@@ -20,13 +20,21 @@
     "nixos-cross-config": {
       "repository": "petohorvath/nixos-cross-config",
       "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
-      "adopted": false,
+      "adopted": true,
       "vmTargets": [],
       "policyVersion": "v0.2.0",
       "requiredChecks": [
-        "policy / Policy records",
-        "policy / Policy (x86_64-linux)",
-        "policy / Policy (aarch64-linux)"
+        "Policy / Verify policy version and load shared pins",
+        "Policy / Compatibility (stable, x86_64-linux)",
+        "Policy / Compatibility (stable, aarch64-linux)",
+        "Policy / Compatibility (unstable, x86_64-linux)",
+        "Policy / Compatibility (unstable, aarch64-linux)",
+        "Policy / Compliance (x86_64-linux)",
+        "Policy / Compliance (aarch64-linux)",
+        "Policy / Formatting and lint (x86_64-linux)",
+        "Policy / Formatting and lint (aarch64-linux)",
+        "Policy / Project tests (x86_64-linux)",
+        "Policy / Project tests (aarch64-linux)"
       ]
     },
     "nixos-nftzones": {

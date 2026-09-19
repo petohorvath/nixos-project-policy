@@ -22,6 +22,7 @@ jobs:
       revision: ${{ steps.snapshot.outputs.revision }}
       checker_revision: ${{ steps.snapshot.outputs.checker_revision }}
       matrix: ${{ steps.ci.outputs.matrix }}
+      compatibility_matrix: ${{ steps.ci.outputs.compatibility_matrix }}
     steps:
       - name: Verify immutable policy release
         env:
@@ -65,7 +66,9 @@ jobs:
         run: |
           nix run --no-update-lock-file ./policy -- --policy-root ./policy-state ci --project "$PROJECT" > ci.json
           matrix=$(jq -ce '.matrix' ci.json)
+          compatibility_matrix=$(jq -ce '.compatibilityMatrix' ci.json)
           printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+          printf 'compatibility_matrix=%s\n' "$compatibility_matrix" >> "$GITHUB_OUTPUT"
   policy:
     name: ${{ matrix.check }} (${{ matrix.system }})
     needs: records
@@ -116,18 +119,11 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state title "$PR_TITLE"
   compatibility:
-    name: Compatibility (${{ matrix.channel }}, ${{ matrix.system }})
+    name: ${{ matrix.check }}
     needs: records
     strategy:
       fail-fast: false
-      matrix:
-        channel: [stable, unstable]
-        system: [x86_64-linux, aarch64-linux]
-        include:
-          - system: x86_64-linux
-            runner: ubuntu-24.04
-          - system: aarch64-linux
-            runner: ubuntu-24.04-arm
+      matrix: ${{ fromJSON(needs.records.outputs.compatibility_matrix) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

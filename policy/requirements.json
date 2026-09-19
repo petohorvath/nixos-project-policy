@@ -5,13 +5,11 @@
   "readmeSections": ["Support", "Quickstart", "Development", "Contributing", "Documentation"],
   "ci": {
     "callerJobName": "Policy",
-    "requiredChecks": [
-      "Policy / Verify policy version and load shared pins",
-      "Policy / Compatibility (stable, x86_64-linux)",
-      "Policy / Compatibility (stable, aarch64-linux)",
-      "Policy / Compatibility (unstable, x86_64-linux)",
-      "Policy / Compatibility (unstable, aarch64-linux)"
-    ],
+    "requiredChecks": ["Policy / Verify policy version and load shared pins"],
+    "compatibilityChecks": {
+      "stable": "Compatibility (stable, {architecture})",
+      "unstable": "Compatibility (unstable, {architecture})"
+    },
     "architectureChecks": ["Compliance", "Formatting and lint", "Project tests"],
     "runners": {
       "x86_64-linux": "ubuntu-24.04",

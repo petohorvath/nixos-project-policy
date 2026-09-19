@@ -375,12 +375,30 @@ def load_policy(root):
 
 def ci_plan(project, requirements):
     jobs = [
-        {"check": check, "system": system, "runner": requirements["runners"][system]}
+        {
+            "check": check,
+            "system": architecture,
+            "runner": requirements["runners"][architecture],
+        }
         for check in requirements["architectureChecks"]
-        for system in project["requiredArchitectures"]
+        for architecture in project["requiredArchitectures"]
+    ]
+    compatibility_jobs = [
+        {
+            "check": check.format(architecture=architecture),
+            "channel": channel,
+            "system": architecture,
+            "runner": requirements["runners"][architecture],
+        }
+        for channel, check in requirements["compatibilityChecks"].items()
+        for architecture in project["requiredArchitectures"]
     ]
     checks = [
         *requirements["requiredChecks"],
+        *(
+            f"{requirements['callerJobName']} / {job['check']}"
+            for job in compatibility_jobs
+        ),
         *(
             f"{requirements['callerJobName']} / {job['check']} ({job['system']})"
             for job in jobs
@@ -388,7 +406,11 @@ def ci_plan(project, requirements):
     ]
     if project["vmTargets"]:
         checks.append(requirements["vmCheck"])
-    return {"matrix": {"include": jobs}, "requiredChecks": checks}
+    return {
+        "matrix": {"include": jobs},
+        "compatibilityMatrix": {"include": compatibility_jobs},
+        "requiredChecks": checks,
+    }
 
 
 def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False):
@@ -507,7 +529,7 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
             caller_name=config["ci"]["callerJobName"],
         )
     )
-    issues.extend(compatibility_gate_issues(project))
+    issues.extend(compatibility_gate_issues(project, config["ci"]))
     if not project["adopted"] and not readiness:
         issues.append(
             "adoption: project is pending; use --readiness to validate enrollment"
@@ -1061,7 +1083,7 @@ def audit_family(
             report["status"] = "pending-adoption"
         elif github:
             try:
-                report["issues"].extend(check_github(project))
+                report["issues"].extend(check_github(project, config["ci"]))
             except (ValueError, OSError) as error:
                 report["issues"].append(f"github: {error}")
                 report["status"] = "error"
@@ -1124,13 +1146,13 @@ def inspect_released_project(root, name, repository, version, records_root):
         }
 
 
-def check_github(project):
+def check_github(project, requirements):
     repository = project["repository"]
     info = github_get(f"repos/{repository}")
     merge_settings = github_merge_settings(repository, info)
     branch = quote(info["default_branch"], safe="")
     rules = github_get(f"repos/{repository}/rules/branches/{branch}")
-    issues = compatibility_gate_issues(project)
+    issues = compatibility_gate_issues(project, requirements)
     if (
         not merge_settings["allow_squash_merge"]
         or merge_settings["allow_merge_commit"]
@@ -1163,18 +1185,18 @@ def check_github(project):
     return issues
 
 
-def compatibility_gate_issues(project):
+def compatibility_gate_issues(project, requirements):
     version = project.get("policyVersion")
-    if not project.get("adopted") or not version or not uses_input_overrides(version):
+    checker_version = f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}"
+    if not project.get("adopted") or version != checker_version:
         return []
     registered = {
         name.rsplit(" / ", 1)[-1] for name in project.get("requiredChecks", [])
     }
     return [
-        f"ci: requiredChecks needs a verified Compatibility ({channel}, {system}) status"
-        for channel in ("stable", "unstable")
-        for system in ("x86_64-linux", "aarch64-linux")
-        if f"Compatibility ({channel}, {system})" not in registered
+        f"ci: requiredChecks needs a verified {job['check']} status"
+        for job in ci_plan(project, requirements)["compatibilityMatrix"]["include"]
+        if job["check"] not in registered
     ]
 
 

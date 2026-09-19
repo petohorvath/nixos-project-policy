@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0
+
+- Derive mandatory GitHub merge gates from the selected policy release, `requiredArchitectures`, and `vmTargets`, with optional `additionalRequiredChecks` for project-specific gates.
+- Include the complete required set in `ci` and `check` reports and use the selected checker's report when auditing members on another release with derived checks.
+- Retain legacy check lists for members on releases before v0.3.0. Require complete compatibility lists for all adopted members while any older checker still consumes current records, and reject drift from the generated set for this release.
+
+### Migration
+
+Publish v0.3.0 before activating member callers and select each migration separately. Update policy references, the reusable-workflow reference and `policy_version`, and the central `policyVersion` together. Move project-specific statuses into `additionalRequiredChecks`; the selected release supplies mandatory names. Existing v0.2.0 workflow status names, architectures, pins, and VM targets need no change solely for this upgrade.
+
+Project records retain schema version 2. Members on older releases keep their full `requiredChecks` lists. While any member still selects a release before v0.3.0, every adopted member must retain a full list for those older checkers. Generate each migrated member's compatibility list with `ci --project NAME`; it must match the complete required set. Once no older releases remain selected, omit the duplicated list from migrated records. Verify observed statuses and GitHub merge gates during adoption and retain evidence on the PR. See the [migration procedure](docs/maintenance.md#migration-to-v030).
+
 ## 0.2.0
 
 - Allow an independent immutable root `nixpkgs` selection, including an unstable update source, while retaining shared-pin checks for other nixpkgs nodes and independently locked examples.

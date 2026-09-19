@@ -199,7 +199,6 @@ class ProjectFixture(unittest.TestCase):
                     "policyVersion": RELEASE,
                     "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
                     "vmTargets": [],
-                    "requiredChecks": list(REQUIRED_CHECKS),
                 }
             },
         }
@@ -436,26 +435,27 @@ class ProjectTests(ProjectFixture):
             del records[field]
             path.write_text(json.dumps(records))
 
-    def test_adoption_records_cannot_omit_a_mandatory_policy_gate(self):
-        for missing in REQUIRED_CHECKS:
-            with self.subTest(missing=missing):
-                self.config["projects"]["example"]["requiredChecks"] = [
-                    check for check in REQUIRED_CHECKS if check != missing
-                ]
-                status, report = self.run_policy("validate")
-                self.assertEqual(status, 2)
-                self.assertIn("missing mandatory policy checks", report["error"])
-                self.assertIn(missing, report["error"])
+    def test_adopted_members_derive_checks_without_recording_mandatory_names(self):
+        self.assertEqual(self.run_policy("validate")[0], 0)
+        status, report = self.run_policy(
+            "check", str(self.root), "--project", "example"
+        )
+        self.assertEqual(status, 0, report)
+        self.assertEqual(report["requiredChecks"], REQUIRED_CHECKS)
+        self.assertEqual(self.audit_with_checks(REQUIRED_CHECKS)[0], 0)
 
     def test_vm_gate_is_mandatory_only_when_targets_are_declared(self):
         project = self.config["projects"]["example"]
         self.assertEqual(self.run_policy("validate")[0], 0)
         project["vmTargets"] = ["vm-tests", "vm-tests-unstable"]
-        status, report = self.run_policy("validate")
-        self.assertEqual(status, 2)
-        self.assertIn(VM_CHECK, report["error"])
-        project["requiredChecks"].append(VM_CHECK)
         self.assertEqual(self.run_policy("validate")[0], 0)
+        status, report = self.audit_with_checks(REQUIRED_CHECKS)
+        self.assertEqual(status, 1)
+        self.assertEqual(
+            report["projects"][0]["issues"],
+            [f"github: missing required check '{VM_CHECK}'"],
+        )
+        self.assertEqual(self.audit_with_checks([*REQUIRED_CHECKS, VM_CHECK])[0], 0)
 
     def test_ci_plan_uses_the_members_required_architectures_for_jobs_and_gates(self):
         for architectures in [
@@ -474,7 +474,7 @@ class ProjectTests(ProjectFixture):
                     )
                 ]
                 self.config["projects"]["example"].update(
-                    requiredArchitectures=architectures, requiredChecks=expected
+                    requiredArchitectures=architectures
                 )
                 status, report = self.run_policy("ci", "--project", "example")
                 self.assertEqual(status, 0)
@@ -522,7 +522,7 @@ class ProjectTests(ProjectFixture):
                 if check == REQUIRED_CHECKS[0] or check.endswith(f"{architecture})")
             ]
             project = self.config["projects"]["example"]
-            project.update(requiredArchitectures=[architecture], requiredChecks=checks)
+            project.update(requiredArchitectures=[architecture])
             with self.subTest(architecture=architecture):
                 self.assertEqual(self.inspect()["status"], "pass")
                 self.assertEqual(self.audit_with_checks(checks)[0], 0)
@@ -537,16 +537,6 @@ class ProjectTests(ProjectFixture):
                             f"github: missing required check '{missing}'",
                             report["projects"][0]["issues"],
                         )
-                        project["requiredChecks"] = incomplete
-                        report = self.inspect()
-                        self.assertEqual(report["status"], "fail")
-                        self.assertIn(
-                            missing.split(" / ")[-1], " ".join(report["issues"])
-                        )
-                        status, report = self.run_policy("validate")
-                        self.assertEqual(status, 2, report)
-                        self.assertIn(missing, report["error"])
-                        project["requiredChecks"] = checks
 
     def test_invalid_architecture_selections_cannot_produce_a_ci_matrix(self):
         for invalid in [
@@ -586,7 +576,6 @@ class ProjectTests(ProjectFixture):
         self.config["projects"]["example"].update(
             requiredArchitectures=["aarch64-linux"],
             vmTargets=["vm-tests"],
-            requiredChecks=[*checks, VM_CHECK],
         )
         status, report = self.run_policy("ci", "--project", "example")
         self.assertEqual(status, 0)
@@ -612,24 +601,25 @@ class ProjectTests(ProjectFixture):
     def test_ci_plan_does_not_claim_pin_approval_or_adoption(self):
         project = self.config["projects"]["example"]
         project["adopted"] = False
-        del project["requiredChecks"]
         self.pins["approved"] = None
         status, report = self.run_policy("ci", "--project", "example")
         self.assertEqual(status, 0)
         self.assertEqual(report["status"], "planned")
 
-    def test_required_check_names_must_be_a_list_of_unique_nonempty_strings(self):
-        for invalid in [None, "Policy", {}, [None], [" "], ["Policy", "Policy"]]:
-            with self.subTest(checks=invalid):
-                self.config["projects"]["example"]["requiredChecks"] = invalid
-                status, report = self.run_policy("validate")
-                self.assertEqual(status, 2)
-                self.assertIn("Invalid required check names", report["error"])
+    def test_check_names_must_be_a_list_of_unique_nonempty_strings(self):
+        project = self.config["projects"]["example"]
+        for field in ["requiredChecks", "additionalRequiredChecks"]:
+            for invalid in [None, "Policy", {}, [None], [" "], ["Policy", "Policy"]]:
+                with self.subTest(field=field, checks=invalid):
+                    project[field] = invalid
+                    status, report = self.run_policy("validate")
+                    self.assertEqual(status, 2)
+                    self.assertIn(f"Invalid {field} names", report["error"])
+            del project[field]
 
     def test_pending_members_can_prepare_callers_before_recording_merge_gates(self):
         project = self.config["projects"]["example"]
         project["adopted"] = False
-        del project["requiredChecks"]
         status, report = self.run_policy(
             "check", str(self.root), "--project", "example", "--readiness"
         )
@@ -637,8 +627,74 @@ class ProjectTests(ProjectFixture):
         self.assertEqual(report["status"], "ready")
         project["adopted"] = True
         status, report = self.run_policy("validate")
-        self.assertEqual(status, 2)
-        self.assertIn("needs verified required check names", report["error"])
+        self.assertEqual(status, 0, report)
+
+    def test_legacy_check_lists_must_match_generated_gates_including_additional_checks(
+        self,
+    ):
+        project = self.config["projects"]["example"]
+        project["additionalRequiredChecks"] = ["Integration"]
+        checks = [*REQUIRED_CHECKS, "Integration"]
+        for recorded in [
+            [],
+            *([check for check in checks if check != missing] for missing in checks),
+            [*checks, "Stale gate"],
+        ]:
+            with self.subTest(recorded=recorded):
+                project["requiredChecks"] = recorded
+                status, report = self.run_policy("validate")
+                self.assertEqual(status, 2)
+                self.assertIn("must match the generated CI checks", report["error"])
+        project["requiredChecks"] = checks
+        self.assertEqual(self.run_policy("validate")[0], 0)
+        del project["requiredChecks"]
+        self.assertEqual(self.run_policy("validate")[0], 0)
+
+    def test_older_selected_checkers_need_lists_for_every_adopted_member(self):
+        project = self.config["projects"]["example"]
+        legacy = copy.deepcopy(project)
+        legacy.update(repository="owner/legacy", adopted=False)
+        self.config["projects"]["legacy"] = legacy
+        for version in ["v0.1.1", "v0.2.0"]:
+            with self.subTest(version=version):
+                legacy["policyVersion"] = version
+                status, report = self.run_policy("validate")
+                self.assertEqual(status, 2)
+                self.assertIn("needs legacy requiredChecks", report["error"])
+                project["requiredChecks"] = list(REQUIRED_CHECKS)
+                self.assertEqual(self.run_policy("validate")[0], 0)
+                del project["requiredChecks"]
+        legacy["policyVersion"] = RELEASE
+        self.assertEqual(self.run_policy("validate")[0], 0)
+
+    def test_legacy_members_still_require_recorded_names_and_cannot_use_additional_checks(
+        self,
+    ):
+        project = self.config["projects"]["example"]
+        for version in ["v0.1.1", "v0.2.0"]:
+            with self.subTest(version=version):
+                project["policyVersion"] = version
+                status, report = self.run_policy("validate")
+                self.assertEqual(status, 2)
+                self.assertIn("needs verified required check names", report["error"])
+                project["requiredChecks"] = list(REQUIRED_CHECKS)
+                self.assertEqual(self.run_policy("validate")[0], 0)
+                project["additionalRequiredChecks"] = ["Integration"]
+                status, report = self.run_policy("validate")
+                self.assertEqual(status, 2)
+                self.assertIn("needs policy v0.3.0 or later", report["error"])
+                del project["additionalRequiredChecks"]
+                del project["requiredChecks"]
+
+    def test_additional_checks_cannot_replace_or_duplicate_mandatory_gates(self):
+        self.config["projects"]["example"]["additionalRequiredChecks"] = [
+            REQUIRED_CHECKS[0],
+            "Integration",
+        ]
+        status, report = self.run_policy("ci", "--project", "example")
+        self.assertEqual(status, 0, report)
+        self.assertEqual(report["requiredChecks"], [*REQUIRED_CHECKS, "Integration"])
+        self.assertEqual(self.audit_with_checks(["Integration"])[0], 1)
 
     def audit_with_checks(self, checks):
         with patch.object(
@@ -670,8 +726,12 @@ class ProjectTests(ProjectFixture):
     def test_github_audit_requires_policy_vm_and_additional_project_gates(self):
         checks = [*REQUIRED_CHECKS, VM_CHECK, "Project-specific integration tests"]
         self.config["projects"]["example"].update(
-            vmTargets=["vm-tests"], requiredChecks=checks
+            vmTargets=["vm-tests"],
+            additionalRequiredChecks=["Project-specific integration tests"],
         )
+        status, report = self.run_policy("ci", "--project", "example")
+        self.assertEqual(status, 0, report)
+        self.assertEqual(report["requiredChecks"], checks)
         self.assertEqual(self.audit_with_checks(checks)[0], 0)
         for missing in checks:
             with self.subTest(missing=missing):
@@ -731,7 +791,9 @@ class ProjectTests(ProjectFixture):
                 self.assertIn("selects policy v9.0.0", report["error"])
 
     def test_audit_uses_each_enrolled_members_release_with_current_records(self):
-        self.config["projects"]["example"]["policyVersion"] = "v0.1.1"
+        self.config["projects"]["example"].update(
+            policyVersion="v0.1.1", requiredChecks=["policy / Policy records"]
+        )
         released = {
             "project": "example",
             "checkerVersion": "v0.1.1",
@@ -756,6 +818,72 @@ class ProjectTests(ProjectFixture):
             str(Path(self.temp.name) / "records"),
         )
         self.assertEqual(command[command.index("check") + 1], str(self.root))
+
+    def test_audit_uses_derived_checks_from_the_selected_release_report(self):
+        self.config["projects"]["example"]["policyVersion"] = "v9.0.0"
+        checks = ["Selected release / Tests", "Selected release / Compatibility"]
+        released = {
+            "project": "example",
+            "checkerVersion": "v9.0.0",
+            "status": "pass",
+            "issues": [],
+            "dependencies": [],
+            "requiredChecks": checks,
+        }
+        with (
+            patch.object(policy.subprocess, "run") as run,
+            patch.object(policy, "git_revision", return_value=None),
+        ):
+            run.return_value = subprocess.CompletedProcess(
+                [], 0, stdout=json.dumps(released), stderr=""
+            )
+            self.assertEqual(self.audit_with_checks(checks)[0], 0)
+            status, report = self.audit_with_checks(checks[:1])
+            self.assertEqual(status, 1)
+            self.assertEqual(
+                report["projects"][0]["issues"],
+                [f"github: missing required check '{checks[1]}'"],
+            )
+
+    def test_audit_rejects_missing_or_malformed_derived_checks_from_a_release(self):
+        self.config["projects"]["example"]["policyVersion"] = "v9.0.0"
+        released = {
+            "project": "example",
+            "checkerVersion": "v9.0.0",
+            "status": "pass",
+            "issues": [],
+            "dependencies": [],
+        }
+        for checks in [None, [], "Tests", [None], [" "], ["Tests", "Tests"]]:
+            with (
+                self.subTest(checks=checks),
+                patch.object(policy.subprocess, "run") as run,
+                patch.object(policy, "git_revision", return_value=None),
+                patch.object(policy, "github_get") as github,
+            ):
+                if checks is not None:
+                    released["requiredChecks"] = checks
+                run.return_value = subprocess.CompletedProcess(
+                    [], 0, stdout=json.dumps(released), stderr=""
+                )
+                status, report = self.run_policy(
+                    "audit", str(self.root.parent), "--github"
+                )
+                self.assertEqual(status, 2)
+                self.assertIn(
+                    "incompatible report", " ".join(report["projects"][0]["issues"])
+                )
+                github.assert_not_called()
+
+    def test_missing_checkout_does_not_turn_a_failed_audit_into_an_inspection_error(
+        self,
+    ):
+        workspace = Path(self.temp.name) / "missing-workspace"
+        with patch.object(policy, "github_get") as github:
+            status, report = self.run_policy("audit", str(workspace), "--github")
+        self.assertEqual(status, 1)
+        self.assertEqual(report["projects"][0]["issues"], ["checkout missing"])
+        github.assert_not_called()
 
     def test_unavailable_release_remains_an_audit_error_after_github_checks(self):
         self.config["projects"]["example"]["policyVersion"] = "v9.0.0"
@@ -964,8 +1092,7 @@ class ProjectTests(ProjectFixture):
                     )
 
     def test_github_audit_combines_rulesets_and_classic_protection(self):
-        self.config["projects"]["example"]["requiredChecks"] = [
-            *REQUIRED_CHECKS,
+        self.config["projects"]["example"]["additionalRequiredChecks"] = [
             "Rules",
             "Classic",
         ]
@@ -1392,16 +1519,6 @@ class ProjectTests(ProjectFixture):
                     "check", str(self.root), "--project", "example"
                 )
                 self.assertEqual(code, 1, report)
-
-    def test_adoption_requires_all_four_verified_compatibility_gates(self):
-        for missing in COMPATIBILITY_CHECKS:
-            with self.subTest(missing=missing):
-                self.config["projects"]["example"]["requiredChecks"] = [
-                    check for check in REQUIRED_CHECKS if check != missing
-                ]
-                report = self.inspect()
-                self.assertEqual(report["status"], "fail", report)
-                self.assertIn(missing.split(" / ")[-1], " ".join(report["issues"]))
 
     def test_policy_caller_runs_after_title_edits(self):
         self.workflow["on"]["pull_request"] = {
@@ -2323,9 +2440,7 @@ class WorkflowTests(unittest.TestCase):
             [],
             {"protected": False},
         ]
-        issues = policy.check_github(
-            {"repository": "owner/example", "requiredChecks": ["Policy"]}, {}
-        )
+        issues = policy.check_github({"repository": "owner/example"}, ["Policy"])
         self.assertEqual(len(issues), 2)
 
     @patch.object(policy, "github_get")
@@ -2351,9 +2466,7 @@ class WorkflowTests(unittest.TestCase):
             ],
         ]
         self.assertEqual(
-            policy.check_github(
-                {"repository": "owner/example", "requiredChecks": ["Policy"]}, {}
-            ),
+            policy.check_github({"repository": "owner/example"}, ["Policy"]),
             [],
         )
 

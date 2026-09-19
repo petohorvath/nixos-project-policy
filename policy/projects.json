@@ -22,7 +22,7 @@
       "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
       "adopted": true,
       "vmTargets": [],
-      "policyVersion": "v0.2.0",
+      "policyVersion": "v0.3.0",
       "requiredChecks": [
         "Policy / Verify policy version and load shared pins",
         "Policy / Compatibility (stable, x86_64-linux)",

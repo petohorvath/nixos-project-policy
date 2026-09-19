@@ -319,26 +319,42 @@ def load_policy(root):
                     f"Unsupported requiredArchitectures for {name}: "
                     + ", ".join(sorted(unsupported))
                 )
-        checks = project.get("requiredChecks", [])
+        for field in ("requiredChecks", "additionalRequiredChecks"):
+            if not valid_check_names(project.get(field, [])):
+                raise ValueError(f"Invalid {field} names for {name}")
         if (
-            not isinstance(checks, list)
-            or any(not isinstance(check, str) or not check.strip() for check in checks)
-            or len(set(checks)) != len(checks)
+            project["policyVersion"] is not None
+            and not uses_derived_checks(project["policyVersion"])
+            and "additionalRequiredChecks" in project
         ):
-            raise ValueError(f"Invalid required check names for {name}")
-        if project["adopted"]:
-            if not checks:
+            raise ValueError(
+                f"Project {name} needs policy v0.3.0 or later for additionalRequiredChecks"
+            )
+        if project["policyVersion"] == checker_version:
+            if "requiredChecks" in project:
+                required = set(ci_plan(project, config["ci"])["requiredChecks"])
+                if set(project["requiredChecks"]) != required:
+                    raise ValueError(
+                        f"Project {name}: legacy requiredChecks must match the generated "
+                        "CI checks; record project-specific gates in additionalRequiredChecks"
+                    )
+        elif project["adopted"] and not uses_derived_checks(project["policyVersion"]):
+            if not project.get("requiredChecks"):
                 raise ValueError(
                     f"Adopted project {name} needs verified required check names"
                 )
-            if project["policyVersion"] == checker_version:
-                required = set(ci_plan(project, config["ci"])["requiredChecks"])
-                missing = required - set(checks)
-                if missing:
-                    raise ValueError(
-                        f"Adopted project {name} is missing mandatory policy checks: "
-                        + ", ".join(sorted(missing))
-                    )
+    # Older selected checkers validate every adopted record, including other releases.
+    if any(
+        project["policyVersion"] is not None
+        and not uses_derived_checks(project["policyVersion"])
+        for project in config["projects"].values()
+    ):
+        for name, project in config["projects"].items():
+            if project["adopted"] and not project.get("requiredChecks"):
+                raise ValueError(
+                    f"Adopted project {name} needs legacy requiredChecks while any "
+                    "member selects a policy release before v0.3.0"
+                )
     if pins["approved"] is not None:
         validate_pair(pins["approved"])
     ids = set()
@@ -409,8 +425,24 @@ def ci_plan(project, requirements):
     return {
         "matrix": {"include": jobs},
         "compatibilityMatrix": {"include": compatibility_jobs},
-        "requiredChecks": checks,
+        "requiredChecks": list(
+            dict.fromkeys([*checks, *project.get("additionalRequiredChecks", [])])
+        ),
     }
+
+
+def valid_check_names(checks):
+    return (
+        isinstance(checks, list)
+        and all(isinstance(check, str) and check.strip() for check in checks)
+        and len(set(checks)) == len(checks)
+    )
+
+
+def uses_derived_checks(version):
+    return version is not None and tuple(
+        map(int, version.removeprefix("v").split("."))
+    ) >= (0, 3, 0)
 
 
 def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False):
@@ -529,7 +561,6 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
             caller_name=config["ci"]["callerJobName"],
         )
     )
-    issues.extend(compatibility_gate_issues(project, config["ci"]))
     if not project["adopted"] and not readiness:
         issues.append(
             "adoption: project is pending; use --readiness to validate enrollment"
@@ -542,7 +573,7 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
         status = "ready"
     else:
         status = "pass"
-    return {
+    report = {
         "project": name,
         "policyVersion": project["policyVersion"],
         "revision": revision,
@@ -553,6 +584,9 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
         "pins": observations,
         "dependencies": sorted(dependencies),
     }
+    if project["policyVersion"] == f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}":
+        report["requiredChecks"] = ci_plan(project, config["ci"])["requiredChecks"]
+    return report
 
 
 def uses_input_overrides(version):
@@ -1081,9 +1115,14 @@ def audit_family(
         if not project["adopted"]:
             report["assessment"] = report["status"]
             report["status"] = "pending-adoption"
-        elif github:
+        elif github and root.exists() and report["status"] != "error":
             try:
-                report["issues"].extend(check_github(project, config["ci"]))
+                checks = (
+                    report["requiredChecks"]
+                    if uses_derived_checks(project["policyVersion"])
+                    else project["requiredChecks"]
+                )
+                report["issues"].extend(check_github(project, checks))
             except (ValueError, OSError) as error:
                 report["issues"].append(f"github: {error}")
                 report["status"] = "error"
@@ -1134,6 +1173,13 @@ def inspect_released_project(root, name, repository, version, records_root):
             or (report["status"] == "fail") != (process.returncode == 1)
             or not isinstance(report.get("issues"), list)
             or not isinstance(report.get("dependencies"), list)
+            or (
+                uses_derived_checks(version)
+                and (
+                    not report.get("requiredChecks")
+                    or not valid_check_names(report["requiredChecks"])
+                )
+            )
         ):
             raise ValueError("Released checker returned an incompatible report")
         return report
@@ -1146,13 +1192,13 @@ def inspect_released_project(root, name, repository, version, records_root):
         }
 
 
-def check_github(project, requirements):
+def check_github(project, checks):
     repository = project["repository"]
     info = github_get(f"repos/{repository}")
     merge_settings = github_merge_settings(repository, info)
     branch = quote(info["default_branch"], safe="")
     rules = github_get(f"repos/{repository}/rules/branches/{branch}")
-    issues = compatibility_gate_issues(project, requirements)
+    issues = []
     if (
         not merge_settings["allow_squash_merge"]
         or merge_settings["allow_merge_commit"]
@@ -1167,7 +1213,7 @@ def check_github(project, requirements):
                 check["context"]
                 for check in rule["parameters"]["required_status_checks"]
             )
-    if not pr_rule or not set(project["requiredChecks"]).issubset(contexts):
+    if not pr_rule or not set(checks).issubset(contexts):
         details = github_get(f"repos/{repository}/branches/{branch}")
         if details["protected"]:
             protection = github_get(f"repos/{repository}/branches/{branch}/protection")
@@ -1179,25 +1225,10 @@ def check_github(project, requirements):
             )
     if not pr_rule:
         issues.append("github: pull requests are not required")
-    for check in project["requiredChecks"]:
+    for check in checks:
         if check not in contexts:
             issues.append(f"github: missing required check '{check}'")
     return issues
-
-
-def compatibility_gate_issues(project, requirements):
-    version = project.get("policyVersion")
-    checker_version = f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}"
-    if not project.get("adopted") or version != checker_version:
-        return []
-    registered = {
-        name.rsplit(" / ", 1)[-1] for name in project.get("requiredChecks", [])
-    }
-    return [
-        f"ci: requiredChecks needs a verified {job['check']} status"
-        for job in ci_plan(project, requirements)["compatibilityMatrix"]["include"]
-        if job["check"] not in registered
-    ]
 
 
 def github_merge_settings(repository, info):

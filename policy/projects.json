@@ -22,12 +22,7 @@
       "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
       "adopted": false,
       "vmTargets": [],
-      "policyVersion": "v0.2.0",
-      "requiredChecks": [
-        "policy / Policy records",
-        "policy / Policy (x86_64-linux)",
-        "policy / Policy (aarch64-linux)"
-      ]
+      "policyVersion": "v0.2.0"
     },
     "nixos-nftzones": {
       "repository": "petohorvath/nixos-nftzones",

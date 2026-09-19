@@ -2,5 +2,19 @@
   "schemaVersion": 1,
   "systems": ["x86_64-linux", "aarch64-linux"],
   "requiredTools": ["nix", "nil", "nixfmt", "statix", "deadnix"],
-  "readmeSections": ["Support", "Quickstart", "Development", "Contributing", "Documentation"]
+  "readmeSections": ["Support", "Quickstart", "Development", "Contributing", "Documentation"],
+  "ci": {
+    "callerJobName": "Policy",
+    "requiredChecks": ["Policy / Verify policy version and load shared pins"],
+    "compatibilityChecks": {
+      "stable": "Compatibility (stable, {architecture})",
+      "unstable": "Compatibility (unstable, {architecture})"
+    },
+    "architectureChecks": ["Compliance", "Formatting and lint", "Project tests"],
+    "runners": {
+      "x86_64-linux": "ubuntu-24.04",
+      "aarch64-linux": "ubuntu-24.04-arm"
+    },
+    "vmCheck": "Policy / VM tests (x86_64-linux)"
+  }
 }

@@ -82,6 +82,10 @@ class NixCompatibilityTests(unittest.TestCase):
                                 "policyVersion": "v"
                                 + (policy.SOURCE_ROOT / "VERSION").read_text().strip(),
                                 "vmTargets": [],
+                                "requiredArchitectures": [
+                                    "x86_64-linux",
+                                    "aarch64-linux",
+                                ],
                             }
                         },
                     }

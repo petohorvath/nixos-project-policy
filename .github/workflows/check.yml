@@ -16,11 +16,13 @@ permissions:
 
 jobs:
   records:
-    name: Policy records
+    name: Verify policy version and load shared pins
     runs-on: ubuntu-24.04
     outputs:
       revision: ${{ steps.snapshot.outputs.revision }}
       checker_revision: ${{ steps.snapshot.outputs.checker_revision }}
+      matrix: ${{ steps.ci.outputs.matrix }}
+      compatibility_matrix: ${{ steps.ci.outputs.compatibility_matrix }}
     steps:
       - name: Verify immutable policy release
         env:
@@ -54,17 +56,25 @@ jobs:
           printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
           printf 'checker_revision=%s\n' "$checker_revision" >> "$GITHUB_OUTPUT"
           printf 'Policy %s: %s\nRecords: %s\n' "$POLICY_VERSION" "$checker_revision" "$revision"
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.34.6/install
+      - name: Load required architectures and checks
+        id: ci
+        env:
+          PROJECT: ${{ inputs.project }}
+        run: |
+          nix run --no-update-lock-file ./policy -- --policy-root ./policy-state ci --project "$PROJECT" > ci.json
+          matrix=$(jq -ce '.matrix' ci.json)
+          compatibility_matrix=$(jq -ce '.compatibilityMatrix' ci.json)
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+          printf 'compatibility_matrix=%s\n' "$compatibility_matrix" >> "$GITHUB_OUTPUT"
   policy:
-    name: Policy (${{ matrix.system }})
+    name: ${{ matrix.check }} (${{ matrix.system }})
     needs: records
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            system: x86_64-linux
-          - runner: ubuntu-24.04-arm
-            system: aarch64-linux
+      matrix: ${{ fromJSON(needs.records.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -92,31 +102,28 @@ jobs:
           git -C policy rev-parse HEAD
           git -C policy-state rev-parse HEAD
       - name: Check shared requirements
+        if: matrix.check == 'Compliance'
         env:
           PROJECT: ${{ inputs.project }}
         run: |
           nix run --no-update-lock-file ./policy -- --policy-root ./policy-state check ./project --project "$PROJECT" --readiness --shell
       - name: Run formatting and Nix lint outside the member flake
+        if: matrix.check == 'Formatting and lint'
         run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state lint ./project
-      - run: nix flake check ./project --no-update-lock-file --print-build-logs
+      - name: Run project tests
+        if: matrix.check == 'Project tests'
+        run: nix flake check ./project --no-update-lock-file --print-build-logs
       - name: Check PR title
-        if: github.event_name == 'pull_request'
+        if: matrix.check == 'Compliance' && github.event_name == 'pull_request'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state title "$PR_TITLE"
   compatibility:
-    name: Compatibility (${{ matrix.channel }}, ${{ matrix.system }})
+    name: ${{ matrix.check }}
     needs: records
     strategy:
       fail-fast: false
-      matrix:
-        channel: [stable, unstable]
-        system: [x86_64-linux, aarch64-linux]
-        include:
-          - system: x86_64-linux
-            runner: ubuntu-24.04
-          - system: aarch64-linux
-            runner: ubuntu-24.04-arm
+      matrix: ${{ fromJSON(needs.records.outputs.compatibility_matrix) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

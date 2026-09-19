@@ -321,18 +321,7 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
     revision = git_revision(root)
     candidate = candidate_for(pins, name, revision, batch_id)
     if candidate:
-        dirty = subprocess.check_output(
-            [
-                "git",
-                "-C",
-                str(root),
-                "status",
-                "--porcelain",
-                "--untracked-files=normal",
-            ],
-            text=True,
-        ).strip()
-        if dirty:
+        if git_dirty(root):
             raise ValueError(
                 "A candidate check requires the clean registered project commit"
             )
@@ -684,18 +673,7 @@ def check_compatibility(root, name, config, pins, channel, batch_id=None, output
     source_before = None
     try:
         require_revision(result["revision"])
-        dirty = subprocess.check_output(
-            [
-                "git",
-                "-C",
-                str(root),
-                "status",
-                "--porcelain",
-                "--untracked-files=normal",
-            ],
-            text=True,
-        ).strip()
-        result["sourceDirty"] = bool(dirty)
+        result["sourceDirty"] = git_dirty(root)
         source_before = fingerprints(root)
         result["sourceDigest"] = hashlib.sha256(
             json.dumps(source_before, sort_keys=True).encode()
@@ -712,7 +690,7 @@ def check_compatibility(root, name, config, pins, channel, batch_id=None, output
         if candidate:
             result["candidateBatch"] = candidate["id"]
             result["pinStatus"] = "candidate"
-            if dirty:
+            if result["sourceDirty"]:
                 raise ValueError(
                     "A candidate check requires the clean registered project commit"
                 )
@@ -803,16 +781,22 @@ def check_compatibility(root, name, config, pins, channel, batch_id=None, output
         result["status"] = "fail"
         result["issues"].append(str(error))
     finally:
-        if before is not None and (
-            not (root / "flake.lock").is_file()
-            or (root / "flake.lock").read_bytes() != before
-        ):
-            result["status"] = "fail"
-            result["issues"].append("Compatibility changed the project lockfile")
-        if source_before is not None and fingerprints(root) != source_before:
+        try:
+            if before is not None and (
+                not (root / "flake.lock").is_file()
+                or (root / "flake.lock").read_bytes() != before
+            ):
+                result["status"] = "fail"
+                result["issues"].append("Compatibility changed the project lockfile")
+            if source_before is not None and fingerprints(root) != source_before:
+                result["status"] = "fail"
+                result["issues"].append(
+                    "Project sources changed during compatibility checks"
+                )
+        except (OSError, ValueError) as error:
             result["status"] = "fail"
             result["issues"].append(
-                "Project sources changed during compatibility checks"
+                f"Source inspection after compatibility failed: {error}"
             )
     return result
 
@@ -1262,12 +1246,21 @@ def source_files(root, filename, include_vendor=False):
 
 def repository_identity(node):
     for source in [node.get("locked", {}), node.get("original", {})]:
-        if "owner" in source and "repo" in source:
+        host = source.get("host", "github.com")
+        if (
+            source.get("type") in {None, "github"}
+            and isinstance(host, str)
+            and host.lower() == "github.com"
+            and "owner" in source
+            and "repo" in source
+        ):
             return f"{source['owner']}/{source['repo']}".lower()
+        if source.get("type") == "github":
+            continue
         url = source.get("url", "")
-        scp = re.fullmatch(r"(?:git@)?github\.com:([^/]+/[^/?#]+)", url)
+        scp = re.fullmatch(r"(?:git@)?github\.com:([^/]+/[^/?#]+)/*", url)
         parsed = urlsplit(url)
-        path = scp.group(1) if scp else parsed.path.removeprefix("/")
+        path = (scp.group(1) if scp else parsed.path.removeprefix("/")).rstrip("/")
         if (scp or parsed.hostname == "github.com") and REPOSITORY.fullmatch(path):
             return path.removesuffix(".git").lower()
     return None
@@ -1320,6 +1313,22 @@ def git_revision(root):
         ).strip()
     except (OSError, subprocess.CalledProcessError):
         return None
+
+
+def git_dirty(root):
+    return bool(
+        subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(root),
+                "status",
+                "--porcelain",
+                "--untracked-files=normal",
+            ],
+            text=True,
+        ).strip()
+    )
 
 
 if __name__ == "__main__":

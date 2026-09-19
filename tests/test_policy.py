@@ -985,6 +985,36 @@ class ProjectTests(ProjectFixture):
             )
         )
 
+    def test_trailing_slash_git_sources_retain_policy_pin_and_dependency_checks(self):
+        self.config["projects"]["other"] = {
+            **self.config["projects"]["example"],
+            "repository": "owner/other",
+        }
+        for repository in [POLICY_REPO, "NixOS/nixpkgs", "owner/other"]:
+            with self.subTest(repository=repository):
+                lock = lockfile()
+                lock["nodes"]["entry"]["inputs"]["library"] = "library"
+                lock["nodes"]["library"] = {
+                    "locked": {
+                        "type": "git",
+                        "url": f"https://github.com/{repository}/",
+                        "rev": NEW_STABLE,
+                    },
+                    "original": {
+                        "type": "git",
+                        "url": f"https://github.com/{repository}/",
+                        "ref": "nixos-26.05",
+                    },
+                }
+                self.write("flake.lock", json.dumps(lock))
+                code, report = self.run_policy(
+                    "check", str(self.root), "--project", "example"
+                )
+                if repository == "owner/other":
+                    self.assertEqual(report["dependencies"], ["other"])
+                else:
+                    self.assertEqual(code, 1, report)
+
     def test_missing_approval_fails_closed(self):
         self.pins["approved"] = None
         self.assertTrue(
@@ -1240,6 +1270,8 @@ class CompatibilityTests(ProjectFixture):
             "missing",
             "ignored",
             "wrong-owner",
+            "custom-host",
+            "git-owner-spoof",
             "lookalike-host",
             "mutable",
             "nonflake",
@@ -1254,6 +1286,12 @@ class CompatibilityTests(ProjectFixture):
                     node["locked"]["rev"] = NEW_STABLE
                 elif failure == "wrong-owner":
                     node["locked"]["owner"] = "someone-else"
+                elif failure == "custom-host":
+                    node["locked"]["host"] = "github.example.org"
+                elif failure == "git-owner-spoof":
+                    node["locked"].update(
+                        type="git", url="https://example.org/NixOS/nixpkgs"
+                    )
                 elif failure == "lookalike-host":
                     node["locked"] = {
                         "type": "git",
@@ -1395,6 +1433,22 @@ class CompatibilityTests(ProjectFixture):
             code, report = self.compatibility()
         self.assertEqual(code, 1, report)
         self.assertIn("Compatibility changed the project lockfile", report["issues"])
+
+    def test_source_inspection_errors_preserve_execution_evidence(self):
+        original = self.run_command
+
+        def mutate(command, **kwargs):
+            if command[:3] == ["nix", "flake", "check"]:
+                outside = Path(self.temp.name) / "outside"
+                outside.write_text("external")
+                (self.root / "generated").symlink_to(outside)
+            return original(command, **kwargs)
+
+        with patch.object(policy.subprocess, "run", side_effect=mutate):
+            code, report = self.compatibility()
+        self.assertEqual(code, 1, report)
+        self.assertIn("escapes", " ".join(report["issues"]))
+        self.assertTrue((Path(report["artifacts"]) / "result.json").is_file())
 
     def test_record_snapshot_is_captured_before_test_execution(self):
         original = self.run_command

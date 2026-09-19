@@ -10,6 +10,80 @@ permissions:
   contents: read
 
 jobs:
+  registry-access:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: aa21a0b931e769f5f6edf5a774277c97cf9870bb # v0.1.1
+          path: checker
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 1a6f6033591184735b532720c6fee0c6ab2a995e # Pending registry selection
+          path: records
+          persist-credentials: false
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.34.6/install
+      - name: Inspect registry before enrollment
+        env:
+          GH_TOKEN: ${{ secrets.MEMBER_AUDIT_TOKEN }}
+        run: |
+          nix develop --no-update-lock-file ./checker -c python - <<'PY'
+          import json
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          sys.path.insert(0, "checker")
+          from tools.policy import check_github, github_get, github_merge_settings
+
+          project = json.loads(Path("records/policy/projects.json").read_text())["projects"]["nixos-registry"]
+          assert project["repository"] == "petohorvath/nixos-registry"
+          assert project["adopted"] is False
+          assert project["policyVersion"] == "v0.1.1"
+          assert project["vmTargets"] == []
+          # Supply the verified expected gates in memory; central records remain pending.
+          project["requiredChecks"] = [
+              "policy / Policy records",
+              "policy / Policy (x86_64-linux)",
+              "policy / Policy (aarch64-linux)",
+          ]
+          report = {
+              "project": "nixos-registry",
+              "purpose": "Pre-enrollment audit access; not an adoption or compliance result",
+              "checkerRevision": subprocess.check_output(["git", "-C", "checker", "rev-parse", "HEAD"], text=True).strip(),
+              "policyRecordsRevision": subprocess.check_output(["git", "-C", "records", "rev-parse", "HEAD"], text=True).strip(),
+              "adopted": project["adopted"],
+              "expectedRequiredChecks": project["requiredChecks"],
+          }
+          try:
+              report["issues"] = check_github(project)
+              info = github_get("repos/petohorvath/nixos-registry")
+              merge_settings = github_merge_settings(project["repository"], info)
+              report["mergeSettings"] = {key: merge_settings[key] for key in ["allow_squash_merge", "allow_merge_commit", "allow_rebase_merge"]}
+              assert info["default_branch"] == "main"
+              protection = github_get("repos/petohorvath/nixos-registry/branches/main/protection")
+              report["requiredStatusChecks"] = protection["required_status_checks"]
+              report["pullRequestRequirement"] = protection["required_pull_request_reviews"]
+              report["enforceAdmins"] = protection["enforce_admins"]
+              report["status"] = "fail" if report["issues"] else "access-verified"
+          except (ValueError, OSError) as error:
+              report["status"] = "error"
+              report["issues"] = [str(error)]
+          output = json.dumps(report, indent=2) + "\n"
+          Path("registry-audit-access.json").write_text(output)
+          print(output)
+          raise SystemExit(0 if report["status"] == "access-verified" else 2)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: registry-audit-access
+          path: registry-audit-access.json
+          if-no-files-found: error
   audit:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 6 * * *'
     runs-on: ubuntu-24.04

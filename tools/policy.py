@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 from urllib.error import HTTPError
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 import yaml
@@ -67,6 +67,20 @@ def main(argv=None):
     check.add_argument(
         "--shell", action="store_true", help="Execute the project's Nix shell"
     )
+    compatibility = commands.add_parser(
+        "compatibility", help="Run root checks with a recorded shared pin"
+    )
+    compatibility.add_argument("project_dir", type=Path)
+    compatibility.add_argument("--project", required=True)
+    compatibility.add_argument(
+        "--channel", required=True, choices=["stable", "unstable"]
+    )
+    compatibility.add_argument(
+        "--batch", help="Registered candidate at this exact commit"
+    )
+    compatibility.add_argument(
+        "--output", type=Path, help="New evidence directory outside the project"
+    )
     lint = commands.add_parser(
         "lint", help="Run Nix lint and formatting in a temporary copy"
     )
@@ -98,13 +112,22 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         require_policy_version(f"v{version}")
-        if args.command in {"check", "audit", "vm"} and args.policy_root is None:
+        if (
+            args.command in {"check", "audit", "vm", "compatibility"}
+            and args.policy_root is None
+        ):
             raise ValueError(
                 f"{args.command} requires --policy-root with current central records; "
                 "a policy release's bundled pins do not establish current approval"
             )
         records_root = args.policy_root or SOURCE_ROOT
         config, pins = load_policy(records_root)
+        if args.command == "compatibility":
+            selected = config["projects"][args.project]["policyVersion"]
+            if selected != f"v{version}":
+                raise ValueError(
+                    f"Project {args.project} must select checker v{version}"
+                )
         if args.command == "validate":
             result = {"status": "valid", "approvedPins": pins["approved"] is not None}
         elif args.command == "title":
@@ -119,6 +142,17 @@ def main(argv=None):
         elif args.command == "lint":
             issues = check_lint(args.project_dir)
             result = {"status": "fail" if issues else "pass", "issues": issues}
+        elif args.command == "compatibility":
+            records_revision = git_revision(records_root)
+            result = check_compatibility(
+                args.project_dir,
+                args.project,
+                config,
+                pins,
+                args.channel,
+                args.batch,
+                args.output,
+            )
         elif args.command == "vm":
             targets = config["projects"][args.project]["vmTargets"]
             for target in targets:
@@ -168,7 +202,11 @@ def main(argv=None):
                 records_root=records_root,
             )
         result["checkerVersion"] = f"v{version}"
-        result["policyRecordsRevision"] = git_revision(records_root)
+        result["policyRecordsRevision"] = (
+            records_revision
+            if args.command == "compatibility"
+            else git_revision(records_root)
+        )
         result["policyRecordsDigest"] = hashlib.sha256(
             json.dumps(
                 {
@@ -182,6 +220,10 @@ def main(argv=None):
                 sort_keys=True,
             ).encode()
         ).hexdigest()
+        if args.command == "compatibility":
+            (Path(result["artifacts"]) / "result.json").write_text(
+                json.dumps(result, indent=2, sort_keys=True) + "\n"
+            )
         print(json.dumps(result, indent=2, sort_keys=True))
         return {"fail": 1, "error": 2}.get(result.get("status"), 0)
     except (
@@ -298,6 +340,7 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
     if not pairs:
         issues.append("pins: no approved family baseline; adoption cannot pass yet")
     observations = []
+    shared_observations = []
     dependencies = set()
     locks = source_files(root, "flake.lock")
     if root / "flake.lock" not in locks:
@@ -308,6 +351,14 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
     known_repos["petohorvath/nix-nftzones"] = "nixos-nftzones"
     for path in locks:
         lock = LockGraph(read_json(path))
+        independent_node = None
+        if path == root / "flake.lock" and uses_input_overrides(
+            project["policyVersion"]
+        ):
+            try:
+                independent_node = selected_nixpkgs(lock)
+            except ValueError as error:
+                issues.append(f"flake.lock: {error}")
         lock_pins = []
         channels = {}
         for node_id, node in lock.reachable().items():
@@ -337,8 +388,12 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
                 "node": node_id,
                 "channel": channel,
                 "rev": selected,
+                "selection": "independent" if node_id == independent_node else "shared",
             }
             observations.append(observation)
+            if node_id == independent_node:
+                continue
+            shared_observations.append(observation)
             if (
                 channel is None
                 or not isinstance(selected, str)
@@ -350,6 +405,8 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
             else:
                 lock_pins.append(observation)
         for input_name, reference in lock.nodes[lock.root].get("inputs", {}).items():
+            if input_name == "nixpkgs" and lock.resolve(reference) == independent_node:
+                continue
             channel = channels.get(lock.resolve(reference))
             expected_name = {"stable": "nixpkgs", "unstable": "nixpkgs-unstable"}.get(
                 channel
@@ -368,14 +425,15 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
                 f"{path.relative_to(root)}: nixpkgs revisions do not match one allowed pin pair"
             )
     if (
-        observations
+        shared_observations
         and pairs
-        and not any(pins_match(observations, pair) for pair in pairs)
+        and not any(pins_match(shared_observations, pair) for pair in pairs)
     ):
         issues.append("pins: project lockfiles do not share one allowed pair")
     issues.extend(
         check_caller(root, config["policyRepository"], project["policyVersion"], name)
     )
+    issues.extend(compatibility_gate_issues(project))
     if not project["adopted"] and not readiness:
         issues.append(
             "adoption: project is pending; use --readiness to validate enrollment"
@@ -394,10 +452,37 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
         "revision": revision,
         "candidateBatch": candidate["id"] if candidate else None,
         "status": status,
+        "compatibility": "not-run",
         "issues": issues,
         "pins": observations,
         "dependencies": sorted(dependencies),
     }
+
+
+def uses_input_overrides(version):
+    return version is None or tuple(map(int, version.removeprefix("v").split("."))) >= (
+        0,
+        2,
+        0,
+    )
+
+
+def selected_nixpkgs(lock):
+    inputs = lock.nodes[lock.root].get("inputs", {})
+    if "nixpkgs" not in inputs:
+        raise ValueError("missing root nixpkgs input")
+    node_id = lock.resolve(inputs["nixpkgs"])
+    node = lock.nodes[node_id]
+    locked = node.get("locked", {})
+    if (
+        repository_identity({"locked": locked}) != "nixos/nixpkgs"
+        or locked.get("type") not in {"github", "git"}
+        or locked.get("dir")
+        or node.get("flake") is False
+    ):
+        raise ValueError("root nixpkgs must identify the NixOS/nixpkgs flake")
+    require_revision(locked.get("rev"))
+    return node_id
 
 
 def check_structure(root, config, version=None):
@@ -484,6 +569,17 @@ def check_caller(root, repository, version, project_name=None):
                     issues.append(
                         "ci: policy caller dependencies are not supported; run it independently for every PR"
                     )
+                if "strategy" in job or "continue-on-error" in job:
+                    issues.append(
+                        "ci: policy caller must not use a matrix or suppress failures"
+                    )
+                if uses_input_overrides(version) and set(job.get("with", {})) != {
+                    "project",
+                    "policy_version",
+                }:
+                    issues.append(
+                        "ci: policy caller accepts only project and policy_version; compatibility selection belongs to the policy runner"
+                    )
                 trigger = (
                     events.get("pull_request") if isinstance(events, dict) else None
                 )
@@ -548,6 +644,196 @@ def candidate_for(pins, name, revision, batch_id=None):
             "More than one candidate is registered for this project commit"
         )
     return matches[0] if matches else None
+
+
+def check_compatibility(root, name, config, pins, channel, batch_id=None, output=None):
+    root = root.resolve()
+    artifacts = (
+        output.resolve()
+        if output
+        else Path(tempfile.mkdtemp(prefix="nixos-policy-compatibility-"))
+    )
+    if artifacts.is_relative_to(root):
+        raise ValueError("Compatibility evidence must be outside the project checkout")
+    if output:
+        artifacts.mkdir(parents=True, exist_ok=False)
+    result = {
+        "project": name,
+        "policyVersion": config["projects"][name]["policyVersion"],
+        "revision": git_revision(root),
+        "checkerRevision": globals().get("PACKAGED_REVISION")
+        or git_revision(SOURCE_ROOT),
+        "checkerSourceDigest": hashlib.sha256(
+            b"".join(
+                (SOURCE_ROOT / path).read_bytes()
+                for path in ("tools/policy.py", "policy/requirements.json", "VERSION")
+            )
+        ).hexdigest(),
+        "channel": channel,
+        "system": None,
+        "expectedRevision": None,
+        "resolvedRevision": None,
+        "candidateBatch": None,
+        "pinStatus": None,
+        "status": "error",
+        "commands": [],
+        "issues": [],
+        "artifacts": str(artifacts),
+    }
+    before = None
+    source_before = None
+    try:
+        require_revision(result["revision"])
+        dirty = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(root),
+                "status",
+                "--porcelain",
+                "--untracked-files=normal",
+            ],
+            text=True,
+        ).strip()
+        result["sourceDirty"] = bool(dirty)
+        source_before = fingerprints(root)
+        result["sourceDigest"] = hashlib.sha256(
+            json.dumps(source_before, sort_keys=True).encode()
+        ).hexdigest()
+        before = (root / "flake.lock").read_bytes()
+        committed_lock = subprocess.check_output(
+            ["git", "-C", str(root), "show", "HEAD:flake.lock"],
+            stderr=subprocess.DEVNULL,
+        )
+        if before != committed_lock:
+            raise ValueError("Compatibility requires the committed root lock")
+        selected_nixpkgs(LockGraph(json.loads(before)))
+        candidate = candidate_for(pins, name, result["revision"], batch_id)
+        if candidate:
+            result["candidateBatch"] = candidate["id"]
+            result["pinStatus"] = "candidate"
+            if dirty:
+                raise ValueError(
+                    "A candidate check requires the clean registered project commit"
+                )
+        # Active rollouts always test the central approved pair, even when old
+        # locks remain allowed. Candidates select exactly their registered pair.
+        pair = candidate["pins"] if candidate else pins["approved"]
+        if pair is None:
+            raise ValueError("No approved family baseline for compatibility")
+        result["pinStatus"] = "candidate" if candidate else "approved"
+        revision = pair[channel]
+        result["expectedRevision"] = revision
+        result["system"] = compatibility_command(
+            result,
+            [
+                "nix",
+                "eval",
+                "--raw",
+                "--impure",
+                "--expr",
+                "builtins.currentSystem",
+            ],
+            capture=True,
+        ).strip()
+        if result["system"] not in config["systems"]:
+            raise ValueError(f"Unsupported compatibility host: {result['system']}")
+        override = ["--override-input", "nixpkgs", f"github:NixOS/nixpkgs/{revision}"]
+        metadata = compatibility_command(
+            result,
+            [
+                "nix",
+                "flake",
+                "metadata",
+                str(root),
+                "--json",
+                *override,
+            ],
+            capture=True,
+        )
+        (artifacts / "metadata.json").write_text(metadata)
+        lock = LockGraph(json.loads(metadata)["locks"])
+        node = selected_nixpkgs(lock)
+        result["resolvedRevision"] = lock.nodes[node]["locked"]["rev"]
+        if result["resolvedRevision"] != revision:
+            raise ValueError(
+                "Resolved root nixpkgs does not match the selected shared pin"
+            )
+        checks = json.loads(
+            compatibility_command(
+                result,
+                [
+                    "nix",
+                    "eval",
+                    "--json",
+                    f"{root}#checks.{result['system']}",
+                    "--apply",
+                    "builtins.attrNames",
+                    *override,
+                ],
+                capture=True,
+            )
+        )
+        if (
+            not isinstance(checks, list)
+            or not checks
+            or not all(isinstance(check, str) for check in checks)
+        ):
+            raise ValueError("Compatibility requires nonempty host checks")
+        result["checks"] = checks
+        compatibility_command(
+            result,
+            [
+                "nix",
+                "flake",
+                "check",
+                str(root),
+                "--print-build-logs",
+                *override,
+            ],
+        )
+        result["status"] = "candidate-pass" if candidate else "pass"
+    except (
+        ValueError,
+        OSError,
+        KeyError,
+        TypeError,
+        subprocess.SubprocessError,
+    ) as error:
+        result["status"] = "fail"
+        result["issues"].append(str(error))
+    finally:
+        if before is not None and (
+            not (root / "flake.lock").is_file()
+            or (root / "flake.lock").read_bytes() != before
+        ):
+            result["status"] = "fail"
+            result["issues"].append("Compatibility changed the project lockfile")
+        if source_before is not None and fingerprints(root) != source_before:
+            result["status"] = "fail"
+            result["issues"].append(
+                "Project sources changed during compatibility checks"
+            )
+    return result
+
+
+def compatibility_command(result, command, *, capture=False):
+    outcome = {"command": command, "returncode": None}
+    result["commands"].append(outcome)
+    try:
+        process = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE if capture else sys.stderr,
+        )
+        outcome["returncode"] = process.returncode
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, command)
+        return process.stdout
+    except (OSError, subprocess.SubprocessError) as error:
+        outcome["error"] = str(error)
+        raise
 
 
 def check_shell(root, tools):
@@ -651,7 +937,7 @@ def fingerprints(root):
     return {
         str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in source_files(root, "*", include_vendor=True)
-        if path.name != ".treefmt-cache"
+        if path.name not in {".treefmt-cache", ".git"}
     }
 
 
@@ -769,7 +1055,7 @@ def check_github(project):
     merge_settings = github_merge_settings(repository, info)
     branch = quote(info["default_branch"], safe="")
     rules = github_get(f"repos/{repository}/rules/branches/{branch}")
-    issues = []
+    issues = compatibility_gate_issues(project)
     if (
         not merge_settings["allow_squash_merge"]
         or merge_settings["allow_merge_commit"]
@@ -800,6 +1086,21 @@ def check_github(project):
         if check not in contexts:
             issues.append(f"github: missing required check '{check}'")
     return issues
+
+
+def compatibility_gate_issues(project):
+    version = project.get("policyVersion")
+    if not project.get("adopted") or not version or not uses_input_overrides(version):
+        return []
+    registered = {
+        name.rsplit(" / ", 1)[-1] for name in project.get("requiredChecks", [])
+    }
+    return [
+        f"ci: requiredChecks needs a verified Compatibility ({channel}, {system}) status"
+        for channel in ("stable", "unstable")
+        for system in ("x86_64-linux", "aarch64-linux")
+        if f"Compatibility ({channel}, {system})" not in registered
+    ]
 
 
 def github_merge_settings(repository, info):
@@ -963,9 +1264,12 @@ def repository_identity(node):
     for source in [node.get("locked", {}), node.get("original", {})]:
         if "owner" in source and "repo" in source:
             return f"{source['owner']}/{source['repo']}".lower()
-        match = re.search(r"github\.com[:/]([^/]+/[^/?#]+)", source.get("url", ""))
-        if match:
-            return match.group(1).removesuffix(".git").lower()
+        url = source.get("url", "")
+        scp = re.fullmatch(r"(?:git@)?github\.com:([^/]+/[^/?#]+)", url)
+        parsed = urlsplit(url)
+        path = scp.group(1) if scp else parsed.path.removeprefix("/")
+        if (scp or parsed.hostname == "github.com") and REPOSITORY.fullmatch(path):
+            return path.removesuffix(".git").lower()
     return None
 
 

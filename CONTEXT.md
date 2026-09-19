@@ -20,7 +20,7 @@ _Avoid_: Global skills, shared project library
 An immutable version of the shared rules and the implementation of policy checks, separate from the current shared pins and member enrollment state.
 
 **Policy check**:
-A check that a member project meets shared requirements, such as using approved dependency revisions and providing the required development tools.
+A check that a member project meets shared requirements, such as providing the required development tools and compatibility coverage.
 _Avoid_: External check
 
 **Integration project**:
@@ -28,8 +28,11 @@ A project that owns compatibility tests spanning member projects and depends on 
 _Avoid_: Policy repository
 
 **Shared pins**:
-The approved pair of exact nixpkgs revisions, one stable and one unstable, used wherever member projects select these dependencies.
+The approved pair of exact nixpkgs revisions, one stable and one unstable, required for member compatibility coverage. A member's selected root dependency can differ; earlier policy releases also require the shared pins in member locks.
 _Avoid_: Same channels, latest versions
+
+**Selected dependency**:
+The immutable nixpkgs revision a member chooses for its normal root development, checks, and builds, independently of required compatibility revisions.
 
 **Pin update batch**:
 A coordinated change to the shared pins, tracked across affected member projects from candidate evaluation through adoption or withdrawal.

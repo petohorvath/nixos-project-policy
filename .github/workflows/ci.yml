@@ -30,6 +30,8 @@ jobs:
         with:
           install_url: https://releases.nixos.org/nix/nix-2.34.6/install
       - run: nix flake check --no-update-lock-file --print-build-logs
+      - name: Test real input overrides and lock preservation
+        run: nix develop --no-update-lock-file --command python -m unittest tests.nix_compatibility -v
       - run: nix run --no-update-lock-file .# -- shell .
       - name: Check PR title
         if: github.event_name == 'pull_request'

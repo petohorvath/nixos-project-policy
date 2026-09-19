@@ -1,0 +1,9 @@
+# Separate member dependency selection from compatibility coverage
+
+Members selecting policy v0.2.0 or later may choose an immutable root `nixpkgs` revision independently of the shared pins. ADR 0003 coupled member development choices to family compatibility coverage; those concerns need independent control so a member can use its preferred dependency while still demonstrating support for both shared revisions.
+
+The policy runner reads a trusted record snapshot, verifies Nix's resolved root input, and executes the actual root `nix flake check` once per shared channel and Linux architecture with an exact input override. A separate check tests the committed default configuration. This preserves the root flake's evaluation and build behavior, including tools from the selected revision, without introducing a compatibility flake or importing the root `outputs` function. Successful cached builds satisfy checks; metadata alone does not.
+
+The exception covers only the selected root lock node. Independently locked examples and other nixpkgs nodes retain the existing shared-pin checks. Shared-pin candidates remain bound to exact clean project commits; active rollouts test the central approved pair, while old locks may remain temporarily allowed in the other scopes. Candidate success does not approve pins. Current record schemas remain compatible with older enrolled releases.
+
+[ADR 0005](0005-external-policy-enforcement.md) remains in force: policy records and execution stay outside member flakes, shells, imports, and builds. Human review still establishes test coverage and approves activation, merges, and publication.

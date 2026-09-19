@@ -15,12 +15,13 @@ nix fmt
 nix flake check --print-build-logs
 ```
 
-The complete command runs checker tests, policy-record validation, formatting, Nix lint, Python lint, and workflow validation for the host architecture. No VM execution is included. CI definitions run these checks on both supported Linux architectures.
+The complete command runs checker tests, policy-record validation, formatting, Nix lint, Python lint, and workflow validation for the host architecture. No VM execution is included. CI definitions run these checks on both supported Linux architectures. A separate host-level fixture executes real Nix metadata and full root checks with both exact overrides, verifies lock preservation, and verifies default-lock update rejection; nested Nix execution keeps this fixture outside build-sandbox checks.
 
 For a focused test run:
 
 ```bash
 nix develop --command python -m unittest discover -s tests -v
+nix develop --command python -m unittest tests.nix_compatibility -v
 nix fmt -- --ci
 nix run .# -- validate
 nix run .# -- --version

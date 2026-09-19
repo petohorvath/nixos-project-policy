@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0
+
+- Allow an independent immutable root `nixpkgs` selection, including an unstable update source, while retaining shared-pin checks for other nixpkgs nodes and independently locked examples.
+- Run policy-owned full root compatibility checks against the shared stable and unstable pins on both Linux architectures, alongside ordinary committed-lock, shell/tool, lint, and applicable VM checks.
+- Add `compatibility` with an explicit trusted record snapshot, resolved-input verification, nonempty host checks, lock preservation checks, and metadata/result evidence outside member sources.
+- Distinguish static validation, approved-pin execution, and candidate execution. Candidates remain bound to exact clean project commits; active rollouts target the central approved pair.
+- Require verified compatibility status registrations for migrated members and retain audits through older members' selected policy releases.
+
+### Migration
+
+This minor release changes rules, checker reports, and required workflow jobs. Publish v0.2.0 before activating callers. Select member migrations separately; update policy links, caller references and `policy_version`, and central `policyVersion` together. Keep a committed root lock and meaningful root host checks. The root selected dependency and its tools need not use shared stable pins, and no second input or compatibility flake is required solely for compatibility coverage.
+
+Run both channels on both native architectures and complete a member trial. Inspect actual statuses on a reviewable PR before registering their exact names or activating merge gates. Static `check` reports now explicitly say compatibility was not run; use the new runner's evidence for compatibility. Shared-pin updates may need new runs without default-lock changes. Project and pin record schemas are unchanged, and members on v0.1.x retain their existing contracts. See the [migration procedure](docs/maintenance.md#migration-to-v020) and [runner reference](docs/checker.md#compatibility-execution-and-evidence).
+
 ## 0.1.1
 
 - Read merge settings through GraphQL when GitHub omits them from a read-only REST response, so compliant repositories pass the audit.

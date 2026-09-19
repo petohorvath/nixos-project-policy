@@ -26,6 +26,12 @@ SOURCE = "f" * 40
 PAIR = {"stable": STABLE, "unstable": UNSTABLE}
 NEW_PAIR = {"stable": NEW_STABLE, "unstable": NEW_UNSTABLE}
 POLICY_REPO = "petohorvath/nixos-project-policy"
+COMPATIBILITY_CHECKS = [
+    "policy / Compatibility (stable, x86_64-linux)",
+    "policy / Compatibility (stable, aarch64-linux)",
+    "policy / Compatibility (unstable, x86_64-linux)",
+    "policy / Compatibility (unstable, aarch64-linux)",
+]
 
 
 def nixpkgs(revision, branch):
@@ -155,7 +161,7 @@ class PinStateTests(unittest.TestCase):
             policy.validate_pair({"stable": "nixos-26.05", "unstable": UNSTABLE})
 
 
-class ProjectTests(unittest.TestCase):
+class ProjectFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -178,7 +184,7 @@ class ProjectTests(unittest.TestCase):
                     "adopted": True,
                     "policyVersion": RELEASE,
                     "vmTargets": [],
-                    "requiredChecks": ["Policy"],
+                    "requiredChecks": ["Policy", *COMPATIBILITY_CHECKS],
                 }
             },
         }
@@ -235,6 +241,8 @@ class ProjectTests(unittest.TestCase):
             code = policy.main(["--policy-root", str(records), *args])
         return code, json.loads(output.getvalue() or errors.getvalue())
 
+
+class ProjectTests(ProjectFixture):
     def test_pending_adoption_cannot_pass_a_compliance_check(self):
         self.config["projects"]["example"]["adopted"] = False
         status, report = self.run_policy(
@@ -243,6 +251,47 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("adoption" in issue for issue in report["issues"]))
+
+    def test_root_selection_is_independent_of_shared_pins_and_update_channel(self):
+        lock = lockfile()
+        del lock["nodes"]["entry"]["inputs"]["nixpkgs-unstable"]
+        for branch in ["nixos-26.05", "nixos-unstable", "custom-branch"]:
+            with self.subTest(branch=branch):
+                lock["nodes"]["arbitrary-node"] = nixpkgs(NEW_STABLE, branch)
+                self.write("flake.lock", json.dumps(lock))
+                code, report = self.run_policy(
+                    "check", str(self.root), "--project", "example"
+                )
+                self.assertEqual(code, 0, report)
+                self.assertEqual(report["compatibility"], "not-run")
+                self.assertEqual(report["pins"][0]["selection"], "independent")
+
+    def test_independent_selection_does_not_waive_lock_validation(self):
+        for failure in ["missing", "malformed", "mutable"]:
+            with self.subTest(failure=failure):
+                lock = lockfile()
+                if failure == "mutable":
+                    lock["nodes"]["arbitrary-node"]["locked"]["rev"] = "nixos-unstable"
+                self.write(
+                    "flake.lock", "[]" if failure == "malformed" else json.dumps(lock)
+                )
+                if failure == "missing":
+                    (self.root / "flake.lock").unlink()
+                code, report = self.run_policy(
+                    "check", str(self.root), "--project", "example"
+                )
+                self.assertNotEqual(code, 0, report)
+
+    def test_independent_root_does_not_exempt_distinct_transitive_nixpkgs(self):
+        lock = lockfile()
+        lock["nodes"]["arbitrary-node"]["locked"]["rev"] = NEW_STABLE
+        lock["nodes"]["entry"]["inputs"]["library"] = "library"
+        lock["nodes"]["library"] = {"inputs": {"pkgs": "transitive"}}
+        lock["nodes"]["transitive"] = nixpkgs(NEW_STABLE, "nixos-26.05")
+        self.write("flake.lock", json.dumps(lock))
+        code, report = self.run_policy("check", str(self.root), "--project", "example")
+        self.assertEqual(code, 1, report)
+        self.assertIn("allowed pin pair", " ".join(report["issues"]))
 
     def test_enrollment_readiness_is_explicit_and_separate_from_compliance(self):
         for adopted in [False, True]:
@@ -302,7 +351,7 @@ class ProjectTests(unittest.TestCase):
         )
 
     def test_caller_version_must_match_registered_release(self):
-        for version in ["v0.2.0", "main", CHECKER]:
+        for version in ["v9.0.0", "main", CHECKER]:
             with self.subTest(version=version):
                 self.workflow["jobs"]["policy"]["with"]["policy_version"] = version
                 self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
@@ -312,7 +361,7 @@ class ProjectTests(unittest.TestCase):
                 )
 
     def test_caller_cannot_select_a_different_release_or_commit(self):
-        for version in ["v0.2.0", CHECKER]:
+        for version in ["v9.0.0", CHECKER]:
             with self.subTest(version=version):
                 self.workflow["jobs"]["policy"]["uses"] = (
                     f"{POLICY_REPO}/.github/workflows/check.yml@{version}"
@@ -325,7 +374,7 @@ class ProjectTests(unittest.TestCase):
 
     def test_shared_rule_links_require_the_selected_release_and_policy_document(self):
         for target in [
-            "v0.2.0/POLICY.md",
+            "v9.0.0/POLICY.md",
             f"{CHECKER}/POLICY.md",
             "v0.1.0/README.md",
             "v0.1.0/POLICY.md.other",
@@ -378,20 +427,20 @@ class ProjectTests(unittest.TestCase):
         self.assertIn("Unsupported policy record schema", report["error"])
 
     def test_local_check_cannot_use_a_different_policy_release(self):
-        self.config["projects"]["example"]["policyVersion"] = "v0.2.0"
+        self.config["projects"]["example"]["policyVersion"] = "v9.0.0"
         for options in [[], ["--readiness"]]:
             with self.subTest(options=options):
                 status, report = self.run_policy(
                     "check", str(self.root), "--project", "example", *options
                 )
                 self.assertEqual(status, 2)
-                self.assertIn("selects policy v0.2.0", report["error"])
+                self.assertIn("selects policy v9.0.0", report["error"])
 
     def test_audit_uses_each_enrolled_members_release_with_current_records(self):
-        self.config["projects"]["example"]["policyVersion"] = "v0.2.0"
+        self.config["projects"]["example"]["policyVersion"] = "v0.1.1"
         released = {
             "project": "example",
-            "checkerVersion": "v0.2.0",
+            "checkerVersion": "v0.1.1",
             "status": "pass",
             "issues": [],
             "dependencies": [],
@@ -405,9 +454,9 @@ class ProjectTests(unittest.TestCase):
             )
             status, report = self.run_policy("audit", str(self.root.parent))
         self.assertEqual(status, 0)
-        self.assertEqual(report["projects"][0]["checkerVersion"], "v0.2.0")
+        self.assertEqual(report["projects"][0]["checkerVersion"], "v0.1.1")
         command = run.call_args.args[0]
-        self.assertIn(f"github:{POLICY_REPO}/v0.2.0", command)
+        self.assertIn(f"github:{POLICY_REPO}/v0.1.1", command)
         self.assertEqual(
             command[command.index("--policy-root") + 1],
             str(Path(self.temp.name) / "records"),
@@ -415,7 +464,7 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(command[command.index("check") + 1], str(self.root))
 
     def test_unavailable_release_remains_an_audit_error_after_github_checks(self):
-        self.config["projects"]["example"]["policyVersion"] = "v0.2.0"
+        self.config["projects"]["example"]["policyVersion"] = "v9.0.0"
         with (
             patch.object(policy.subprocess, "run") as run,
             patch.object(policy, "git_revision", return_value=None),
@@ -578,7 +627,11 @@ class ProjectTests(unittest.TestCase):
             {"type": "pull_request"},
             {
                 "type": "required_status_checks",
-                "parameters": {"required_status_checks": [{"context": "Policy"}]},
+                "parameters": {
+                    "required_status_checks": [
+                        {"context": name} for name in ["Policy", *COMPATIBILITY_CHECKS]
+                    ]
+                },
             },
         ]
         for protected in [False, True]:
@@ -621,6 +674,7 @@ class ProjectTests(unittest.TestCase):
             "Policy",
             "Rules",
             "Classic",
+            *COMPATIBILITY_CHECKS,
         ]
         repository = "https://api.github.com/repos/owner/example"
         data = {
@@ -640,7 +694,7 @@ class ProjectTests(unittest.TestCase):
             f"{repository}/branches/release%2Fmain/protection": {
                 "required_pull_request_reviews": {"required_approving_review_count": 0},
                 "required_status_checks": {
-                    "contexts": ["Policy"],
+                    "contexts": ["Policy", *COMPATIBILITY_CHECKS],
                     "checks": [{"context": "Classic"}],
                 },
             },
@@ -672,7 +726,12 @@ class ProjectTests(unittest.TestCase):
                 {"type": "pull_request"},
                 {
                     "type": "required_status_checks",
-                    "parameters": {"required_status_checks": [{"context": "Policy"}]},
+                    "parameters": {
+                        "required_status_checks": [
+                            {"context": name}
+                            for name in ["Policy", *COMPATIBILITY_CHECKS]
+                        ]
+                    },
                 },
             ],
         }
@@ -812,15 +871,23 @@ class ProjectTests(unittest.TestCase):
         }
         self.write("flake.lock", json.dumps(lock))
         self.assertEqual(self.inspect()["status"], "fail")
-        self.assertEqual(len(self.inspect()["issues"]), 2)
+        self.assertIn(
+            "flake.lock: stable nixpkgs input 'nixpkgs-unstable' must be named 'nixpkgs'",
+            self.inspect()["issues"],
+        )
 
-    def test_nixpkgs_naming_does_not_require_unused_inputs(self):
+    def test_only_the_selected_root_input_is_required(self):
         for input_name in ["nixpkgs", "nixpkgs-unstable"]:
             with self.subTest(input_name=input_name):
                 lock = lockfile()
                 del lock["nodes"]["entry"]["inputs"][input_name]
                 self.write("flake.lock", json.dumps(lock))
-                self.assertEqual(self.inspect()["issues"], [])
+                self.assertEqual(
+                    self.inspect()["issues"],
+                    ["flake.lock: missing root nixpkgs input"]
+                    if input_name == "nixpkgs"
+                    else [],
+                )
 
     def test_canonical_follows_can_use_third_party_input_names(self):
         lock = lockfile()
@@ -879,7 +946,7 @@ class ProjectTests(unittest.TestCase):
         ]
         lock = lockfile()
         lock["nodes"]["rolling"]["locked"]["rev"] = NEW_UNSTABLE
-        self.write("flake.lock", json.dumps(lock))
+        self.write("examples/flake.lock", json.dumps(lock))
         self.assertEqual(self.inspect()["status"], "fail")
 
     def test_separate_locks_cannot_select_different_pairs(self):
@@ -917,6 +984,36 @@ class ProjectTests(unittest.TestCase):
                 for issue in self.inspect()["issues"]
             )
         )
+
+    def test_trailing_slash_git_sources_retain_policy_pin_and_dependency_checks(self):
+        self.config["projects"]["other"] = {
+            **self.config["projects"]["example"],
+            "repository": "owner/other",
+        }
+        for repository in [POLICY_REPO, "NixOS/nixpkgs", "owner/other"]:
+            with self.subTest(repository=repository):
+                lock = lockfile()
+                lock["nodes"]["entry"]["inputs"]["library"] = "library"
+                lock["nodes"]["library"] = {
+                    "locked": {
+                        "type": "git",
+                        "url": f"https://github.com/{repository}/",
+                        "rev": NEW_STABLE,
+                    },
+                    "original": {
+                        "type": "git",
+                        "url": f"https://github.com/{repository}/",
+                        "ref": "nixos-26.05",
+                    },
+                }
+                self.write("flake.lock", json.dumps(lock))
+                code, report = self.run_policy(
+                    "check", str(self.root), "--project", "example"
+                )
+                if repository == "owner/other":
+                    self.assertEqual(report["dependencies"], ["other"])
+                else:
+                    self.assertEqual(code, 1, report)
 
     def test_missing_approval_fails_closed(self):
         self.pins["approved"] = None
@@ -959,6 +1056,40 @@ class ProjectTests(unittest.TestCase):
                 self.assertTrue(
                     any("dependencies" in issue for issue in result["issues"])
                 )
+
+    def test_caller_cannot_disable_or_supply_compatibility_selection(self):
+        for setting in [
+            {"strategy": {"matrix": {"skip": []}}},
+            {"continue-on-error": True},
+            {
+                "with": {
+                    "project": "example",
+                    "policy_version": RELEASE,
+                    "revision": NEW_STABLE,
+                }
+            },
+        ]:
+            with self.subTest(setting=setting):
+                workflow = copy.deepcopy(self.workflow)
+                workflow["jobs"]["policy"].update(setting)
+                self.write(".github/workflows/policy.yml", json.dumps(workflow))
+                code, report = self.run_policy(
+                    "check", str(self.root), "--project", "example"
+                )
+                self.assertEqual(code, 1, report)
+
+    def test_adoption_requires_all_four_verified_compatibility_gates(self):
+        for missing in COMPATIBILITY_CHECKS:
+            with self.subTest(missing=missing):
+                self.config["projects"]["example"]["requiredChecks"] = [
+                    "Policy",
+                    *[check for check in COMPATIBILITY_CHECKS if check != missing],
+                ]
+                code, report = self.run_policy(
+                    "check", str(self.root), "--project", "example"
+                )
+                self.assertEqual(code, 1, report)
+                self.assertIn(missing.split(" / ")[-1], " ".join(report["issues"]))
 
     def test_policy_caller_runs_after_title_edits(self):
         self.workflow["on"]["pull_request"] = {
@@ -1012,12 +1143,352 @@ class ProjectTests(unittest.TestCase):
         )
 
 
+class CompatibilityTests(ProjectFixture):
+    def setUp(self):
+        super().setUp()
+        self.host = "x86_64-linux"
+        self.metadata = {"locks": lockfile()}
+        self.commands = []
+        self.check_returncode = 0
+        self.dirty = ""
+        self.host_checks = ["behavior"]
+        self.fail_stage = None
+        self.command_error = None
+        self.committed_lock = (self.root / "flake.lock").read_bytes()
+        self.addCleanup(patch.stopall)
+        patch.object(policy.subprocess, "check_output", side_effect=self.output).start()
+        patch.object(policy.subprocess, "run", side_effect=self.run_command).start()
+
+    def output(self, command, **kwargs):
+        if command[0] == "git":
+            if "show" in command:
+                return self.committed_lock
+            if "status" in command:
+                return self.dirty
+            return SOURCE if command[2] == str(self.root) else CHECKER
+        raise AssertionError(command)
+
+    def run_command(self, command, **kwargs):
+        self.commands.append(command)
+        if self.command_error:
+            raise self.command_error
+        if self.fail_stage and command[: len(self.fail_stage)] == self.fail_stage:
+            return subprocess.CompletedProcess(command, 1, "")
+        if command[:3] == ["nix", "flake", "metadata"]:
+            return subprocess.CompletedProcess(command, 0, json.dumps(self.metadata))
+        if command[:2] == ["nix", "eval"]:
+            output = (
+                self.host if "--impure" in command else json.dumps(self.host_checks)
+            )
+            return subprocess.CompletedProcess(command, 0, output)
+        if command[:3] == ["nix", "flake", "check"]:
+            return subprocess.CompletedProcess(command, self.check_returncode)
+        raise AssertionError(command)
+
+    def compatibility(self, channel="stable", *options):
+        output = (
+            Path(self.temp.name)
+            / f"evidence-{len(list(Path(self.temp.name).glob('evidence-*')))}"
+        )
+        return self.run_policy(
+            "compatibility",
+            str(self.root),
+            "--project",
+            "example",
+            "--channel",
+            channel,
+            "--output",
+            str(output),
+            *options,
+        )
+
+    def test_both_channels_execute_full_checks_at_the_recorded_pin(self):
+        for channel, revision in PAIR.items():
+            with self.subTest(channel=channel):
+                self.metadata["locks"]["nodes"]["arbitrary-node"]["locked"]["rev"] = (
+                    revision
+                )
+                code, report = self.compatibility(channel)
+                self.assertEqual(code, 0, report)
+                self.assertEqual(report["status"], "pass")
+                self.assertEqual(report["expectedRevision"], revision)
+                self.assertEqual(report["resolvedRevision"], revision)
+                self.assertEqual(report["revision"], SOURCE)
+                self.assertEqual(report["checkerRevision"], CHECKER)
+                self.assertEqual(report["policyRecordsRevision"], CHECKER)
+                self.assertEqual(report["system"], self.host)
+                self.assertEqual(report["pinStatus"], "approved")
+                check = next(
+                    command
+                    for command in reversed(self.commands)
+                    if command[:3] == ["nix", "flake", "check"]
+                )
+                self.assertEqual(
+                    check[-3:],
+                    ["--override-input", "nixpkgs", f"github:NixOS/nixpkgs/{revision}"],
+                )
+                self.assertNotIn("--no-build", check)
+                self.assertNotIn("--no-update-lock-file", check)
+                evidence = Path(report["artifacts"])
+                self.assertEqual(
+                    json.loads((evidence / "result.json").read_text()), report
+                )
+                self.assertEqual(
+                    json.loads((evidence / "metadata.json").read_text()), self.metadata
+                )
+
+    def test_registered_candidate_executes_without_approving_or_changing_default_lock(
+        self,
+    ):
+        before = (self.root / "flake.lock").read_bytes()
+        self.pins.update(
+            approved=None,
+            batches=[
+                {
+                    "id": "next",
+                    "status": "candidate",
+                    "pins": NEW_PAIR,
+                    "projects": {"example": SOURCE},
+                }
+            ],
+        )
+        self.metadata["locks"]["nodes"]["arbitrary-node"]["locked"]["rev"] = NEW_STABLE
+        code, report = self.compatibility()
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["status"], "candidate-pass")
+        self.assertEqual(report["pinStatus"], "candidate")
+        self.assertEqual(report["candidateBatch"], "next")
+        self.assertEqual(report["expectedRevision"], NEW_STABLE)
+        self.assertEqual((self.root / "flake.lock").read_bytes(), before)
+        self.dirty = " M flake.nix"
+        code, report = self.compatibility("stable", "--batch", "next")
+        self.assertEqual(code, 1, report)
+        self.assertIn("clean registered", " ".join(report["issues"]))
+
+    def test_resolved_input_must_be_present_exact_and_from_nixos(self):
+        for failure in [
+            "missing",
+            "ignored",
+            "wrong-owner",
+            "custom-host",
+            "git-owner-spoof",
+            "lookalike-host",
+            "mutable",
+            "nonflake",
+            "malformed",
+        ]:
+            with self.subTest(failure=failure):
+                self.metadata = {"locks": lockfile()}
+                node = self.metadata["locks"]["nodes"]["arbitrary-node"]
+                if failure == "missing":
+                    del self.metadata["locks"]["nodes"]["entry"]["inputs"]["nixpkgs"]
+                elif failure == "ignored":
+                    node["locked"]["rev"] = NEW_STABLE
+                elif failure == "wrong-owner":
+                    node["locked"]["owner"] = "someone-else"
+                elif failure == "custom-host":
+                    node["locked"]["host"] = "github.example.org"
+                elif failure == "git-owner-spoof":
+                    node["locked"].update(
+                        type="git", url="https://example.org/NixOS/nixpkgs"
+                    )
+                elif failure == "lookalike-host":
+                    node["locked"] = {
+                        "type": "git",
+                        "url": "https://evilgithub.com/NixOS/nixpkgs",
+                        "rev": STABLE,
+                    }
+                elif failure == "mutable":
+                    del node["locked"]["rev"]
+                elif failure == "nonflake":
+                    node["flake"] = False
+                else:
+                    self.metadata["locks"] = {"version": 6}
+                self.commands.clear()
+                code, report = self.compatibility()
+                self.assertEqual(code, 1, report)
+                self.assertEqual(report["status"], "fail")
+                self.assertFalse(
+                    any(
+                        command[:3] == ["nix", "flake", "check"]
+                        for command in self.commands
+                    )
+                )
+
+    def test_follows_and_arbitrary_node_names_verify_the_root_selection(self):
+        graph = self.metadata["locks"]
+        graph["nodes"]["entry"]["inputs"].update(
+            library="library", nixpkgs=["library", "pkgs"]
+        )
+        graph["nodes"]["library"] = {"inputs": {"pkgs": "arbitrary-node"}}
+        code, report = self.compatibility()
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["resolvedRevision"], STABLE)
+
+    def test_metadata_does_not_replace_host_evaluation_or_builds(self):
+        for stage in [
+            ["nix", "flake", "metadata"],
+            ["nix", "eval", "--json"],
+            ["nix", "flake", "check"],
+        ]:
+            with self.subTest(stage=stage):
+                self.fail_stage = stage
+                code, report = self.compatibility()
+                self.assertEqual(code, 1, report)
+                self.assertEqual(report["commands"][-1]["returncode"], 1)
+        self.fail_stage = None
+        for checks in [[], {}, None]:
+            with self.subTest(checks=checks):
+                self.host_checks = checks
+                code, report = self.compatibility()
+                self.assertEqual(code, 1, report)
+                self.assertIn("nonempty host checks", " ".join(report["issues"]))
+        self.command_error = FileNotFoundError("nix unavailable")
+        code, report = self.compatibility()
+        self.assertEqual(code, 1, report)
+        self.assertIn("nix unavailable", report["commands"][-1]["error"])
+
+    def test_supported_native_hosts_are_detected_and_other_hosts_fail(self):
+        for host in ["x86_64-linux", "aarch64-linux", "aarch64-darwin"]:
+            with self.subTest(host=host):
+                self.host = host
+                code, report = self.compatibility()
+                self.assertEqual(code, 1 if host.endswith("darwin") else 0, report)
+                self.assertEqual(report["system"], host)
+
+    def test_active_and_terminal_batches_use_only_the_central_approved_pair(self):
+        for state in ["approved", "rolling", "paused", "complete", "withdrawn"]:
+            for approved in [PAIR, NEW_PAIR]:
+                with self.subTest(state=state, approved=approved):
+                    self.pins.update(
+                        approved=approved,
+                        batches=[
+                            {
+                                "id": "rollout",
+                                "status": state,
+                                "pins": NEW_PAIR,
+                                "previous": PAIR,
+                                "projects": {"example": SOURCE},
+                            }
+                        ],
+                    )
+                    self.metadata["locks"]["nodes"]["arbitrary-node"]["locked"][
+                        "rev"
+                    ] = approved["stable"]
+                    code, report = self.compatibility()
+                    self.assertEqual(code, 0, report)
+                    self.assertEqual(report["expectedRevision"], approved["stable"])
+                    self.assertEqual(report["pinStatus"], "approved")
+                    self.assertIsNone(report["candidateBatch"])
+                    code, report = self.compatibility("stable", "--batch", "rollout")
+                    self.assertEqual(code, 1, report)
+
+    def test_candidate_selection_rejects_wrong_commits_and_ambiguity(self):
+        self.pins["batches"] = [
+            {
+                "id": "next",
+                "status": "candidate",
+                "pins": PAIR,
+                "projects": {"example": CHECKER},
+            }
+        ]
+        code, report = self.compatibility("stable", "--batch", "next")
+        self.assertEqual(code, 1, report)
+        self.assertIn("exact project commit", " ".join(report["issues"]))
+        self.pins["batches"][0]["projects"]["example"] = SOURCE
+        self.pins["batches"].append({**self.pins["batches"][0], "id": "other"})
+        code, report = self.compatibility()
+        self.assertEqual(code, 1, report)
+        self.assertIn("More than one candidate", " ".join(report["issues"]))
+        code, report = self.compatibility("stable", "--batch", "next")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["status"], "candidate-pass")
+
+    def test_missing_approval_and_invalid_rollout_records_cannot_run(self):
+        self.pins["approved"] = None
+        code, report = self.compatibility()
+        self.assertEqual(code, 1, report)
+        self.assertEqual(report["commands"], [])
+        for state in ["rolling", "unknown"]:
+            self.pins["batches"] = [
+                {
+                    "id": "invalid",
+                    "status": state,
+                    "pins": PAIR,
+                    "projects": {"example": SOURCE},
+                }
+            ]
+            code, report = self.compatibility()
+            self.assertEqual(code, 2, report)
+
+    def test_lock_changes_are_reported_as_failure(self):
+        original = self.run_command
+
+        def mutate(command, **kwargs):
+            if command[:3] == ["nix", "flake", "check"]:
+                self.write("flake.lock", "changed")
+            return original(command, **kwargs)
+
+        with patch.object(policy.subprocess, "run", side_effect=mutate):
+            code, report = self.compatibility()
+        self.assertEqual(code, 1, report)
+        self.assertIn("Compatibility changed the project lockfile", report["issues"])
+
+    def test_source_inspection_errors_preserve_execution_evidence(self):
+        original = self.run_command
+
+        def mutate(command, **kwargs):
+            if command[:3] == ["nix", "flake", "check"]:
+                outside = Path(self.temp.name) / "outside"
+                outside.write_text("external")
+                (self.root / "generated").symlink_to(outside)
+            return original(command, **kwargs)
+
+        with patch.object(policy.subprocess, "run", side_effect=mutate):
+            code, report = self.compatibility()
+        self.assertEqual(code, 1, report)
+        self.assertIn("escapes", " ".join(report["issues"]))
+        self.assertTrue((Path(report["artifacts"]) / "result.json").is_file())
+
+    def test_record_snapshot_is_captured_before_test_execution(self):
+        original = self.run_command
+
+        def change_records(command, **kwargs):
+            if command[:3] == ["nix", "flake", "metadata"]:
+                records = Path(self.temp.name) / "records/policy/pins.json"
+                records.write_text(json.dumps({**self.pins, "approved": NEW_PAIR}))
+            return original(command, **kwargs)
+
+        code, before = self.compatibility()
+        self.assertEqual(code, 0, before)
+        with patch.object(policy.subprocess, "run", side_effect=change_records):
+            code, after = self.compatibility()
+        self.assertEqual(code, 0, after)
+        self.assertEqual(after["expectedRevision"], STABLE)
+        self.assertEqual(after["policyRecordsDigest"], before["policyRecordsDigest"])
+
+    def test_evidence_cannot_be_written_inside_the_project(self):
+        code, report = self.compatibility(
+            "stable", "--output", str(self.root / "evidence")
+        )
+        self.assertEqual(code, 2, report)
+        self.assertIn("outside", report["error"])
+        self.assertFalse((self.root / "evidence").exists())
+
+    def test_compatibility_requires_the_committed_root_lock(self):
+        self.committed_lock = b"{}"
+        code, report = self.compatibility()
+        self.assertEqual(code, 1, report)
+        self.assertIn("committed root lock", " ".join(report["issues"]))
+
+
 class RecordTests(unittest.TestCase):
     def test_member_commands_require_explicit_current_records(self):
         for args in [
             ["check", ".", "--project", "example"],
             ["audit", "."],
             ["vm", ".", "--project", "example"],
+            ["compatibility", ".", "--project", "example", "--channel", "stable"],
         ]:
             with (
                 self.subTest(command=args[0]),
@@ -1102,7 +1573,7 @@ class WorkflowTests(unittest.TestCase):
             output = root / "output"
             for version, passes in [
                 (RELEASE.removeprefix("v"), True),
-                ("0.2.0", False),
+                ("9.0.0", False),
             ]:
                 with self.subTest(version=version):
                     (root / "policy/VERSION").write_text(version + "\n")
@@ -1145,7 +1616,7 @@ class WorkflowTests(unittest.TestCase):
             (RELEASE, {**approved, "immutable": False}, 0, False),
             (RELEASE, {**approved, "draft": True}, 0, False),
             (RELEASE, {**approved, "prerelease": True}, 0, False),
-            (RELEASE, {**approved, "tag_name": "v0.2.0"}, 0, False),
+            (RELEASE, {**approved, "tag_name": "v9.0.0"}, 0, False),
             (RELEASE, {}, 0, False),
             (RELEASE, approved, 1, False),
             ("main", approved, 0, False),
@@ -1184,7 +1655,7 @@ class WorkflowTests(unittest.TestCase):
             Loader=yaml.BaseLoader,
         )
         jobs = workflow["jobs"]
-        for job in ["policy", "vm"]:
+        for job in ["policy", "vm", "compatibility"]:
             with self.subTest(job=job):
                 self.assertEqual(jobs[job]["needs"], "records")
                 checkouts = {
@@ -1201,6 +1672,53 @@ class WorkflowTests(unittest.TestCase):
                 for step in jobs[job]["steps"]:
                     if "nix run" in step.get("run", ""):
                         self.assertIn("--policy-root ./policy-state", step["run"])
+
+    def test_compatibility_matrix_executes_both_channels_on_both_native_hosts(self):
+        workflow = yaml.load(
+            (policy.SOURCE_ROOT / ".github/workflows/check.yml").read_text(),
+            Loader=yaml.BaseLoader,
+        )
+        job = workflow["jobs"]["compatibility"]
+        self.assertEqual(
+            job["name"], "Compatibility (${{ matrix.channel }}, ${{ matrix.system }})"
+        )
+        self.assertEqual(job["strategy"]["matrix"]["channel"], ["stable", "unstable"])
+        self.assertEqual(
+            job["strategy"]["matrix"]["system"], ["x86_64-linux", "aarch64-linux"]
+        )
+        self.assertEqual(
+            job["strategy"]["matrix"]["include"],
+            [
+                {"system": "x86_64-linux", "runner": "ubuntu-24.04"},
+                {"system": "aarch64-linux", "runner": "ubuntu-24.04-arm"},
+            ],
+        )
+        self.assertNotIn("if", job)
+        self.assertNotIn("continue-on-error", job)
+        step = next(
+            step
+            for step in job["steps"]
+            if "compatibility ./project" in step.get("run", "")
+        )
+        self.assertNotIn("if", step)
+        self.assertNotIn("continue-on-error", step)
+        self.assertIn('--channel "$CHANNEL"', step["run"])
+        self.assertIn("--policy-root ./policy-state", step["run"])
+        self.assertNotIn("||", step["run"])
+        upload = next(
+            step
+            for step in job["steps"]
+            if step.get("uses", "").startswith("actions/upload-artifact@")
+        )
+        self.assertEqual(upload["if"], "always()")
+        default = workflow["jobs"]["policy"]["steps"]
+        self.assertTrue(
+            any(
+                step.get("run")
+                == "nix flake check ./project --no-update-lock-file --print-build-logs"
+                for step in default
+            )
+        )
 
     def test_maintenance_audit_uses_a_member_access_secret(self):
         source = Path(__file__).resolve().parents[1]
@@ -1334,7 +1852,12 @@ class WorkflowTests(unittest.TestCase):
                 {"type": "pull_request"},
                 {
                     "type": "required_status_checks",
-                    "parameters": {"required_status_checks": [{"context": "Policy"}]},
+                    "parameters": {
+                        "required_status_checks": [
+                            {"context": name}
+                            for name in ["Policy", *COMPATIBILITY_CHECKS]
+                        ]
+                    },
                 },
             ],
         ]

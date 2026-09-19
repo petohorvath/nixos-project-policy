@@ -13,6 +13,7 @@ permissions:
 jobs:
   policy:
     # Replace both version placeholders with the same published immutable release tag.
+    # The policy workflow owns the default check and all four compatibility runs.
     uses: petohorvath/nixos-project-policy/.github/workflows/check.yml@POLICY_VERSION
     with:
       project: PROJECT_NAME

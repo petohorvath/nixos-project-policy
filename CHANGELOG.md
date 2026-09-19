@@ -5,7 +5,6 @@
 - Derive mandatory GitHub merge gates from the selected policy release, `requiredArchitectures`, and `vmTargets`, with optional `additionalRequiredChecks` for project-specific gates.
 - Include the complete required set in `ci` and `check` reports and use the selected checker's report when auditing members on another release with derived checks.
 - Retain legacy check lists for members on releases before v0.3.0. Require complete compatibility lists for all adopted members while any older checker still consumes current records, and reject drift from the generated set for this release.
-- Remove the stale check list from pending `nixos-cross-config` preparation without changing its selected release or adoption state.
 
 ### Migration
 

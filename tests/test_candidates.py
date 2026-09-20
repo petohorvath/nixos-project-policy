@@ -252,9 +252,57 @@ class CandidateTests(ProjectFixture):
         return code, report, output
 
     def plan(self):
+        self.commit(self.proposal)
         return self.call(
             "plan", "--project", "example", "--batch", "next", "--attempt", "fixture-1"
         )
+
+    def test_proposal_records_must_be_regular_files_at_the_exact_commit(self):
+        path = self.proposal / "policy/pins.json"
+        external = self.root.parent / "outside-pins.json"
+        external.write_bytes(path.read_bytes())
+        path.unlink()
+        path.symlink_to(external)
+        self.assertNotEqual(self.plan()[0], 0)
+        path.unlink()
+        path.write_bytes(external.read_bytes())
+        self.commit(self.proposal)
+        code, _, plan = self.plan()
+        self.assertEqual(code, 0)
+        path.write_text(path.read_text() + "\n")
+        self.assertNotEqual(self.worker(plan, "x86_64-linux")[0], 0)
+
+    def test_member_execution_cannot_inherit_workflow_control_credentials(self):
+        _, _, plan = self.plan()
+        observed = []
+
+        def execute(command, **kwargs):
+            if command[0] == "nix" and "env" in kwargs:
+                observed.append(kwargs["env"])
+            return self.services.run(command, **kwargs)
+
+        controlled = {
+            name: "workflow-secret-or-command-file"
+            for name in (
+                "GH_TOKEN",
+                "GITHUB_TOKEN",
+                "ACTIONS_RUNTIME_TOKEN",
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+                "GITHUB_ENV",
+                "GITHUB_OUTPUT",
+                "GITHUB_PATH",
+                "GITHUB_STEP_SUMMARY",
+                "GITHUB_STATE",
+            )
+        }
+        with (
+            patch.dict(os.environ, controlled),
+            patch.object(subprocess, "run", side_effect=execute),
+        ):
+            self.assertEqual(self.worker(plan, "x86_64-linux")[0], 0)
+        self.assertTrue(observed)
+        for environment in observed:
+            self.assertFalse(set(environment) & set(controlled))
 
     def worker(self, plan, system):
         self.services.host = system

@@ -23,6 +23,7 @@ if __package__:
         candidates,
         declarations,
         locks,
+        pin_pr,
         records,
         releases,
         support,
@@ -34,6 +35,7 @@ else:
     import candidates
     import declarations
     import locks
+    import pin_pr
     import records
     import releases
     import support
@@ -163,12 +165,22 @@ def main(argv=None):
     candidate.add_argument("--stable", required=True)
     candidate.add_argument("--unstable", required=True)
     candidates.add_commands(commands)
+    pin_pr.add_commands(commands)
     args = parser.parse_args(argv)
     try:
         require_policy_version(f"v{version}")
         if (
             args.command
-            in {"check", "audit", "vm", "compatibility", "ci", "agreement", "pin-batch"}
+            in {
+                "check",
+                "audit",
+                "vm",
+                "compatibility",
+                "ci",
+                "agreement",
+                "pin-batch",
+                "pin-pr",
+            }
             and args.policy_root is None
         ):
             raise ValueError(
@@ -176,6 +188,10 @@ def main(argv=None):
                 "a policy release's bundled pins do not establish current approval"
             )
         records_root = args.policy_root or SOURCE_ROOT
+        if args.command == "pin-pr":
+            result = pin_pr.run(args, load_policy=load_policy)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return {"fail": 1, "error": 2}.get(result.get("status"), 0)
         if args.command == "pin-batch":
             result = candidates.run(
                 args,

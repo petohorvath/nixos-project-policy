@@ -119,6 +119,8 @@ class Coordinator:
         return {"revision": revision, "digest": digest(self.fingerprints(self.root))}
 
     def snapshot(self, root):
+        if root.resolve() == self.proposal:
+            return records.proposed_snapshot(root, self.load_policy)
         config, pins = self.load_policy(root)
         return config, pins, records.identity(config, pins, self.git_revision(root))
 
@@ -137,9 +139,11 @@ class Coordinator:
         selected = [
             batch for batch in proposed_pins["batches"] if batch["id"] == batch_id
         ]
-        if len(selected) != 1 or selected[0]["status"] in {"complete", "withdrawn"}:
+        if len(selected) != 1 or selected[0]["status"] == "withdrawn":
             raise ValueError("Proposal must identify one active candidate batch")
         batch = selected[0]
+        if batch["status"] == "complete" and proposed_pins["approved"] != batch["pins"]:
+            raise ValueError("A future complete batch must propose its approval pair")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", batch_id):
             raise ValueError("Candidate batch needs a simple identifier")
         if proposed_pins["approved"] not in (pins["approved"], batch["pins"]):
@@ -806,7 +810,19 @@ def run_process(command, output):
     environment = {
         key: value
         for key, value in os.environ.items()
-        if key not in {"GH_TOKEN", "GITHUB_TOKEN", "MEMBER_AUDIT_TOKEN", "NIX_CONFIG"}
+        if not key.startswith("ACTIONS_")
+        and key
+        not in {
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "MEMBER_AUDIT_TOKEN",
+            "NIX_CONFIG",
+            "GITHUB_ENV",
+            "GITHUB_OUTPUT",
+            "GITHUB_PATH",
+            "GITHUB_STEP_SUMMARY",
+            "GITHUB_STATE",
+        }
     }
     outcome = {
         "command": command,

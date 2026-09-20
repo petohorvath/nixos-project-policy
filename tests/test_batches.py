@@ -238,6 +238,7 @@ class BatchTests(ProjectFixture):
         return code, report, output
 
     def plan(self, *options, root=None):
+        self.commit(self.proposal)
         return self.call(
             "plan",
             "--all",
@@ -715,6 +716,51 @@ class BatchTests(ProjectFixture):
             records.read_json(self.baseline / "policy/pins.json")["approved"], PAIR
         )
 
+    def test_two_routine_approvals_finish_without_member_or_bookkeeping_changes(self):
+        before = {name: policy.fingerprints(root) for name, root in self.roots.items()}
+        for batch, pair in (("next", NEW_PAIR), ("following", PAIR)):
+            pins = records.read_json(self.baseline / "policy/pins.json")
+            previous = copy.deepcopy(pins["approved"])
+            pins["approved"] = pair
+            pins["batches"].append(
+                {
+                    "id": batch,
+                    "status": "complete",
+                    "previous": previous,
+                    "pins": pair,
+                    "projects": {
+                        name: policy.git_revision(root)
+                        for name, root in self.roots.items()
+                    },
+                }
+            )
+            candidates.write_json(self.proposal / "policy/pins.json", pins)
+            self.commit(self.proposal)
+            code, saved, plan = self.plan("--batch", batch)
+            self.assertEqual(code, 0, saved)
+            workers = self.workers(plan)
+            code, result, _ = self.aggregate(plan, workers)
+            self.assertEqual(code, 0, outcome(result))
+            self.assertTrue(result["eligible"])
+            self.assertEqual(result["approval"], "not-granted")
+            self.assertEqual(
+                records.read_json(self.baseline / "policy/pins.json")["approved"],
+                previous,
+            )
+            for member in saved["members"].values():
+                self.assertEqual(member["plan"]["compatibilityMode"], "root-overrides")
+            # Simulate the separate human merge, then prepare the next routine PR.
+            shutil.copyfile(
+                self.proposal / "policy/pins.json", self.baseline / "policy/pins.json"
+            )
+            self.commit(self.baseline)
+            self.assertEqual(policy.load_policy(self.baseline)[1]["approved"], pair)
+        self.assertEqual(
+            {name: policy.fingerprints(root) for name, root in self.roots.items()},
+            before,
+        )
+        self.assertNotEqual(self.plan("--batch", "next")[0], 0)
+
     def test_full_workflow_executes_native_matrix_and_retains_partial_outcomes(self):
         workflow = yaml.load(
             (policy.SOURCE_ROOT / ".github/workflows/pin-batch.yml").read_text(),
@@ -801,6 +847,7 @@ class BatchTests(ProjectFixture):
         pins = records.read_json(self.proposal / "policy/pins.json")
         del pins["batches"][-1]["projects"]["legacy"]
         candidates.write_json(self.proposal / "policy/pins.json", pins)
+        self.commit(self.proposal)
         output.write_text("")
         process = shell("plan")
         self.assertEqual(process.returncode, 1, process.stderr)

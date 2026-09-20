@@ -18,10 +18,12 @@ from urllib.request import Request, urlopen
 import yaml
 
 if __package__:
-    from . import declarations
+    from . import declarations, records, releases
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import declarations
+    import records
+    import releases
 
 ci_plan = declarations.ci_plan
 
@@ -113,14 +115,14 @@ def main(argv=None):
     vm.add_argument("project_dir", type=Path)
     vm.add_argument("--project", required=True)
     audit = commands.add_parser(
-        "audit", help="Report family drift and pending adoption"
+        "audit", help="Inspect every enrolled member's selected policy"
     )
     audit.add_argument("workspace", type=Path)
     audit.add_argument(
         "--fetch", action="store_true", help="Clone missing public checkouts"
     )
     audit.add_argument(
-        "--github", action="store_true", help="Inspect adopted projects' merge gates"
+        "--github", action="store_true", help="Inspect enrolled members' merge gates"
     )
     candidate = commands.add_parser(
         "candidate", help="Print an unapproved pin proposal"
@@ -238,19 +240,7 @@ def main(argv=None):
             if args.command == "compatibility"
             else git_revision(records_root)
         )
-        result["policyRecordsDigest"] = hashlib.sha256(
-            json.dumps(
-                {
-                    "projects": {
-                        key: value
-                        for key, value in config.items()
-                        if key not in REQUIREMENT_FIELDS
-                    },
-                    "pins": pins,
-                },
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
+        result["policyRecordsDigest"] = records.digest(config, pins)
         if args.command == "compatibility":
             (Path(result["artifacts"]) / "result.json").write_text(
                 json.dumps(result, indent=2, sort_keys=True) + "\n"
@@ -264,7 +254,10 @@ def main(argv=None):
         TypeError,
         subprocess.SubprocessError,
     ) as error:
-        print(json.dumps({"status": "error", "error": str(error)}), file=sys.stderr)
+        print(
+            json.dumps({"status": "error", "error": str(error)}),
+            file=sys.stdout if args.command == "audit" else sys.stderr,
+        )
         return 2
 
 
@@ -275,6 +268,9 @@ def load_policy(root):
         raise ValueError("Policy records must be JSON objects")
     if config.get("schemaVersion") != 2 or pins.get("schemaVersion") != 1:
         raise ValueError("Unsupported policy record schema")
+    if "_members" in config:
+        raise ValueError("Enrollment belongs in policy/members.json")
+    config["_members"] = records.load_members(root, config["projects"])
     requirements = read_json(SOURCE_ROOT / "policy/requirements.json")
     if requirements.get("schemaVersion") != 1:
         raise ValueError("Unsupported policy requirements schema")
@@ -433,12 +429,7 @@ def member_settings(project):
 
 
 def enrollment(config, name):
-    # The identity-only roster introduced separately will replace this legacy source.
-    return (
-        "enrolled"
-        if config["projects"].get(name, {}).get("adopted", False)
-        else "not-enrolled"
-    )
+    return "enrolled" if name in config["_members"] else "not-enrolled"
 
 
 def inspect_project(
@@ -479,6 +470,9 @@ def inspect_project(
     known_repos = {
         item["repository"].lower(): key for key, item in config["projects"].items()
     }
+    known_repos.update(
+        {repository.lower(): name for name, repository in config["_members"].items()}
+    )
     known_repos["petohorvath/nix-nftzones"] = "nixos-nftzones"
     for path in locks:
         lock = LockGraph(read_json(path))
@@ -842,6 +836,8 @@ def check_compatibility(
                 for path in (
                     "tools/policy.py",
                     "tools/declarations.py",
+                    "tools/records.py",
+                    "tools/releases.py",
                     "policy/requirements.json",
                     "VERSION",
                 )
@@ -1119,127 +1115,169 @@ def audit_family(
 ):
     reports = []
     graph = {}
-    checker_version = f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}"
-    for name, project in config["projects"].items():
+    snapshot = records.identity(config, pins, git_revision(records_root))
+    for name, repository in config["_members"].items():
         root = workspace / name
-        if fetch and not root.exists():
-            workspace.mkdir(parents=True, exist_ok=True)
-            subprocess.run(
-                [
-                    "git",
-                    "clone",
-                    "--depth",
-                    "1",
-                    f"https://github.com/{project['repository']}.git",
-                    str(root),
-                ],
-                check=True,
-                timeout=180,
-            )
-        if not root.exists():
-            report = {"project": name, "status": "fail", "issues": ["checkout missing"]}
-        elif (
-            records_root is not None
-            and project["adopted"]
-            and project["policyVersion"] != checker_version
-        ):
-            report = inspect_released_project(
-                root,
-                name,
-                config["policyRepository"],
-                project["policyVersion"],
-                records_root,
-            )
-            graph[name] = report.get("dependencies", [])
-        else:
-            report = inspect_project(root, name, config, pins, readiness=True)
-            graph[name] = report["dependencies"]
-        if not project["adopted"]:
-            report["assessment"] = report["status"]
-            report["status"] = "pending-adoption"
-        elif github and root.exists() and report["status"] != "error":
-            try:
-                checks = (
-                    report["requiredChecks"]
-                    if uses_derived_checks(project["policyVersion"])
-                    else project["requiredChecks"]
+        report = {
+            "project": name,
+            "repository": repository,
+            "enrollment": "enrolled",
+            "revision": None,
+            "policyVersion": None,
+            "checkerVersion": None,
+            "checkerRepository": config["policyRepository"],
+            "checkerRevision": None,
+            "records": snapshot,
+            "status": "fail",
+            "issues": [],
+        }
+        try:
+            if fetch and not root.exists():
+                workspace.mkdir(parents=True, exist_ok=True)
+                subprocess.run(
+                    [
+                        "git",
+                        "clone",
+                        "--depth",
+                        "1",
+                        f"https://github.com/{repository}.git",
+                        str(root),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=180,
                 )
-                report["issues"].extend(check_github(project, checks))
-            except (ValueError, OSError) as error:
-                report["issues"].append(f"github: {error}")
-                report["status"] = "error"
+            if not root.exists():
+                report["issues"].append("checkout missing")
             else:
-                if report["issues"] and report["status"] != "error":
-                    report["status"] = "fail"
+                revision = git_revision(root)
+                require_revision(revision)
+                report["revision"] = revision
+                if git_dirty(root):
+                    raise ValueError("Audit requires a clean exact member commit")
+                try:
+                    _, _, caller, version = declarations.discover(
+                        root, config["policyRepository"]
+                    )
+                    require_policy_version(version)
+                    report["policyVersion"] = version
+                    inputs = caller.get("with")
+                    if (
+                        not isinstance(inputs, dict)
+                        or inputs.get("project") != name
+                        or inputs.get("policy_version") != version
+                    ):
+                        raise ValueError(
+                            "Policy caller identity and policy_version must agree with its selection"
+                        )
+                except ValueError as error:
+                    report["issues"].append(f"ci: {error}")
+                else:
+                    release = releases.inspect_release(
+                        config["policyRepository"], version
+                    )
+                    report["checkerRevision"] = release["revision"]
+                    settings = None
+                    if uses_member_declarations(version):
+                        settings = {
+                            field: json.loads(inputs.get(key, "[]"))
+                            for key, field in declarations.INPUT_FIELDS.items()
+                        }
+                    assessed = releases.check_member(
+                        release,
+                        root,
+                        name,
+                        repository,
+                        revision,
+                        records_root,
+                        snapshot,
+                        settings=settings,
+                    )
+                    report.update(assessed)
+                    # Historical reports cannot redefine trusted enrollment or identity.
+                    report.update(
+                        repository=repository, enrollment="enrolled", records=snapshot
+                    )
+                    report["assessment"] = assessed["status"]
+                    if report["status"] == "candidate-ready":
+                        report["status"] = "fail"
+                        report["issues"].append(
+                            "Candidate validation does not establish approved-pin compliance"
+                        )
+                    graph[name] = report["dependencies"]
+                    if github:
+                        checks = (
+                            report["requiredChecks"]
+                            if uses_derived_checks(version)
+                            else config["projects"][name]["requiredChecks"]
+                        )
+                        if not checks or not declarations.valid_check_names(checks):
+                            raise ValueError(
+                                "Selected legacy release requires trusted complete gate names"
+                            )
+                        report["issues"].extend(
+                            check_github({"repository": repository}, checks)
+                        )
+                        if report["issues"]:
+                            report["status"] = "fail"
+                if git_revision(root) != revision or git_dirty(root):
+                    raise ValueError("Member checkout changed during audit")
+        except (
+            ValueError,
+            OSError,
+            KeyError,
+            TypeError,
+            subprocess.SubprocessError,
+        ) as error:
+            report["status"] = "error"
+            report["issues"].append(f"inspection: {error}")
         reports.append(report)
+    # A released checker reads the same directory; reject a concurrently changed snapshot.
+    try:
+        current_config, current_pins = load_policy(records_root)
+        changed = (
+            records.identity(current_config, current_pins, git_revision(records_root))
+            != snapshot
+        )
+    except (ValueError, OSError, KeyError, TypeError):
+        changed = True
+    if changed:
+        for report in reports:
+            report["status"] = "error"
+            report["issues"].append("Central records changed during audit")
     cycles = dependency_cycles(graph)
     return {
         "status": "error"
-        if any(item["status"] == "error" for item in reports)
+        if changed or any(item["status"] == "error" for item in reports)
         else "fail"
         if cycles or any(item["status"] == "fail" for item in reports)
         else "reported",
         "approvedPins": pins["approved"] is not None,
         "projects": reports,
         "cycles": cycles,
+        "records": snapshot,
+        "issues": ["Central records changed during audit"] if changed else [],
     }
-
-
-def inspect_released_project(root, name, repository, version, records_root):
-    require_policy_version(version)
-    command = [
-        "nix",
-        "run",
-        "--no-update-lock-file",
-        f"github:{repository}/{version}",
-        "--",
-        "--policy-root",
-        str(records_root.resolve()),
-        "check",
-        str(root.resolve()),
-        "--project",
-        name,
-    ]
-    try:
-        process = subprocess.run(
-            command, capture_output=True, text=True, timeout=900, check=False
-        )
-        if process.returncode not in {0, 1}:
-            raise ValueError(process.stderr.strip() or "Released checker could not run")
-        report = json.loads(process.stdout)
-        if (
-            not isinstance(report, dict)
-            or report.get("project") != name
-            or report.get("checkerVersion") != version
-            or report.get("status") not in {"pass", "fail", "candidate-ready"}
-            or (report["status"] == "fail") != (process.returncode == 1)
-            or not isinstance(report.get("issues"), list)
-            or not isinstance(report.get("dependencies"), list)
-            or (
-                uses_derived_checks(version)
-                and (
-                    not report.get("requiredChecks")
-                    or not valid_check_names(report["requiredChecks"])
-                )
-            )
-        ):
-            raise ValueError("Released checker returned an incompatible report")
-        return report
-    except (ValueError, OSError, subprocess.SubprocessError) as error:
-        return {
-            "project": name,
-            "policyVersion": version,
-            "status": "error",
-            "issues": [f"policy release: {error}"],
-        }
 
 
 def check_github(project, checks):
     repository = project["repository"]
     info = github_get(f"repos/{repository}")
+    if (
+        not isinstance(info, dict)
+        or not isinstance(info.get("default_branch"), str)
+        or not info["default_branch"]
+    ):
+        raise ValueError("GitHub branch inspection is incomplete; settings are unknown")
     merge_settings = github_merge_settings(repository, info)
     branch = quote(info["default_branch"], safe="")
     rules = github_get(f"repos/{repository}/rules/branches/{branch}")
+    if not isinstance(rules, list) or any(
+        not isinstance(rule, dict) or not isinstance(rule.get("type"), str)
+        for rule in rules
+    ):
+        raise ValueError("GitHub rule inspection is incomplete; settings are unknown")
     issues = []
     if (
         not merge_settings["allow_squash_merge"]
@@ -1251,26 +1289,74 @@ def check_github(project, checks):
     contexts = set()
     for rule in rules:
         if rule["type"] == "required_status_checks":
-            contexts.update(
-                check["context"]
-                for check in rule["parameters"]["required_status_checks"]
-            )
+            parameters = rule.get("parameters")
+            if not isinstance(parameters, dict):
+                raise ValueError(
+                    "GitHub required checks are incomplete; settings are unknown"
+                )
+            contexts.update(github_contexts(parameters.get("required_status_checks")))
     if not pr_rule or not set(checks).issubset(contexts):
         details = github_get(f"repos/{repository}/branches/{branch}")
+        if not isinstance(details, dict) or not isinstance(
+            details.get("protected"), bool
+        ):
+            raise ValueError(
+                "GitHub protection inspection is incomplete; settings are unknown"
+            )
         if details["protected"]:
             protection = github_get(f"repos/{repository}/branches/{branch}/protection")
+            if (
+                not isinstance(protection, dict)
+                or not {"required_pull_request_reviews", "required_status_checks"}
+                <= protection.keys()
+            ):
+                raise ValueError(
+                    "GitHub protection inspection is incomplete; settings are unknown"
+                )
+            reviews = protection["required_pull_request_reviews"]
+            if reviews is not None and (
+                not isinstance(reviews, dict)
+                or type(reviews.get("required_approving_review_count")) is not int
+                or reviews["required_approving_review_count"] < 0
+            ):
+                raise ValueError(
+                    "GitHub review inspection is incomplete; settings are unknown"
+                )
             pr_rule = pr_rule or bool(protection.get("required_pull_request_reviews"))
-            status_checks = protection.get("required_status_checks") or {}
+            status_checks = protection["required_status_checks"]
+            if status_checks is not None and (
+                not isinstance(status_checks, dict)
+                or not {"contexts", "checks"} & status_checks.keys()
+            ):
+                raise ValueError(
+                    "GitHub required checks are incomplete; settings are unknown"
+                )
+            status_checks = {} if status_checks is None else status_checks
+            if not isinstance(status_checks, dict) or not valid_check_names(
+                status_checks.get("contexts", [])
+            ):
+                raise ValueError(
+                    "GitHub required checks are incomplete; settings are unknown"
+                )
             contexts.update(status_checks.get("contexts", []))
-            contexts.update(
-                check["context"] for check in status_checks.get("checks", [])
-            )
+            contexts.update(github_contexts(status_checks.get("checks", [])))
     if not pr_rule:
         issues.append("github: pull requests are not required")
     for check in checks:
         if check not in contexts:
             issues.append(f"github: missing required check '{check}'")
     return issues
+
+
+def github_contexts(checks):
+    if not isinstance(checks, list) or any(
+        not isinstance(check, dict)
+        or not isinstance(check.get("context"), str)
+        or not check["context"].strip()
+        for check in checks
+    ):
+        raise ValueError("GitHub required checks are incomplete; settings are unknown")
+    return [check["context"] for check in checks]
 
 
 def github_merge_settings(repository, info):
@@ -1486,8 +1572,7 @@ def require_revision(value):
 
 
 def read_json(path):
-    with path.open() as stream:
-        return json.load(stream)
+    return records.read_json(path)
 
 
 def git_revision(root):

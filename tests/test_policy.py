@@ -203,6 +203,8 @@ class ProjectFixture(unittest.TestCase):
             },
         }
         self.pins = {"schemaVersion": 1, "approved": PAIR, "batches": []}
+        self.members = {"example": "owner/example"}
+        self.config["_members"] = self.members
         self.write("flake.nix", "{}")
         self.write(".envrc", "use flake\n")
         self.write("LICENSE", "MIT")
@@ -249,18 +251,26 @@ class ProjectFixture(unittest.TestCase):
     def inspect(self):
         return policy.inspect_project(self.root, "example", self.config, self.pins)
 
-    def run_policy(self, *args):
-        if args[0] == "ci" and (len(args) == 1 or args[1].startswith("--")):
-            args = ("ci", str(self.root), *args[1:])
+    def write_records(self):
         records = Path(self.temp.name) / "records"
         (records / "policy").mkdir(parents=True, exist_ok=True)
         records_config = {
             key: value
             for key, value in self.config.items()
-            if key not in {"systems", "requiredTools", "readmeSections", "ci"}
+            if key
+            not in {"systems", "requiredTools", "readmeSections", "ci", "_members"}
         }
         (records / "policy/projects.json").write_text(json.dumps(records_config))
         (records / "policy/pins.json").write_text(json.dumps(self.pins))
+        (records / "policy/members.json").write_text(
+            json.dumps({"schemaVersion": 1, "members": self.members})
+        )
+        return records
+
+    def run_policy(self, *args):
+        if args[0] == "ci" and (len(args) == 1 or args[1].startswith("--")):
+            args = ("ci", str(self.root), *args[1:])
+        records = self.write_records()
         output, errors = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
             code = policy.main(["--policy-root", str(records), *args])
@@ -268,7 +278,43 @@ class ProjectFixture(unittest.TestCase):
 
 
 class ProjectTests(ProjectFixture):
+    def run_policy(self, *args):
+        if args[0] != "audit":
+            return super().run_policy(*args)
+
+        def assessed(
+            release, root, name, repository, revision, records_root, snapshot, **kwargs
+        ):
+            return {
+                **policy.inspect_project(
+                    root,
+                    name,
+                    self.config,
+                    self.pins,
+                    project=policy.member_project(root, name, self.config),
+                ),
+                "checkerVersion": release["version"],
+                "checkerRevision": release["revision"],
+            }
+
+        with (
+            patch.object(
+                policy.releases,
+                "inspect_release",
+                side_effect=lambda repository, version: {
+                    "repository": repository,
+                    "version": version,
+                    "revision": CHECKER,
+                },
+            ),
+            patch.object(policy.releases, "check_member", side_effect=assessed),
+            patch.object(policy, "git_revision", return_value=SOURCE),
+            patch.object(policy, "git_dirty", return_value=False),
+        ):
+            return super().run_policy(*args)
+
     def test_pending_enrollment_does_not_prevent_full_checks(self):
+        self.members.clear()
         self.config["projects"]["example"]["adopted"] = False
         status, report = self.run_policy(
             "check", str(self.root), "--project", "example"
@@ -322,6 +368,9 @@ class ProjectTests(ProjectFixture):
         for adopted in [False, True]:
             with self.subTest(adopted=adopted):
                 self.config["projects"]["example"]["adopted"] = adopted
+                self.members.clear()
+                if adopted:
+                    self.members["example"] = "owner/example"
                 status, report = self.run_policy(
                     "check", str(self.root), "--project", "example", "--readiness"
                 )
@@ -746,36 +795,6 @@ class ProjectTests(ProjectFixture):
                     [f"github: missing required check '{missing}'"],
                 )
 
-    def test_older_selected_releases_keep_their_existing_required_checks(self):
-        checks = [
-            "policy / Policy records",
-            "policy / Policy (x86_64-linux)",
-            "policy / Policy (aarch64-linux)",
-        ]
-        self.config["projects"]["example"].update(
-            policyVersion="v0.1.1", requiredChecks=checks
-        )
-        del self.config["projects"]["example"]["requiredArchitectures"]
-        self.assertEqual(self.run_policy("validate")[0], 0)
-        released = {
-            "project": "example",
-            "checkerVersion": "v0.1.1",
-            "status": "pass",
-            "issues": [],
-            "dependencies": [],
-        }
-        with (
-            patch.object(policy.subprocess, "run") as run,
-            patch.object(policy, "git_revision", return_value=None),
-        ):
-            run.return_value = subprocess.CompletedProcess(
-                [], 0, stdout=json.dumps(released), stderr=""
-            )
-            status, report = self.audit_with_checks(checks)
-        self.assertEqual(status, 0)
-        self.assertEqual(report["projects"][0]["status"], "pass")
-        self.assertIn(f"github:{POLICY_REPO}/v0.1.1", run.call_args.args[0])
-
     def test_legacy_project_records_are_rejected(self):
         self.config["schemaVersion"] = 1
         status, report = self.run_policy("validate")
@@ -795,91 +814,6 @@ class ProjectTests(ProjectFixture):
                 self.assertEqual(status, 2)
                 self.assertIn("selects policy v9.0.0", report["error"])
 
-    def test_audit_uses_each_enrolled_members_release_with_current_records(self):
-        self.config["projects"]["example"].update(
-            policyVersion="v0.1.1", requiredChecks=["policy / Policy records"]
-        )
-        released = {
-            "project": "example",
-            "checkerVersion": "v0.1.1",
-            "status": "pass",
-            "issues": [],
-            "dependencies": [],
-        }
-        with (
-            patch.object(policy.subprocess, "run") as run,
-            patch.object(policy, "git_revision", return_value=None),
-        ):
-            run.return_value = subprocess.CompletedProcess(
-                [], 0, stdout=json.dumps(released), stderr=""
-            )
-            status, report = self.run_policy("audit", str(self.root.parent))
-        self.assertEqual(status, 0)
-        self.assertEqual(report["projects"][0]["checkerVersion"], "v0.1.1")
-        command = run.call_args.args[0]
-        self.assertIn(f"github:{POLICY_REPO}/v0.1.1", command)
-        self.assertEqual(
-            command[command.index("--policy-root") + 1],
-            str(Path(self.temp.name) / "records"),
-        )
-        self.assertEqual(command[command.index("check") + 1], str(self.root))
-
-    def test_audit_uses_derived_checks_from_the_selected_release_report(self):
-        self.config["projects"]["example"]["policyVersion"] = "v9.0.0"
-        checks = ["Selected release / Tests", "Selected release / Compatibility"]
-        released = {
-            "project": "example",
-            "checkerVersion": "v9.0.0",
-            "status": "pass",
-            "issues": [],
-            "dependencies": [],
-            "requiredChecks": checks,
-        }
-        with (
-            patch.object(policy.subprocess, "run") as run,
-            patch.object(policy, "git_revision", return_value=None),
-        ):
-            run.return_value = subprocess.CompletedProcess(
-                [], 0, stdout=json.dumps(released), stderr=""
-            )
-            self.assertEqual(self.audit_with_checks(checks)[0], 0)
-            status, report = self.audit_with_checks(checks[:1])
-            self.assertEqual(status, 1)
-            self.assertEqual(
-                report["projects"][0]["issues"],
-                [f"github: missing required check '{checks[1]}'"],
-            )
-
-    def test_audit_rejects_missing_or_malformed_derived_checks_from_a_release(self):
-        self.config["projects"]["example"]["policyVersion"] = "v9.0.0"
-        released = {
-            "project": "example",
-            "checkerVersion": "v9.0.0",
-            "status": "pass",
-            "issues": [],
-            "dependencies": [],
-        }
-        for checks in [None, [], "Tests", [None], [" "], ["Tests", "Tests"]]:
-            with (
-                self.subTest(checks=checks),
-                patch.object(policy.subprocess, "run") as run,
-                patch.object(policy, "git_revision", return_value=None),
-                patch.object(policy, "github_get") as github,
-            ):
-                if checks is not None:
-                    released["requiredChecks"] = checks
-                run.return_value = subprocess.CompletedProcess(
-                    [], 0, stdout=json.dumps(released), stderr=""
-                )
-                status, report = self.run_policy(
-                    "audit", str(self.root.parent), "--github"
-                )
-                self.assertEqual(status, 2)
-                self.assertIn(
-                    "incompatible report", " ".join(report["projects"][0]["issues"])
-                )
-                github.assert_not_called()
-
     def test_missing_checkout_does_not_turn_a_failed_audit_into_an_inspection_error(
         self,
     ):
@@ -889,21 +823,6 @@ class ProjectTests(ProjectFixture):
         self.assertEqual(status, 1)
         self.assertEqual(report["projects"][0]["issues"], ["checkout missing"])
         github.assert_not_called()
-
-    def test_unavailable_release_remains_an_audit_error_after_github_checks(self):
-        self.config["projects"]["example"]["policyVersion"] = "v9.0.0"
-        with (
-            patch.object(policy.subprocess, "run") as run,
-            patch.object(policy, "git_revision", return_value=None),
-            patch.object(policy, "check_github", return_value=[]),
-        ):
-            run.return_value = subprocess.CompletedProcess(
-                [], 2, stdout="", stderr="Release unavailable"
-            )
-            status, report = self.run_policy("audit", str(self.root.parent), "--github")
-        self.assertEqual(status, 2)
-        self.assertEqual(report["projects"][0]["status"], "error")
-        self.assertIn("Release unavailable", " ".join(report["projects"][0]["issues"]))
 
     def test_shell_probe_preserves_readiness_and_fails_on_probe_errors(self):
         self.config["projects"]["example"]["adopted"] = False
@@ -941,12 +860,12 @@ class ProjectTests(ProjectFixture):
         )
         self.assertEqual(status, 2, report)
 
-    def test_pending_audit_reports_enrollment_readiness(self):
+    def test_legacy_adoption_does_not_change_audit_coverage(self):
         self.config["projects"]["example"]["adopted"] = False
         status, report = self.run_policy("audit", str(self.root.parent))
         self.assertEqual(status, 0)
-        self.assertEqual(report["projects"][0]["status"], "pending-adoption")
-        self.assertEqual(report["projects"][0]["assessment"], "pass")
+        self.assertEqual(report["projects"][0]["status"], "pass")
+        self.assertEqual(report["projects"][0]["enrollment"], "enrolled")
         self.assertEqual(report["projects"][0]["issues"], [])
 
     def test_registered_candidate_validation_is_not_approved_compliance(self):
@@ -1026,10 +945,12 @@ class ProjectTests(ProjectFixture):
                     )
                 )
 
-    def test_github_audit_requires_member_credentials_only_after_adoption(self):
+    def test_github_audit_requires_member_credentials_only_for_enrolled_members(self):
         for adopted in [True, False]:
             with self.subTest(adopted=adopted):
-                self.config["projects"]["example"]["adopted"] = adopted
+                self.members.clear()
+                if adopted:
+                    self.members["example"] = "owner/example"
                 with (
                     patch.dict(os.environ, {}, clear=True),
                     patch.object(
@@ -1045,9 +966,7 @@ class ProjectTests(ProjectFixture):
                 if adopted:
                     self.assertIn("token", " ".join(report["projects"][0]["issues"]))
                 else:
-                    self.assertEqual(
-                        report["projects"][0]["status"], "pending-adoption"
-                    )
+                    self.assertEqual(report["projects"], [])
 
     def test_github_audit_recognizes_unprotected_branches_and_ruleset_only_gates(self):
         repository = "https://api.github.com/repos/owner/example"
@@ -1449,12 +1368,11 @@ class ProjectTests(ProjectFixture):
             )
         )
 
-    def test_pending_adoption_is_reported_separately(self):
-        config = copy.deepcopy(self.config)
-        config["projects"]["example"]["adopted"] = False
-        report = policy.audit_family(self.root, config, self.pins)
-        self.assertEqual(report["projects"][0]["status"], "pending-adoption")
-        self.assertEqual(report["projects"][0]["assessment"], "fail")
+    def test_unenrolled_legacy_projects_do_not_enter_audit_scope(self):
+        self.members.clear()
+        code, report = self.run_policy("audit", str(self.root))
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["projects"], [])
 
     def test_conditional_or_unpinned_callers_fail(self):
         self.workflow["jobs"]["policy"]["if"] = "false"
@@ -1635,6 +1553,7 @@ class CompatibilityTests(ProjectFixture):
 
     def test_unenrolled_compatibility_uses_member_settings_and_approved_pins(self):
         self.config["projects"] = {}
+        self.members.clear()
         code, report = self.compatibility()
         self.assertEqual(code, 0, report)
         self.assertEqual(report["enrollment"], "not-enrolled")
@@ -1935,10 +1854,12 @@ class RecordTests(unittest.TestCase):
             with (
                 self.subTest(command=args[0]),
                 contextlib.redirect_stderr(io.StringIO()) as errors,
+                contextlib.redirect_stdout(io.StringIO()) as output,
             ):
                 self.assertEqual(policy.main(args), 2)
                 self.assertIn(
-                    "requires --policy-root", json.loads(errors.getvalue())["error"]
+                    "requires --policy-root",
+                    json.loads(output.getvalue() or errors.getvalue())["error"],
                 )
 
     def test_cli_version_matches_release_version_file(self):
@@ -1957,6 +1878,9 @@ class RecordTests(unittest.TestCase):
             (root / "policy/projects.json").write_text(
                 (source / "policy/projects.json").read_text()
             )
+            (root / "policy/members.json").write_text(
+                (source / "policy/members.json").read_text()
+            )
             pins = {"schemaVersion": 1, "approved": PAIR, "batches": []}
             (root / "policy/pins.json").write_text(json.dumps(pins))
             output = io.StringIO()
@@ -1974,6 +1898,9 @@ class RecordTests(unittest.TestCase):
             (root / "policy").mkdir()
             (root / "policy/projects.json").write_text(
                 (source / "policy/projects.json").read_text()
+            )
+            (root / "policy/members.json").write_text(
+                (source / "policy/members.json").read_text()
             )
             pins = {
                 "schemaVersion": 1,
@@ -2086,6 +2013,9 @@ class WorkflowTests(unittest.TestCase):
             records.mkdir(parents=True)
             (records / "pins.json").write_text(
                 json.dumps({"schemaVersion": 1, "approved": PAIR, "batches": []})
+            )
+            (records / "members.json").write_text(
+                json.dumps({"schemaVersion": 1, "members": {}})
             )
             stub = root / "nix"
             stub.write_text(

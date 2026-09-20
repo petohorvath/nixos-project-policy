@@ -119,6 +119,9 @@ class NixCompatibilityTests(unittest.TestCase):
             (records / "pins.json").write_text(
                 json.dumps({"schemaVersion": 1, "approved": pins, "batches": []})
             )
+            (records / "members.json").write_text(
+                json.dumps({"schemaVersion": 1, "members": {}})
+            )
             lock_before = (project / "flake.lock").read_bytes()
             self.run_command(
                 [

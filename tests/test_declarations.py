@@ -87,6 +87,7 @@ class DeclarationTests(ProjectFixture):
 
     def test_pre_enrollment_checks_and_planning_do_not_change_records(self):
         self.config["projects"] = {}
+        self.members.clear()
         for command in ["ci", "check", "vm"]:
             with self.subTest(command=command):
                 code, report = self.run_policy(
@@ -248,6 +249,7 @@ class DeclarationTests(ProjectFixture):
 
     def test_vm_execution_and_gates_follow_the_same_arm_only_declaration(self):
         self.config["projects"] = {}
+        self.members.clear()
         self.declare(
             required_architectures='["aarch64-linux"]',
             vm_targets='["vm-tests", "vm-tests-unstable"]',

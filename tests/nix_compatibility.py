@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from tools import policy
+from tools import policy, records
 
 
 class NixCompatibilityTests(unittest.TestCase):
@@ -24,7 +24,7 @@ class NixCompatibilityTests(unittest.TestCase):
     def test_real_overrides_build_checks_preserve_locks_and_reject_default_updates(
         self,
     ):
-        graph = policy.LockGraph(policy.read_json(policy.SOURCE_ROOT / "flake.lock"))
+        graph = policy.LockGraph(records.read_json(policy.SOURCE_ROOT / "flake.lock"))
         pins = {
             channel: graph.nodes[graph.resolve([name])]["locked"]["rev"]
             for channel, name in [
@@ -94,9 +94,9 @@ class NixCompatibilityTests(unittest.TestCase):
                     "test: Create compatibility fixture",
                 ]
             )
-            records = workspace / "records/policy"
-            records.mkdir(parents=True)
-            (records / "projects.json").write_text(
+            record_directory = workspace / "records/policy"
+            record_directory.mkdir(parents=True)
+            (record_directory / "projects.json").write_text(
                 json.dumps(
                     {
                         "schemaVersion": 2,
@@ -117,13 +117,13 @@ class NixCompatibilityTests(unittest.TestCase):
                     }
                 )
             )
-            (records / "pins.json").write_text(
+            (record_directory / "pins.json").write_text(
                 json.dumps({"schemaVersion": 1, "approved": pins, "batches": []})
             )
-            (records / "members.json").write_text(
+            (record_directory / "members.json").write_text(
                 json.dumps({"schemaVersion": 1, "members": {}})
             )
-            (records / "support.json").write_text(
+            (record_directory / "support.json").write_text(
                 json.dumps({"schemaVersion": 1, "retirements": {}})
             )
             lock_before = (project / "flake.lock").read_bytes()
@@ -147,7 +147,7 @@ class NixCompatibilityTests(unittest.TestCase):
                                 sys.executable,
                                 str(policy.SOURCE_ROOT / "tools/policy.py"),
                                 "--policy-root",
-                                str(records.parent),
+                                str(record_directory.parent),
                                 "compatibility",
                                 str(project),
                                 "--project",
@@ -165,8 +165,8 @@ class NixCompatibilityTests(unittest.TestCase):
                     self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
                     self.assertTrue((evidence / "metadata.json").is_file())
             proposal = workspace / "proposal"
-            shutil.copytree(records.parent, proposal)
-            approved_before = (records / "pins.json").read_bytes()
+            shutil.copytree(record_directory.parent, proposal)
+            approved_before = (record_directory / "pins.json").read_bytes()
             (proposal / "policy/pins.json").write_text(
                 json.dumps(
                     {
@@ -211,7 +211,7 @@ class NixCompatibilityTests(unittest.TestCase):
                     self.assertEqual(caller.read_bytes(), caller_before)
                     self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
                     self.assertEqual(
-                        (records / "pins.json").read_bytes(), approved_before
+                        (record_directory / "pins.json").read_bytes(), approved_before
                     )
             flake.write_text(
                 flake.read_text().replace(pins["stable"], pins["unstable"])

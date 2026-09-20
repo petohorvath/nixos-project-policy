@@ -127,7 +127,7 @@ class Services:
     def released_report(self, arguments):
         """Supply process reports; packaged_transition executes the older checkers."""
         record_root = Path(arguments[1])
-        config, pins = policy.load_policy(record_root)
+        config, pins = records.load(record_root)
         version = declarations_version(self.root)
         operation = arguments[2]
         name = (

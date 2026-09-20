@@ -47,14 +47,10 @@ repository_identity = locks.repository_identity
 dependency_cycles = locks.dependency_cycles
 
 
-REVISION = re.compile(r"[0-9a-f]{40}\Z")
-POLICY_VERSION = re.compile(
-    r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z"
-)
+REVISION = records.REVISION
+POLICY_VERSION = declarations.POLICY_VERSION
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
-REQUIREMENT_FIELDS = ("systems", "requiredTools", "readmeSections", "ci")
-REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
-ACTIVE_BATCH_STATES = {"approved", "rolling", "paused"}
+ACTIVE_BATCH_STATES = records.ACTIVE_BATCH_STATES
 TITLE = re.compile(
     r"(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)"
     r"(?:\([^()\r\n]+\))?!?: [^\r\n]+\Z"
@@ -167,7 +163,7 @@ def main(argv=None):
     pin_pr.add_commands(commands)
     args = parser.parse_args(argv)
     try:
-        require_policy_version(f"v{version}")
+        declarations.require_policy_version(f"v{version}")
         if (
             args.command
             in {
@@ -188,7 +184,7 @@ def main(argv=None):
             )
         records_root = args.policy_root or SOURCE_ROOT
         if args.command == "pin-pr":
-            result = pin_pr.run(args, load_policy=load_policy)
+            result = pin_pr.run(args)
             print(json.dumps(result, indent=2, sort_keys=True))
             return {"fail": 1, "error": 2}.get(result.get("status"), 0)
         if args.command == "pin-batch":
@@ -205,7 +201,6 @@ def main(argv=None):
             result = run_batch(
                 args,
                 source_root=SOURCE_ROOT,
-                load_policy=load_policy,
                 git_revision=git_revision,
                 git_dirty=git_dirty,
                 fingerprints=fingerprints,
@@ -216,7 +211,7 @@ def main(argv=None):
             )
             print(json.dumps(result, indent=2, sort_keys=True))
             return {"fail": 1, "error": 2}.get(result.get("status"), 0)
-        config, pins = load_policy(records_root)
+        config, pins = records.load(records_root)
         project = None
         assessment = None
         if args.command in {"check", "ci", "compatibility", "vm", "agreement"}:
@@ -267,7 +262,6 @@ def main(argv=None):
                 records_root,
                 git_revision=git_revision,
                 git_dirty=git_dirty,
-                load_records=load_policy,
             )
             result.update(
                 memberSettings=member_settings(project),
@@ -287,7 +281,7 @@ def main(argv=None):
             result = {"status": "pass" if TITLE.fullmatch(args.title) else "fail"}
         elif args.command == "candidate":
             pair = {"stable": args.stable, "unstable": args.unstable}
-            validate_pair(pair)
+            records.validate_pair(pair)
             result = {"schemaVersion": 1, "status": "proposal", "pins": pair}
         elif args.command == "shell":
             issues = check_shell(args.project_dir, config["requiredTools"])
@@ -403,155 +397,6 @@ def main(argv=None):
         return 2
 
 
-def load_policy(root):
-    config = read_json(root / "policy/projects.json")
-    pins = read_json(root / "policy/pins.json")
-    if not isinstance(config, dict) or not isinstance(pins, dict):
-        raise ValueError("Policy records must be JSON objects")
-    if config.get("schemaVersion") != 2 or pins.get("schemaVersion") != 1:
-        raise ValueError("Unsupported policy record schema")
-    if "_members" in config or "_support" in config:
-        raise ValueError(
-            "Enrollment and support belong in their own policy record files"
-        )
-    config["_members"] = records.load_members(root, config["projects"])
-    config["_support"] = support.load(root)
-    requirements = read_json(SOURCE_ROOT / "policy/requirements.json")
-    if requirements.get("schemaVersion") != 1:
-        raise ValueError("Unsupported policy requirements schema")
-    # Requirements belong to the selected checker release, never the live records.
-    for field in REQUIREMENT_FIELDS:
-        if field in config:
-            raise ValueError(
-                f"{field} belongs in the release's policy/requirements.json"
-            )
-        config[field] = requirements[field]
-    if not REPOSITORY.fullmatch(config["policyRepository"]):
-        raise ValueError("Invalid policy repository")
-    if (
-        not isinstance(config["systems"], list)
-        or not config["systems"]
-        or any(
-            not isinstance(system, str) or not system for system in config["systems"]
-        )
-        or len(set(config["systems"])) != len(config["systems"])
-        or set(config["ci"]["runners"]) != set(config["systems"])
-    ):
-        raise ValueError("Supported systems need unique names and matching CI runners")
-    for tool in config["requiredTools"]:
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]*", tool):
-            raise ValueError(f"Invalid tool name: {tool}")
-    for name, project in config["projects"].items():
-        if not re.fullmatch(r"[a-z0-9-]+", name) or not REPOSITORY.fullmatch(
-            project["repository"]
-        ):
-            raise ValueError(f"Invalid project identity: {name}")
-        if not isinstance(project["adopted"], bool):
-            raise ValueError(f"Invalid adoption state: {name}")
-        for target in project["vmTargets"]:
-            if not re.fullmatch(r"[a-z0-9-]+", target):
-                raise ValueError(f"Invalid VM target for {name}")
-        if project["policyVersion"] is not None or project["adopted"]:
-            require_policy_version(project["policyVersion"])
-        if "requiredArchitectures" in project:
-            architectures = project["requiredArchitectures"]
-            if (
-                not isinstance(architectures, list)
-                or not architectures
-                or any(
-                    not isinstance(system, str) or not system.strip()
-                    for system in architectures
-                )
-                or len(set(architectures)) != len(architectures)
-            ):
-                raise ValueError(f"Invalid requiredArchitectures for {name}")
-        if project["policyVersion"] == "v0.3.0":
-            if "requiredArchitectures" not in project:
-                raise ValueError(f"Project {name} needs requiredArchitectures")
-            unsupported = set(project["requiredArchitectures"]) - set(config["systems"])
-            if unsupported:
-                raise ValueError(
-                    f"Unsupported requiredArchitectures for {name}: "
-                    + ", ".join(sorted(unsupported))
-                )
-        for field in ("requiredChecks", "additionalRequiredChecks"):
-            if not valid_check_names(project.get(field, [])):
-                raise ValueError(f"Invalid {field} names for {name}")
-        if (
-            project["policyVersion"] is not None
-            and not uses_derived_checks(project["policyVersion"])
-            and "additionalRequiredChecks" in project
-        ):
-            raise ValueError(
-                f"Project {name} needs policy v0.3.0 or later for additionalRequiredChecks"
-            )
-        if project["policyVersion"] == "v0.3.0":
-            if "requiredChecks" in project:
-                required = set(ci_plan(project, config["ci"])["requiredChecks"])
-                if set(project["requiredChecks"]) != required:
-                    raise ValueError(
-                        f"Project {name}: legacy requiredChecks must match the generated "
-                        "CI checks; record project-specific gates in additionalRequiredChecks"
-                    )
-        elif project["adopted"] and not uses_derived_checks(project["policyVersion"]):
-            if not project.get("requiredChecks"):
-                raise ValueError(
-                    f"Adopted project {name} needs verified required check names"
-                )
-    # Retirement alone is not migration proof; retained adopted legacy entries stay readable.
-    for name, project in config["projects"].items():
-        if project["adopted"] and not project.get("requiredChecks"):
-            raise ValueError(
-                f"Adopted project {name} needs legacy requiredChecks until reviewed legacy cleanup"
-            )
-    if pins["approved"] is not None:
-        validate_pair(pins["approved"])
-    ids = set()
-    for batch in pins["batches"]:
-        if batch["id"] in ids:
-            raise ValueError("Duplicate pin batch id")
-        ids.add(batch["id"])
-        if batch["status"] not in {
-            "candidate",
-            "approved",
-            "rolling",
-            "paused",
-            "complete",
-            "withdrawn",
-        }:
-            raise ValueError("Invalid pin batch state")
-        validate_pair(batch["pins"])
-        if batch.get("previous") is not None:
-            validate_pair(batch["previous"])
-        if batch["status"] in ACTIVE_BATCH_STATES:
-            if pins["approved"] is None or pins["approved"] not in (
-                batch["pins"],
-                batch.get("previous"),
-            ):
-                raise ValueError(
-                    "An active rollout must be tied to the approved baseline"
-                )
-        for name, revision in batch["projects"].items():
-            if name not in config["projects"]:
-                raise ValueError(f"Unknown project in batch: {name}")
-            require_revision(revision)
-    return config, pins
-
-
-def valid_check_names(checks):
-    return (
-        isinstance(checks, list)
-        and all(isinstance(check, str) and check.strip() for check in checks)
-        and len(set(checks)) == len(checks)
-    )
-
-
-def uses_derived_checks(version):
-    return version is not None and tuple(
-        map(int, version.removeprefix("v").split("."))
-    ) >= (0, 3, 0)
-
-
 class InvalidDeclaration(ValueError):
     """The inspected caller cannot select a valid policy contract."""
 
@@ -608,7 +453,7 @@ def inspect_project(root, name, config, pins, batch_id=None, *, project):
     )
     known_repos["petohorvath/nix-nftzones"] = "nixos-nftzones"
     for path in locks:
-        lock = LockGraph(read_json(path))
+        lock = LockGraph(records.read_json(path))
         independent_node = None
         if path == root / "flake.lock":
             try:
@@ -728,7 +573,7 @@ def selected_nixpkgs(lock):
         or node.get("flake") is False
     ):
         raise ValueError("root nixpkgs must identify the NixOS/nixpkgs flake")
-    require_revision(locked.get("rev"))
+    records.require_revision(locked.get("rev"))
     return node_id
 
 
@@ -881,7 +726,7 @@ def check_compatibility(
     before = None
     source_before = None
     try:
-        require_revision(result["revision"])
+        records.require_revision(result["revision"])
         result["sourceDirty"] = git_dirty(root)
         source_before = fingerprints(root)
         result["sourceDigest"] = hashlib.sha256(
@@ -1177,7 +1022,7 @@ def audit_family(
                 report["issues"].append("checkout missing")
             else:
                 revision = git_revision(root)
-                require_revision(revision)
+                records.require_revision(revision)
                 report["revision"] = revision
                 if git_dirty(root):
                     raise ValueError("Audit requires a clean exact member commit")
@@ -1236,7 +1081,7 @@ def audit_family(
                         if github:
                             checks = (
                                 report["requiredChecks"]
-                                if uses_derived_checks(version)
+                                if records.uses_derived_checks(version)
                                 else config["projects"][name]["requiredChecks"]
                             )
                             if not checks or not declarations.valid_check_names(checks):
@@ -1269,7 +1114,7 @@ def audit_family(
         reports.append(report)
     # A released checker reads the same directory; reject a concurrently changed snapshot.
     try:
-        current_config, current_pins = load_policy(records_root)
+        current_config, current_pins = records.load(records_root)
         changed = (
             records.identity(current_config, current_pins, git_revision(records_root))
             != snapshot
@@ -1381,7 +1226,7 @@ def check_github(project, checks, *, workflow):
                     "GitHub required checks are incomplete; settings are unknown"
                 )
             status_checks = {} if status_checks is None else status_checks
-            if not isinstance(status_checks, dict) or not valid_check_names(
+            if not isinstance(status_checks, dict) or not records.valid_check_names(
                 status_checks.get("contexts", [])
             ):
                 raise ValueError(
@@ -1541,27 +1386,6 @@ def pins_match(observations, pair):
         item["channel"] in pair and item["rev"] == pair[item["channel"]]
         for item in observations
     )
-
-
-def validate_pair(pair):
-    if not isinstance(pair, dict) or set(pair) != {"stable", "unstable"}:
-        raise ValueError("A pin pair must contain stable and unstable revisions")
-    for revision in pair.values():
-        require_revision(revision)
-
-
-def require_policy_version(value):
-    if not isinstance(value, str) or not POLICY_VERSION.fullmatch(value):
-        raise ValueError("Policy versions must be exact release tags such as v0.1.0")
-
-
-def require_revision(value):
-    if not isinstance(value, str) or not REVISION.fullmatch(value):
-        raise ValueError("Expected an exact 40-character lowercase Git commit")
-
-
-def read_json(path):
-    return records.read_json(path)
 
 
 def git_revision(root):

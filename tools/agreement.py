@@ -235,9 +235,7 @@ def member_edges(graph, owners):
     return edges
 
 
-def inspect(
-    root, project, config, pins, records_root, *, git_revision, git_dirty, load_records
-):
+def inspect(root, project, config, pins, records_root, *, git_revision, git_dirty):
     root = root.resolve()
     if GATE not in project["additionalRequiredChecks"]:
         raise ValueError(f"Agreement requires the additional required gate {GATE}")
@@ -405,7 +403,7 @@ def inspect(
         ).encode()
     ).hexdigest()
     try:
-        current_config, current_pins = load_records(records_root)
+        current_config, current_pins = records.load(records_root)
         changed = (
             records.identity(current_config, current_pins, git_revision(records_root))
             != snapshot

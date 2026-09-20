@@ -13,7 +13,7 @@ from urllib.error import HTTPError
 
 import yaml
 
-from tools import policy
+from tools import policy, records
 
 
 from tests.fixtures.cases import ProjectTestCase
@@ -128,7 +128,7 @@ class PinStateTests(unittest.TestCase):
 
     def test_floating_revisions_fail(self):
         with self.assertRaises(ValueError):
-            policy.validate_pair({"stable": "nixos-26.05", "unstable": UNSTABLE})
+            records.validate_pair({"stable": "nixos-26.05", "unstable": UNSTABLE})
 
 
 class ProjectTests(ProjectTestCase):
@@ -327,23 +327,23 @@ class ProjectTests(ProjectTestCase):
                 }
             )
         )
-        config, _ = policy.load_policy(root)
+        config, _ = records.load(root)
         requirements = json.loads(
             (policy.SOURCE_ROOT / "policy/requirements.json").read_text()
         )
         for field in ["systems", "requiredTools", "readmeSections", "ci"]:
             self.assertEqual(config[field], requirements[field])
             path = root / "policy/projects.json"
-            records = json.loads(path.read_text())
-            records[field] = []
-            path.write_text(json.dumps(records))
+            project_records = json.loads(path.read_text())
+            project_records[field] = []
+            path.write_text(json.dumps(project_records))
             with (
                 self.subTest(field=field),
                 self.assertRaisesRegex(ValueError, "belongs in the release"),
             ):
-                policy.load_policy(root)
-            del records[field]
-            path.write_text(json.dumps(records))
+                records.load(root)
+            del project_records[field]
+            path.write_text(json.dumps(project_records))
 
     def test_adopted_members_derive_checks_without_recording_mandatory_names(self):
         self.assertEqual(self.run_policy("validate")[0], 0)
@@ -1749,7 +1749,7 @@ class RecordTests(unittest.TestCase):
             }
             (root / "policy/pins.json").write_text(json.dumps(pins))
             with self.assertRaisesRegex(ValueError, "approved baseline"):
-                policy.load_policy(root)
+                records.load(root)
 
 
 class WorkflowTests(unittest.TestCase):

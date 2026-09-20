@@ -23,7 +23,7 @@ def checked_process(command, **kwargs):
     if version == RELEASE:
         code, report = invoke(*arguments)
     else:
-        config, pins = policy.load_policy(record_root)
+        config, pins = records.load(record_root)
         report = {
             "project": name,
             "policyVersion": version,

@@ -5,10 +5,9 @@ import re
 from urllib.parse import urlsplit
 
 if __package__:
-    from . import declarations, records
+    from . import declarations
 else:
     import declarations
-    import records
 
 
 # Every published legacy patch matters because immutable checkers read global records.
@@ -26,8 +25,7 @@ def timestamp(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def load(root):
-    data = records.read_json(root / "policy/support.json")
+def validate(data):
     if (
         not isinstance(data, dict)
         or set(data) != {"schemaVersion", "retirements"}

@@ -322,6 +322,38 @@ class PinPRTests(ProjectFixture):
             records.read_json(self.baseline / "policy/pins.json")["approved"], PAIR
         )
 
+    def test_candidate_classification_rejects_changed_authority_and_invalid_batches(
+        self,
+    ):
+        for file, keys, value in (
+            ("members.json", ("members",), {}),
+            ("projects.json", ("policyRepository",), "attacker/policy"),
+            (
+                "projects.json",
+                ("projects", "example", "requiredArchitectures"),
+                ["aarch64-linux", "x86_64-linux"],
+            ),
+            ("support.json", ("retirements",), {"v0.3.0": retirement()}),
+            ("pins.json", ("batches", -1, "id"), "../next"),
+            ("pins.json", ("batches", -1, "status"), "withdrawn"),
+        ):
+            with self.subTest(file=file, keys=keys):
+                path = self.proposal / "policy" / file
+                original = path.read_text()
+                data = json.loads(original)
+                target = data
+                for key in keys[:-1]:
+                    target = target[key]
+                target[keys[-1]] = value
+                candidates.write_json(path, data)
+                self.commit(self.proposal)
+                self.head = policy.git_revision(self.proposal)
+                self.github[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = self.head
+                code, result, _ = self.call("capture")
+                self.assertEqual(code, 2, result)
+                self.assertFalse(result["eligible"])
+                path.write_text(original)
+
     def test_collect_requires_exact_attempt_jobs_and_downloads_bound_complete_evidence(
         self,
     ):
@@ -479,6 +511,23 @@ class PinPRTests(ProjectFixture):
                 self.assertEqual(code, 0, result)
                 self.assertFalse(result["eligible"])
                 self.assertEqual(self.checks[0]["conclusion"], "success")
+                code, candidate = invoke(
+                    "--policy-root",
+                    str(self.baseline),
+                    "pin-batch",
+                    "plan",
+                    str(self.root),
+                    "--proposal-root",
+                    str(self.proposal),
+                    "--project",
+                    "example",
+                    "--batch",
+                    "next",
+                    "--output",
+                    str(self.root.parent / f"recovery-{state}"),
+                )
+                self.assertEqual(code, 2, candidate)
+                self.assertFalse(candidate["eligible"])
 
     def test_maintenance_invalidates_open_success_after_base_changes(self):
         _, captured, _ = self.call("capture")

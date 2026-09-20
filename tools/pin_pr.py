@@ -11,9 +11,10 @@ from urllib import parse, request
 import zipfile
 
 if __package__:
-    from . import candidates, records, support
+    from . import candidates, proposals, records, support
 else:
     import candidates
+    import proposals
     import records
     import support
 
@@ -165,53 +166,11 @@ class Review:
         )
         if snapshot["revision"] != self.args.head:
             raise ValueError("Proposal checkout does not match the reviewed head")
-        before = {batch["id"]: batch for batch in self.pins["batches"]}
-        changed = [
-            batch for batch in pins["batches"] if batch != before.get(batch["id"])
-        ]
-        subjects = [
-            batch
-            for batch in changed
-            if any(
-                batch.get(key) != before.get(batch["id"], {}).get(key)
-                for key in ("pins", "projects", "previous")
-            )
-        ]
-        if pins["approved"] != self.pins["approved"]:
-            subjects = [batch for batch in changed if batch["pins"] == pins["approved"]]
-            if not subjects:
-                raise ValueError(
-                    "Approval change requires a new candidate batch and renewed evidence"
-                )
-        self.result.update(
-            proposal=snapshot,
-            classification="state-only" if pins != self.pins else "not-applicable",
-            batch=None,
+        self.result["proposal"] = snapshot
+        proposal = proposals.Proposal(
+            (self.config, self.pins, self.baseline), (proposed, pins, snapshot)
         )
-        if subjects:
-            if len(subjects) != 1:
-                raise ValueError(
-                    "One pin PR must identify one complete candidate batch"
-                )
-            batch = subjects[0]
-            if {key: value for key, value in proposed.items() if key != "ci"} != {
-                key: value for key, value in self.config.items() if key != "ci"
-            }:
-                raise ValueError(
-                    "Candidate proposal changed trusted enrollment, settings, or support"
-                )
-            if (
-                not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", batch["id"])
-                or batch["status"] == "withdrawn"
-                or (
-                    batch["id"] in before
-                    and before[batch["id"]]["status"] != "candidate"
-                )
-            ):
-                raise ValueError(
-                    "Historical or approved batches cannot be reused as candidates"
-                )
-            self.result.update(classification="candidate", batch=batch["id"])
+        self.result.update(proposal.classify())
         return self.result
 
     def external_id(self):

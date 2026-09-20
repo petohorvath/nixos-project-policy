@@ -6,9 +6,10 @@ import shutil
 import uuid
 
 if __package__:
-    from . import candidates, records, releases, support
+    from . import candidates, proposals, records, releases, support
 else:
     import candidates
+    import proposals
     import records
     import releases
     import support
@@ -45,8 +46,14 @@ class Batch:
             args.results.resolve()
         ):
             raise ValueError("Batch output must be outside the input artifacts")
-        self.control = candidates.Coordinator(args, **services)
-        self.output = self.control.output
+        self.root = args.project_dir.resolve()
+        self.output = candidates.evidence_directory(
+            args.output,
+            self.root,
+            args.policy_root,
+            args.proposal_root,
+            services["source_root"],
+        )
         self.result = {
             "schemaVersion": 1,
             "scope": "whole-batch",
@@ -59,34 +66,39 @@ class Batch:
         }
 
     def shared(self, batch):
-        config, _, _ = self.control.snapshot(self.control.baseline)
-        roster = config["_members"]
+        proposal = proposals.read(
+            self.args.policy_root,
+            self.args.proposal_root,
+            load_policy=self.services["load_policy"],
+            git_revision=self.services["git_revision"],
+        )
+        roster = proposal.config["_members"]
         if not roster or any(
             not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name) for name in roster
         ):
             raise ValueError("Complete batches require a nonempty trusted roster")
-        _, _, baseline, proposal, selected = self.control.authority(
-            sorted(roster)[0], batch, check_source=False
-        )
+        _, selected = proposal.candidate(batch)
         return {
             "roster": roster,
-            "baseline": baseline,
-            "proposal": proposal,
+            "baseline": proposal.baseline,
+            "proposal": proposal.proposal,
             "batch": batch,
             "pins": selected["pins"],
             "registrations": selected["projects"],
-            **self.control.identity(),
+            **candidates.identity(
+                self.services["source_root"], self.services["orchestrator_revision"]
+            ),
         }
 
     def child(self, name, *, root=None):
         arguments = argparse.Namespace(**vars(self.args))
-        arguments.project_dir = root or self.control.root / name
+        arguments.project_dir = root or self.root / name
         arguments.output = self.output / "members" / name
         arguments.project = name
         return candidates.Coordinator(arguments, **self.services)
 
     def fetch(self, name, shared):
-        root = self.control.root / name
+        root = self.root / name
         if not getattr(self.args, "fetch", False) or root.exists():
             return
         revision = shared["registrations"].get(name)
@@ -278,7 +290,7 @@ class Batch:
             worker=row["worker"],
             workerJob=row["job"],
         )
-        child, captured, root = self.recapture(plan, name, root=self.control.root)
+        child, captured, root = self.recapture(plan, name, root=self.root)
         result = child.execute(captured, root)
         result.update(
             batchPlanDigest=plan["planDigest"],
@@ -465,7 +477,12 @@ class Batch:
                 raise ValueError("Batch authority changed during aggregation")
         except candidates.ERRORS as error:
             self.result["issues"].append(str(error))
-        config, _, _ = self.control.snapshot(self.control.baseline)
+        if self.args.policy_root.resolve() == self.args.proposal_root.resolve():
+            config, _, _ = records.proposed_snapshot(
+                self.args.policy_root, self.services["load_policy"]
+            )
+        else:
+            config, _ = self.services["load_policy"](self.args.policy_root)
         assessment_time = support.now()
         for name, member in plan["members"].items():
             if member["status"] == "planned":

@@ -1,7 +1,6 @@
 """Plan, execute, and replay member candidate checks without granting approval."""
 
 import base64
-import copy
 import hashlib
 import json
 import os
@@ -11,10 +10,11 @@ import subprocess
 import uuid
 
 if __package__:
-    from . import agreement, declarations, records, releases, support
+    from . import agreement, declarations, proposals, records, releases, support
 else:
     import agreement
     import declarations
+    import proposals
     import records
     import releases
     import support
@@ -39,6 +39,33 @@ def digest(value):
 
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def evidence_directory(output, *inputs):
+    output = output.resolve()
+    if any(output.is_relative_to(root.resolve()) for root in inputs):
+        raise ValueError("Candidate evidence must be outside every input checkout")
+    output.mkdir(parents=True, exist_ok=False)
+    return output
+
+
+def identity(source_root, revision):
+    return {
+        "orchestratorVersion": "v" + (source_root / "VERSION").read_text().strip(),
+        "orchestratorRevision": revision,
+        "orchestratorDigest": digest(
+            {
+                str(path.relative_to(source_root)): hashlib.sha256(
+                    path.read_bytes()
+                ).hexdigest()
+                for path in [
+                    *sorted((source_root / "tools").glob("*.py")),
+                    source_root / "VERSION",
+                    source_root / "policy/requirements.json",
+                ]
+            }
+        ),
+    }
 
 
 def add_commands(commands):
@@ -98,13 +125,9 @@ class Coordinator:
         self.root = args.project_dir.resolve()
         self.baseline = args.policy_root.resolve()
         self.proposal = args.proposal_root.resolve()
-        self.output = args.output.resolve()
-        for root in (self.root, self.baseline, self.proposal, source_root):
-            if self.output.is_relative_to(root):
-                raise ValueError(
-                    "Candidate evidence must be outside every input checkout"
-                )
-        self.output.mkdir(parents=True, exist_ok=False)
+        self.output = evidence_directory(
+            args.output, self.root, self.baseline, self.proposal, source_root
+        )
 
     def source(self):
         revision = self.git_revision(self.root)
@@ -124,59 +147,19 @@ class Coordinator:
         config, pins = self.load_policy(root)
         return config, pins, records.identity(config, pins, self.git_revision(root))
 
-    def authority(self, name, batch_id, *, check_source=True):
-        config, pins, baseline = self.snapshot(self.baseline)
-        proposed, proposed_pins, proposal = self.snapshot(self.proposal)
-        if name not in config["_members"]:
-            raise ValueError("Candidate subject must be in the trusted enrolled roster")
-        # A pin proposal cannot change enrollment, settings, support, or checker identity.
-        if {key: value for key, value in config.items() if key != "ci"} != {
-            key: value for key, value in proposed.items() if key != "ci"
-        }:
-            raise ValueError(
-                "Pin proposals cannot alter trusted enrollment or policy records"
-            )
-        selected = [
-            batch for batch in proposed_pins["batches"] if batch["id"] == batch_id
-        ]
-        if len(selected) != 1 or selected[0]["status"] == "withdrawn":
-            raise ValueError("Proposal must identify one active candidate batch")
-        batch = selected[0]
-        if batch["status"] == "complete" and proposed_pins["approved"] != batch["pins"]:
-            raise ValueError("A future complete batch must propose its approval pair")
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", batch_id):
-            raise ValueError("Candidate batch needs a simple identifier")
-        if proposed_pins["approved"] not in (pins["approved"], batch["pins"]):
-            raise ValueError(
-                "Proposed approval does not identify the selected candidate"
-            )
-        if batch.get("previous") not in (None, pins["approved"]):
-            raise ValueError(
-                "Candidate previous pins disagree with the trusted baseline"
-            )
-        baseline_other = [entry for entry in pins["batches"] if entry["id"] != batch_id]
-        proposed_other = [
-            entry for entry in proposed_pins["batches"] if entry["id"] != batch_id
-        ]
-        if baseline_other != proposed_other:
-            raise ValueError(
-                "A candidate proposal cannot rewrite other rollout records"
-            )
-        existing = next(
-            (entry for entry in pins["batches"] if entry["id"] == batch_id), None
+    def authority(self, name, batch_id):
+        proposal = proposals.read(
+            self.baseline,
+            self.proposal,
+            load_policy=self.load_policy,
+            git_revision=self.git_revision,
         )
-        if existing and existing["status"] != "candidate":
-            raise ValueError(
-                "Approved or historical batches cannot be reused as candidates"
-            )
-        if check_source and batch["projects"].get(name) != self.source()["revision"]:
+        if name not in proposal.config["_members"]:
+            raise ValueError("Candidate subject must be in the trusted enrolled roster")
+        pins, batch = proposal.candidate(batch_id)
+        if batch["projects"].get(name) != self.source()["revision"]:
             raise ValueError("Candidate is not registered for this exact member commit")
-        candidate_pins = copy.deepcopy(pins)
-        candidate_pins["batches"] = [
-            *baseline_other,
-            {**batch, "status": "candidate"},
-        ]
-        return config, candidate_pins, baseline, proposal, batch
+        return proposal.config, pins, proposal.baseline, proposal.proposal, batch
 
     def execution_records(self, config, pins):
         root = self.output / "records"
@@ -195,25 +178,6 @@ class Coordinator:
         for file, value in values.items():
             write_json(directory / file, value)
         return root, records.identity(config, pins, self.git_revision(root))
-
-    def identity(self):
-        return {
-            "orchestratorVersion": "v"
-            + (self.source_root / "VERSION").read_text().strip(),
-            "orchestratorRevision": self.orchestrator_revision,
-            "orchestratorDigest": digest(
-                {
-                    str(path.relative_to(self.source_root)): hashlib.sha256(
-                        path.read_bytes()
-                    ).hexdigest()
-                    for path in [
-                        *sorted((self.source_root / "tools").glob("*.py")),
-                        self.source_root / "VERSION",
-                        self.source_root / "policy/requirements.json",
-                    ]
-                }
-            ),
-        }
 
     def capture(self, name, batch_id, attempt):
         before = self.source()
@@ -408,7 +372,7 @@ class Coordinator:
                     if any(job["system"] == system for job in jobs)
                 ]
             },
-            **self.identity(),
+            **identity(self.source_root, self.orchestrator_revision),
         }
         if any(job["kind"] == "agreement" for job in jobs):
             process = run_process(

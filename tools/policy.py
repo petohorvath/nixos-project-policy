@@ -12,22 +12,35 @@ import subprocess
 import sys
 import tempfile
 from urllib.error import HTTPError
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 import yaml
 
 if __package__:
-    from . import declarations, records, releases, support, transitions
+    from . import (
+        agreement,
+        declarations,
+        locks,
+        records,
+        releases,
+        support,
+        transitions,
+    )
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import agreement
     import declarations
+    import locks
     import records
     import releases
     import support
     import transitions
 
 ci_plan = declarations.ci_plan
+LockGraph = locks.LockGraph
+repository_identity = locks.repository_identity
+dependency_cycles = locks.dependency_cycles
 
 
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
@@ -81,6 +94,12 @@ def main(argv=None):
         "--inputs-json",
         help="Hosted workflow inputs to compare with local declarations",
     )
+    agreement_command = commands.add_parser(
+        "agreement",
+        help="Compare policy selections at committed member dependency revisions",
+    )
+    agreement_command.add_argument("project_dir", type=Path)
+    agreement_command.add_argument("--project", required=True)
     title = commands.add_parser("title", help="Check a Conventional Commit PR title")
     title.add_argument("title")
     check = commands.add_parser(
@@ -145,7 +164,7 @@ def main(argv=None):
     try:
         require_policy_version(f"v{version}")
         if (
-            args.command in {"check", "audit", "vm", "compatibility", "ci"}
+            args.command in {"check", "audit", "vm", "compatibility", "ci", "agreement"}
             and args.policy_root is None
         ):
             raise ValueError(
@@ -156,7 +175,7 @@ def main(argv=None):
         config, pins = load_policy(records_root)
         project = None
         assessment = None
-        if args.command in {"check", "ci", "compatibility", "vm"}:
+        if args.command in {"check", "ci", "compatibility", "vm", "agreement"}:
             project = member_project(
                 args.project_dir,
                 args.project,
@@ -195,6 +214,21 @@ def main(argv=None):
                         git_dirty=git_dirty,
                     )
                 )
+        elif args.command == "agreement":
+            result = agreement.inspect(
+                args.project_dir,
+                project,
+                config,
+                pins,
+                records_root,
+                git_revision=git_revision,
+                git_dirty=git_dirty,
+                load_records=load_policy,
+            )
+            result.update(
+                memberSettings=member_settings(project),
+                enrollment=enrollment(config, args.project),
+            )
         elif args.command == "ci":
             result = {
                 "status": "planned",
@@ -283,7 +317,7 @@ def main(argv=None):
                 current_support["status"] == "retired"
                 and assessment["status"] != "retired"
             ):
-                result["status"] = "fail"
+                result["status"] = "error" if result["status"] == "error" else "fail"
                 result.setdefault("issues", []).append(
                     support.retirement_issue(current_support)
                 )
@@ -321,7 +355,7 @@ def main(argv=None):
                     "error": str(error),
                 }
             ),
-            file=sys.stdout if args.command == "audit" else sys.stderr,
+            file=sys.stdout if args.command in {"audit", "agreement"} else sys.stderr,
         )
         return 2
 
@@ -481,7 +515,7 @@ class InvalidDeclaration(ValueError):
 
 def member_project(root, name, config, *, hosted_inputs=None):
     try:
-        return declarations.inspect(
+        project = declarations.inspect(
             root.resolve(),
             config["policyRepository"],
             name,
@@ -489,6 +523,9 @@ def member_project(root, name, config, *, hosted_inputs=None):
             checker_version=f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}",
             hosted_inputs=hosted_inputs,
         )
+        if agreement.GATE in project["additionalRequiredChecks"]:
+            agreement.require_caller(root, project, config["policyRepository"])
+        return project
     except ValueError as error:
         raise InvalidDeclaration(str(error)) from error
 
@@ -907,6 +944,8 @@ def check_compatibility(
                     "tools/declarations.py",
                     "tools/records.py",
                     "tools/releases.py",
+                    "tools/agreement.py",
+                    "tools/locks.py",
                     "tools/support.py",
                     "tools/transitions.py",
                     "policy/requirements.json",
@@ -1527,75 +1566,6 @@ def github_request(path, payload=None):
         ) from error
 
 
-class LockGraph:
-    def __init__(self, lock):
-        if not isinstance(lock, dict) or lock.get("version") != 7:
-            raise ValueError("Unsupported flake lock format")
-        self.nodes = lock["nodes"]
-        self.root = lock["root"]
-        if not isinstance(self.nodes, dict) or not isinstance(self.root, str):
-            raise ValueError("Invalid lock nodes or root")
-        if self.root not in self.nodes:
-            raise ValueError("Missing lock root")
-        for node in self.nodes.values():
-            if not isinstance(node, dict) or any(
-                not isinstance(node.get(field, {}), dict)
-                for field in ("inputs", "locked", "original")
-            ):
-                raise ValueError("Invalid lock node structure")
-
-    def resolve(self, reference, aliases=()):
-        if isinstance(reference, str):
-            if reference not in self.nodes:
-                raise ValueError(f"Missing lock node: {reference}")
-            return reference
-        if not isinstance(reference, list) or not all(
-            isinstance(item, str) for item in reference
-        ):
-            raise ValueError("Invalid lock input reference")
-        path = tuple(reference)
-        if path in aliases:
-            raise ValueError(f"Cyclic follows path: {reference}")
-        current = self.root
-        for part in path:
-            inputs = self.nodes[current].get("inputs", {})
-            if part not in inputs:
-                raise ValueError(f"Missing follows path: {reference}")
-            current = self.resolve(inputs[part], (*aliases, path))
-        return current
-
-    def reachable(self):
-        result = {}
-        pending = [self.root]
-        while pending:
-            current = pending.pop()
-            if current in result:
-                continue
-            result[current] = self.nodes[current]
-            pending.extend(
-                self.resolve(reference)
-                for reference in self.nodes[current].get("inputs", {}).values()
-            )
-        return result
-
-
-def dependency_cycles(graph):
-    visited = set()
-    cycles = []
-
-    def visit(node, stack):
-        if node in stack:
-            cycles.append([*stack[stack.index(node) :], node])
-        elif node not in visited:
-            for dependency in graph.get(node, []):
-                visit(dependency, [*stack, node])
-            visited.add(node)
-
-    for node in graph:
-        visit(node, [])
-    return cycles
-
-
 def source_files(root, filename, include_vendor=False):
     result = []
     excluded = EXCLUDED_DIRS - {"vendor"} if include_vendor else EXCLUDED_DIRS
@@ -1615,28 +1585,6 @@ def source_files(root, filename, include_vendor=False):
                 raise ValueError("Source file escapes the project directory")
             result.append(path)
     return sorted(result)
-
-
-def repository_identity(node):
-    for source in [node.get("locked", {}), node.get("original", {})]:
-        host = source.get("host", "github.com")
-        if (
-            source.get("type") in {None, "github"}
-            and isinstance(host, str)
-            and host.lower() == "github.com"
-            and "owner" in source
-            and "repo" in source
-        ):
-            return f"{source['owner']}/{source['repo']}".lower()
-        if source.get("type") == "github":
-            continue
-        url = source.get("url", "")
-        scp = re.fullmatch(r"(?:git@)?github\.com:([^/]+/[^/?#]+)/*", url)
-        parsed = urlsplit(url)
-        path = (scp.group(1) if scp else parsed.path.removeprefix("/")).rstrip("/")
-        if (scp or parsed.hostname == "github.com") and REPOSITORY.fullmatch(path):
-            return path.removesuffix(".git").lower()
-    return None
 
 
 def nixpkgs_channel(node):

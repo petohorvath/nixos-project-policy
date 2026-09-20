@@ -30,6 +30,7 @@
               packages = [
                 python
                 pkgs.bash
+                pkgs.git
                 pkgs.jq
               ];
               script = ''

@@ -22,6 +22,13 @@ on:
         description: Literal JSON list of additional GitHub merge gates
         default: "[]"
         type: string
+    outputs:
+      project_revision:
+        description: Exact member commit captured for all Policy jobs
+        value: ${{ jobs.records.outputs.project_revision }}
+      records_revision:
+        description: Exact central record commit captured for all Policy jobs
+        value: ${{ jobs.records.outputs.revision }}
 
 permissions:
   contents: read

@@ -13,6 +13,8 @@
 - Add explicit retirement decisions with migration periods, shared enforcement in local commands, CI, and audits, and stable support assessments for evidence. Preserve support when newer releases publish.
 - Guard legacy cleanup against trusted prior records, supported immutable patch releases, and exact member migration evidence; keep all real retirement decisions empty.
 - Add single-member candidate planning, native execution, and replayable aggregation against unmerged proposals. Keep baseline authority separate from proposed approval fields, use each selected immutable checker, preserve legacy lock requirements, and retain complete gate evidence without granting batch approval.
+- Check integration policy agreement at exact committed member dependency revisions, including reachable transitive members, follows, aliases, and independent lock scopes. Preserve behavioral integration tests and reject mixed selections, cycles, missing declarations, and unavailable sources.
+- Provide the separate `Integration / Policy agreement` gate and caller template with primary Policy source/record snapshot outputs. Keep member upgrades independent of the integration project's locked set.
 
 ### Migration
 

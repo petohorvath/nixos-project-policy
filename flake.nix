@@ -29,8 +29,8 @@
               name = "policy-tests";
               packages = [
                 python
-                pkgs.git
                 pkgs.bash
+                pkgs.git
                 pkgs.jq
               ];
               script = ''

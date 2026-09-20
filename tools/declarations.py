@@ -31,10 +31,10 @@ class UniqueLoader(yaml.BaseLoader):
         return result
 
 
-def discover(root, repository):
+def discover(root, repository, *, workflow_name="check.yml"):
     """Return the unique caller even when its trigger or settings are invalid."""
     candidates = []
-    prefix = f"{repository}/.github/workflows/check.yml@"
+    prefix = f"{repository}/.github/workflows/{workflow_name}@"
     for path in sorted((root / ".github/workflows").glob("*")):
         if path.suffix not in {".yml", ".yaml"}:
             continue
@@ -69,15 +69,31 @@ def inspect(
         raise ValueError(
             f"Project {name} selects policy {version}; run that release instead of checker {checker_version}"
         )
-    if job.get("name") != requirements["ci"]["callerJobName"]:
-        raise ValueError(
-            f"Policy caller job must be named '{requirements['ci']['callerJobName']}'"
-        )
-    for forbidden in ("if", "needs", "strategy", "continue-on-error"):
+    require_execution(workflow, job, requirements["ci"]["callerJobName"])
+    member = parse_inputs(job.get("with"), name, version, requirements["systems"])
+    if hosted_inputs is not None:
+        hosted = parse_inputs(hosted_inputs, name, version, requirements["systems"])
+        if hosted != member:
+            raise ValueError(
+                "Hosted workflow inputs disagree with the inspected member declaration"
+            )
+    return {**member, "declaration": str(path.relative_to(root))}
+
+
+def require_execution(workflow, job, caller_name, *, needs=None):
+    if job.get("name") != caller_name:
+        raise ValueError(f"Policy caller job must be named '{caller_name}'")
+    for forbidden in ("if", "strategy", "continue-on-error"):
         if forbidden in job:
             raise ValueError(
                 f"Policy caller must run unconditionally and cannot contain {forbidden}"
             )
+    if (needs is None and "needs" in job) or (
+        needs is not None and job.get("needs") != needs
+    ):
+        raise ValueError(
+            "Policy caller needs must use only its required snapshot dependency"
+        )
     events = workflow.get("on")
     trigger = events.get("pull_request") if isinstance(events, dict) else None
     if not (
@@ -91,14 +107,6 @@ def inspect(
         raise ValueError(
             "Policy PR trigger must declare exactly opened, synchronize, reopened, edited activities without other filters"
         )
-    member = parse_inputs(job.get("with"), name, version, requirements["systems"])
-    if hosted_inputs is not None:
-        hosted = parse_inputs(hosted_inputs, name, version, requirements["systems"])
-        if hosted != member:
-            raise ValueError(
-                "Hosted workflow inputs disagree with the inspected member declaration"
-            )
-    return {**member, "declaration": str(path.relative_to(root))}
 
 
 def parse_inputs(inputs, name, version, systems):

@@ -2,42 +2,61 @@
 
 ## Host prerequisites
 
-Install Nix with `nix-command` and `flakes` enabled. Install direnv with `use flake` support and enable its integration in the interactive shell. Direnv can provide the integration directly. Nix-direnv is an optional alternative; follow its [installation instructions](https://github.com/nix-community/nix-direnv#installation) when using it. The repository's `.envrc` checks for Nix and flake integration and reports a missing prerequisite.
+Install Nix with `nix-command` and `flakes` enabled. CI uses Nix 2.34.6 to enter the pinned environment.
 
-Run `direnv allow` after reviewing `.envrc`. Alternatively, enter the same shell with `nix develop`. Nix is required before entering a shell even though the shell also supplies a pinned Nix executable. Host Nix 2.34.6 is the bootstrap version used by the CI definitions.
+For automatic shell activation, install direnv with `use flake` support. Enable direnv in the interactive shell. [Nix-direnv](https://github.com/nix-community/nix-direnv#installation) can supply flake support if needed. The repository's `.envrc` reports missing prerequisites.
+
+Review `.envrc`, then run `direnv allow`. Alternatively, run `nix develop`. Host Nix is required for both methods; the development shell then supplies its pinned Nix executable.
 
 ## Tools and checks
 
-The stable lock supplies Nix, nil, nixfmt, statix, deadnix, treefmt, shfmt, Prettier, Git, jq, Python/PyYAML, Ruff, and actionlint. Python, Ruff, jq, and actionlint support this project's checker and workflow tests. No unstable tool override is currently needed. `flake.lock` records exact bootstrap revisions; `policy/pins.json` separately records family approval.
+The root lock supplies Nix, nil, nixfmt, statix, deadnix, treefmt, shfmt, Prettier, Git, jq, Python/PyYAML, Ruff, and actionlint. `policy/pins.json` separately records the approved shared pins.
 
 ```bash
 nix fmt
 nix flake check --print-build-logs
 ```
 
-The complete command runs checker tests, policy-record validation, formatting, Nix lint, Python lint, and workflow validation for the host architecture. No VM execution is included. CI definitions run these checks on both supported Linux architectures. A separate host-level fixture executes real Nix metadata and full root checks with both exact overrides, verifies lock preservation, and verifies default-lock update rejection; nested Nix execution keeps this fixture outside build-sandbox checks.
+`nix flake check` runs checker tests, record validation, formatting, Nix lint, Python lint, and workflow validation for the host architecture. CI runs these checks on both supported Linux architectures. This repository has no VM tests.
 
-The packaged transition fixture builds the checker from a clean controlled central repository and invokes that executable through member upgrades, pre-enrollment checks, mixed-release audits, exact integration agreement, and the actual central PR workflow shell. It also validates the same retained records with the actual immutable older sources; fetch the repository's release tags before running it. Test-only Python startup adapters supply unpublished release metadata, GitHub requests, and Nix process outcomes. Git commits, record processing, selected checker code, and package entrypoints execute normally. These adapters demonstrate orchestration and evidence handling; the separate real-Nix fixture establishes native override and build behavior. Both host fixtures run in each native CI job, but neither activates or proves live merge protection.
+The formatter covers Nix, shell, Markdown, YAML, JSON, and Python. It preserves Markdown wrapping. Formatting checks use writable source copies without Git metadata.
 
-For a focused test run:
+### Focused tests
 
 ```bash
 nix develop --command python -m unittest discover -s tests -v
-nix develop --command python -m unittest tests.nix_compatibility -v
-nix develop --command python -m unittest tests.packaged_transition -v
 nix fmt -- --ci
 nix run .# -- validate
 nix run .# -- --version
 ```
 
-The formatter covers Nix, shell, Markdown, YAML, JSON, and Python present in this repository. Go formatting belongs in projects containing first-party Go. Markdown uses preserved wrapping so focused edits do not reflow existing paragraphs. Formatting checks operate on writable source copies without Git metadata.
+### Host tests
 
-Inspect a project with `nix run .# -- --policy-root . check ../PROJECT --project PROJECT`, using a trusted checkout of current central records. Add `--shell` only when executing that project's development environment is intended. The default check reads files; neither it nor a local audit changes member sources or lockfiles. See [checker commands](checker.md).
+These tests run outside Nix build sandboxes because they invoke Nix themselves. CI runs both on each supported architecture:
+
+```bash
+nix develop --command python -m unittest tests.nix_compatibility -v
+nix develop --command python -m unittest tests.packaged_transition -v
+```
+
+`tests.nix_compatibility` runs real metadata queries and root checks with both exact nixpkgs overrides. It checks lock preservation and rejection of required default-lock updates.
+
+Fetch the repository's release tags before running `tests.packaged_transition`. This test builds the checker from a controlled clean repository. It exercises member upgrades, checks before enrollment, audits across releases, integration agreement, and the central PR workflow shell. It also checks retained records with the actual older release sources.
+
+Test adapters supply unpublished release metadata, GitHub responses, and Nix process results. Git operations, record processing, checker code, and packaged commands execute normally. Use the real-Nix test to verify native override behavior. Neither host test verifies live GitHub merge protection.
+
+## Member checks
+
+Use a trusted checkout of current records:
+
+```bash
+nix run .# -- --policy-root . check ../PROJECT --project PROJECT
+```
+
+Add `--shell` to execute the member's development environment. The default check reads files. Checks and audits do not change member sources or lockfiles. See the [checker reference](checker.md) for results and limits.
 
 ## Nix conventions
 
-The [shared Nix rules](../POLICY.md#nix-code-and-tests) apply to this repository's expressions, scripts, workflows, and documentation. Use modern `nix` subcommands and the root flake entrypoints. The check constructor takes named arguments, with its callers above its implementation. Package and formatter expressions declare their dependencies as arguments and are instantiated through `pkgs.callPackage`.
+Follow the [shared Nix rules](../POLICY.md#nix-code-and-tests). Root `flake.nix` declares `systems`, inputs, and public outputs. Expressions in `nix/` supply the package and formatter through `pkgs.callPackage`. The check constructor takes named arguments; its callers appear above its implementation.
 
-Root `flake.nix` declares `systems`, the `nixpkgs` and `nixpkgs-unstable` inputs, and each public output. Local package and formatter expressions provide the implementation through plain Nix composition.
-
-The shell probe uses `nix eval --impure --expr builtins.currentSystem` only to identify the host platform before selecting its formatter output. Dependency and build evaluation still use the locked flake. Command usage, module boundaries, and naming require source review in addition to formatting and lint checks.
+The shell probe uses `nix eval --impure --expr builtins.currentSystem` to identify the host before selecting its formatter. Dependency and build evaluation use the locked flake. Review command usage, module dependencies, and names as well as lint results.

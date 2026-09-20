@@ -137,7 +137,6 @@ class Batch:
         proposal = proposals.read(
             self.args.policy_root,
             self.args.proposal_root,
-            load_policy=self.services["load_policy"],
             git_revision=self.services["git_revision"],
         )
         roster = proposal.config["_members"]
@@ -493,11 +492,9 @@ class Batch:
         except candidates.ERRORS as error:
             self.result["issues"].append(str(error))
         if self.args.policy_root.resolve() == self.args.proposal_root.resolve():
-            config, _, _ = records.proposed_snapshot(
-                self.args.policy_root, self.services["load_policy"]
-            )
+            config, _, _ = records.proposed_snapshot(self.args.policy_root)
         else:
-            config, _ = self.services["load_policy"](self.args.policy_root)
+            config, _ = records.load(self.args.policy_root)
         assessment_time = support.now()
         for name, member in plan["members"].items():
             if member["status"] == "planned":

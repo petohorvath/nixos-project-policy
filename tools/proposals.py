@@ -9,13 +9,13 @@ else:
     import records
 
 
-def read(baseline, proposal, *, load_policy, git_revision):
+def read(baseline, proposal, *, git_revision):
     if baseline.resolve() == proposal.resolve():
-        trusted = records.proposed_snapshot(baseline, load_policy)
+        trusted = records.proposed_snapshot(baseline)
     else:
-        config, pins = load_policy(baseline)
+        config, pins = records.load(baseline)
         trusted = config, pins, records.identity(config, pins, git_revision(baseline))
-    return Proposal(trusted, records.proposed_snapshot(proposal, load_policy))
+    return Proposal(trusted, records.proposed_snapshot(proposal))
 
 
 class Proposal:

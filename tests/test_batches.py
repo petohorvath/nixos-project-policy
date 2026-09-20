@@ -589,7 +589,7 @@ class BatchTests(BatchFixture, ProjectTestCase):
                 self.proposal / "policy/pins.json", self.baseline / "policy/pins.json"
             )
             self.commit(self.baseline)
-            self.assertEqual(policy.load_policy(self.baseline)[1]["approved"], pair)
+            self.assertEqual(records.load(self.baseline)[1]["approved"], pair)
         self.assertEqual(
             {name: policy.fingerprints(root) for name, root in self.roots.items()},
             before,

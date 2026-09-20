@@ -81,11 +81,10 @@ def pages(path, key=None):
 
 
 class Review:
-    def __init__(self, args, load_policy):
+    def __init__(self, args):
         self.args = args
-        self.load_policy = load_policy
         self.config, self.pins, self.baseline = records.proposed_snapshot(
-            args.policy_root, load_policy
+            args.policy_root
         )
         self.repository = self.config["policyRepository"]
         self.prefix = f"repos/{self.repository}"
@@ -168,9 +167,7 @@ class Review:
         return self.result
 
     def classify(self):
-        proposed, pins, snapshot = records.proposed_snapshot(
-            self.args.proposal_root, self.load_policy
-        )
+        proposed, pins, snapshot = records.proposed_snapshot(self.args.proposal_root)
         if snapshot["revision"] != self.args.head:
             raise ValueError("Proposal checkout does not match the reviewed head")
         self.result["proposal"] = snapshot
@@ -438,9 +435,8 @@ class Review:
         # Fetching later artifacts can outlive a support deadline or proposal update.
         self.context()
         if (
-            records.proposed_snapshot(self.args.policy_root, self.load_policy)[2]
-            != self.baseline
-            or records.proposed_snapshot(self.args.proposal_root, self.load_policy)[2]
+            records.proposed_snapshot(self.args.policy_root)[2] != self.baseline
+            or records.proposed_snapshot(self.args.proposal_root)[2]
             != self.result["proposal"]
         ):
             raise ValueError("Captured records changed during PR assessment")
@@ -517,13 +513,8 @@ class Review:
             try:
                 self.context()
                 if (
-                    records.proposed_snapshot(self.args.policy_root, self.load_policy)[
-                        2
-                    ]
-                    != self.baseline
-                    or records.proposed_snapshot(
-                        self.args.proposal_root, self.load_policy
-                    )[2]
+                    records.proposed_snapshot(self.args.policy_root)[2] != self.baseline
+                    or records.proposed_snapshot(self.args.proposal_root)[2]
                     != self.result["proposal"]
                 ):
                     raise ValueError("Record inputs changed before publication")
@@ -670,7 +661,7 @@ class Review:
         return self.result
 
 
-def run(args, *, load_policy):
+def run(args):
     review = None
     result = {
         "schemaVersion": 1,
@@ -681,7 +672,7 @@ def run(args, *, load_policy):
         "issues": [],
     }
     try:
-        review = Review(args, load_policy)
+        review = Review(args)
         result = getattr(review, args.operation)()
     except candidates.ERRORS as error:
         if review:

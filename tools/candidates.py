@@ -21,7 +21,6 @@ else:
 
 
 SYSTEMS = {"x86_64-linux": "ubuntu-24.04", "aarch64-linux": "ubuntu-24.04-arm"}
-RECORD_FILES = ("projects.json", "pins.json", "members.json", "support.json")
 ERRORS = (
     ValueError,
     OSError,
@@ -105,7 +104,6 @@ class Coordinator:
         args,
         *,
         source_root,
-        load_policy,
         git_revision,
         git_dirty,
         fingerprints,
@@ -115,7 +113,6 @@ class Coordinator:
     ):
         self.args = args
         self.source_root = source_root
-        self.load_policy = load_policy
         self.git_revision = git_revision
         self.git_dirty = git_dirty
         self.fingerprints = fingerprints
@@ -143,15 +140,14 @@ class Coordinator:
 
     def snapshot(self, root):
         if root.resolve() == self.proposal:
-            return records.proposed_snapshot(root, self.load_policy)
-        config, pins = self.load_policy(root)
+            return records.proposed_snapshot(root)
+        config, pins = records.load(root)
         return config, pins, records.identity(config, pins, self.git_revision(root))
 
     def authority(self, name, batch_id):
         proposal = proposals.read(
             self.baseline,
             self.proposal,
-            load_policy=self.load_policy,
             git_revision=self.git_revision,
         )
         if name not in proposal.config["_members"]:
@@ -163,20 +159,7 @@ class Coordinator:
 
     def execution_records(self, config, pins):
         root = self.output / "records"
-        directory = root / "policy"
-        directory.mkdir(parents=True)
-        values = {
-            "projects.json": {
-                key: value
-                for key, value in config.items()
-                if key not in records.RUNTIME_FIELDS
-            },
-            "pins.json": pins,
-            "members.json": {"schemaVersion": 1, "members": config["_members"]},
-            "support.json": config["_support"],
-        }
-        for file, value in values.items():
-            write_json(directory / file, value)
+        records.write(root, config, pins)
         return root, records.identity(config, pins, self.git_revision(root))
 
     def capture(self, name, batch_id, attempt):

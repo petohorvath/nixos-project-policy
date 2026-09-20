@@ -403,7 +403,7 @@ class AuditTests(AuditFixture, ProjectTestCase):
 class RosterTests(ProjectTestCase):
     def test_changed_records_are_an_error_even_with_no_enrolled_members(self):
         self.members.clear()
-        load = policy.load_policy
+        load = records.load
         calls = 0
 
         def changing(root):
@@ -414,7 +414,7 @@ class RosterTests(ProjectTestCase):
                 pins["approved"]["stable"] = "c" * 40
             return config, pins
 
-        with patch.object(policy, "load_policy", side_effect=changing):
+        with patch.object(records, "load", side_effect=changing):
             code, report = self.run_policy("audit", str(self.root.parent))
         self.assertEqual(code, 2, report)
         self.assertEqual(report["projects"], [])

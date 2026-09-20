@@ -226,7 +226,11 @@ class ProjectFixture(unittest.TestCase):
                 "policy": {
                     "name": "Policy",
                     "uses": f"{POLICY_REPO}/.github/workflows/check.yml@{RELEASE}",
-                    "with": {"policy_version": RELEASE, "project": "example"},
+                    "with": {
+                        "policy_version": RELEASE,
+                        "project": "example",
+                        "required_architectures": '["x86_64-linux", "aarch64-linux"]',
+                    },
                 }
             },
         }
@@ -238,10 +242,16 @@ class ProjectFixture(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 
+    def declare(self, **inputs):
+        self.workflow["jobs"]["policy"]["with"].update(inputs)
+        self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
+
     def inspect(self):
         return policy.inspect_project(self.root, "example", self.config, self.pins)
 
     def run_policy(self, *args):
+        if args[0] == "ci" and (len(args) == 1 or args[1].startswith("--")):
+            args = ("ci", str(self.root), *args[1:])
         records = Path(self.temp.name) / "records"
         (records / "policy").mkdir(parents=True, exist_ok=True)
         records_config = {
@@ -258,14 +268,14 @@ class ProjectFixture(unittest.TestCase):
 
 
 class ProjectTests(ProjectFixture):
-    def test_pending_adoption_cannot_pass_a_compliance_check(self):
+    def test_pending_enrollment_does_not_prevent_full_checks(self):
         self.config["projects"]["example"]["adopted"] = False
         status, report = self.run_policy(
             "check", str(self.root), "--project", "example"
         )
-        self.assertEqual(status, 1)
-        self.assertEqual(report["status"], "fail")
-        self.assertTrue(any("adoption" in issue for issue in report["issues"]))
+        self.assertEqual(status, 0, report)
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report["enrollment"], "not-enrolled")
 
     def test_root_selection_is_independent_of_shared_pins_and_update_channel(self):
         lock = lockfile()
@@ -308,7 +318,7 @@ class ProjectTests(ProjectFixture):
         self.assertEqual(code, 1, report)
         self.assertIn("allowed pin pair", " ".join(report["issues"]))
 
-    def test_enrollment_readiness_is_explicit_and_separate_from_compliance(self):
+    def test_checks_report_enrollment_separately(self):
         for adopted in [False, True]:
             with self.subTest(adopted=adopted):
                 self.config["projects"]["example"]["adopted"] = adopted
@@ -316,8 +326,11 @@ class ProjectTests(ProjectFixture):
                     "check", str(self.root), "--project", "example", "--readiness"
                 )
                 self.assertEqual(status, 0)
-                self.assertEqual(report["status"], "pass" if adopted else "ready")
+                self.assertEqual(report["status"], "pass")
                 self.assertEqual(report["issues"], [])
+                self.assertEqual(
+                    report["enrollment"], "enrolled" if adopted else "not-enrolled"
+                )
 
     def test_policy_versions_require_exact_release_tags_even_before_adoption(self):
         for version in [
@@ -365,15 +378,12 @@ class ProjectTests(ProjectFixture):
             before["policyRecordsDigest"], updated["policyRecordsDigest"]
         )
 
-    def test_caller_version_must_match_registered_release(self):
+    def test_caller_version_must_match_selected_release(self):
         for version in ["v9.0.0", "main", CHECKER]:
             with self.subTest(version=version):
                 self.workflow["jobs"]["policy"]["with"]["policy_version"] = version
                 self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-                self.assertIn(
-                    "ci: policy_version must equal the registered release tag",
-                    self.inspect()["issues"],
-                )
+                self.assertEqual(self.inspect()["status"], "fail")
 
     def test_caller_cannot_select_a_different_release_or_commit(self):
         for version in ["v9.0.0", CHECKER]:
@@ -382,10 +392,7 @@ class ProjectTests(ProjectFixture):
                     f"{POLICY_REPO}/.github/workflows/check.yml@{version}"
                 )
                 self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-                self.assertIn(
-                    "ci: missing unconditional PR caller at the registered policy release",
-                    self.inspect()["issues"],
-                )
+                self.assertEqual(self.inspect()["status"], "fail")
 
     def test_shared_rule_links_require_the_selected_release_and_policy_document(self):
         for target in [
@@ -445,9 +452,8 @@ class ProjectTests(ProjectFixture):
         self.assertEqual(self.audit_with_checks(REQUIRED_CHECKS)[0], 0)
 
     def test_vm_gate_is_mandatory_only_when_targets_are_declared(self):
-        project = self.config["projects"]["example"]
         self.assertEqual(self.run_policy("validate")[0], 0)
-        project["vmTargets"] = ["vm-tests", "vm-tests-unstable"]
+        self.declare(vm_targets='["vm-tests", "vm-tests-unstable"]')
         self.assertEqual(self.run_policy("validate")[0], 0)
         status, report = self.audit_with_checks(REQUIRED_CHECKS)
         self.assertEqual(status, 1)
@@ -473,9 +479,7 @@ class ProjectTests(ProjectFixture):
                         for architecture in architectures
                     )
                 ]
-                self.config["projects"]["example"].update(
-                    requiredArchitectures=architectures
-                )
+                self.declare(required_architectures=json.dumps(architectures))
                 status, report = self.run_policy("ci", "--project", "example")
                 self.assertEqual(status, 0)
                 self.assertEqual(report["status"], "planned")
@@ -521,8 +525,7 @@ class ProjectTests(ProjectFixture):
                 for check in REQUIRED_CHECKS
                 if check == REQUIRED_CHECKS[0] or check.endswith(f"{architecture})")
             ]
-            project = self.config["projects"]["example"]
-            project.update(requiredArchitectures=[architecture])
+            self.declare(required_architectures=json.dumps([architecture]))
             with self.subTest(architecture=architecture):
                 self.assertEqual(self.inspect()["status"], "pass")
                 self.assertEqual(self.audit_with_checks(checks)[0], 0)
@@ -551,21 +554,20 @@ class ProjectTests(ProjectFixture):
             ["unknown-linux"],
         ]:
             with self.subTest(architectures=invalid):
-                self.config["projects"]["example"]["requiredArchitectures"] = invalid
+                self.declare(required_architectures=json.dumps(invalid))
                 status, report = self.run_policy("ci", "--project", "example")
                 self.assertEqual(status, 2)
-                self.assertIn("requiredArchitectures", report["error"])
+                self.assertIn("required_architectures", report["error"])
                 self.assertNotIn("matrix", report)
 
-    def test_current_release_requires_architectures_even_before_adoption(self):
-        project = self.config["projects"]["example"]
-        del project["requiredArchitectures"]
+    def test_current_release_requires_architectures_even_before_enrollment(self):
+        del self.workflow["jobs"]["policy"]["with"]["required_architectures"]
+        self.declare()
         for adopted in [False, True]:
-            with self.subTest(adopted=adopted):
-                project["adopted"] = adopted
-                status, report = self.run_policy("validate")
-                self.assertEqual(status, 2)
-                self.assertIn("needs requiredArchitectures", report["error"])
+            self.config["projects"]["example"]["adopted"] = adopted
+            status, report = self.run_policy("ci", "--project", "example")
+            self.assertEqual(status, 2, report)
+            self.assertIn("required_architectures", report["error"])
 
     def test_vm_gate_keeps_its_platform_when_regular_ci_requires_only_arm(self):
         checks = [
@@ -573,9 +575,8 @@ class ProjectTests(ProjectFixture):
             for check in REQUIRED_CHECKS
             if check == REQUIRED_CHECKS[0] or check.endswith("aarch64-linux)")
         ]
-        self.config["projects"]["example"].update(
-            requiredArchitectures=["aarch64-linux"],
-            vmTargets=["vm-tests"],
+        self.declare(
+            required_architectures='["aarch64-linux"]', vm_targets='["vm-tests"]'
         )
         status, report = self.run_policy("ci", "--project", "example")
         self.assertEqual(status, 0)
@@ -591,9 +592,10 @@ class ProjectTests(ProjectFixture):
     def test_ci_planning_requires_the_members_selected_release(self):
         for version in [None, "v0.1.1"]:
             with self.subTest(version=version):
-                self.config["projects"]["example"].update(
-                    adopted=False, policyVersion=version
+                self.workflow["jobs"]["policy"]["uses"] = (
+                    f"{POLICY_REPO}/.github/workflows/check.yml@{version}"
                 )
+                self.declare(policy_version=version)
                 status, report = self.run_policy("ci", "--project", "example")
                 self.assertEqual(status, 2)
                 self.assertNotIn("matrix", report)
@@ -624,7 +626,7 @@ class ProjectTests(ProjectFixture):
             "check", str(self.root), "--project", "example", "--readiness"
         )
         self.assertEqual(status, 0)
-        self.assertEqual(report["status"], "ready")
+        self.assertEqual(report["status"], "pass")
         project["adopted"] = True
         status, report = self.run_policy("validate")
         self.assertEqual(status, 0, report)
@@ -633,6 +635,7 @@ class ProjectTests(ProjectFixture):
         self,
     ):
         project = self.config["projects"]["example"]
+        project["policyVersion"] = "v0.3.0"
         project["additionalRequiredChecks"] = ["Integration"]
         checks = [*REQUIRED_CHECKS, "Integration"]
         for recorded in [
@@ -687,10 +690,9 @@ class ProjectTests(ProjectFixture):
                 del project["requiredChecks"]
 
     def test_additional_checks_cannot_replace_or_duplicate_mandatory_gates(self):
-        self.config["projects"]["example"]["additionalRequiredChecks"] = [
-            REQUIRED_CHECKS[0],
-            "Integration",
-        ]
+        self.declare(
+            additional_required_checks=json.dumps([REQUIRED_CHECKS[0], "Integration"])
+        )
         status, report = self.run_policy("ci", "--project", "example")
         self.assertEqual(status, 0, report)
         self.assertEqual(report["requiredChecks"], [*REQUIRED_CHECKS, "Integration"])
@@ -725,9 +727,9 @@ class ProjectTests(ProjectFixture):
 
     def test_github_audit_requires_policy_vm_and_additional_project_gates(self):
         checks = [*REQUIRED_CHECKS, VM_CHECK, "Project-specific integration tests"]
-        self.config["projects"]["example"].update(
-            vmTargets=["vm-tests"],
-            additionalRequiredChecks=["Project-specific integration tests"],
+        self.declare(
+            vm_targets='["vm-tests"]',
+            additional_required_checks='["Project-specific integration tests"]',
         )
         status, report = self.run_policy("ci", "--project", "example")
         self.assertEqual(status, 0, report)
@@ -781,7 +783,10 @@ class ProjectTests(ProjectFixture):
         self.assertIn("Unsupported policy record schema", report["error"])
 
     def test_local_check_cannot_use_a_different_policy_release(self):
-        self.config["projects"]["example"]["policyVersion"] = "v9.0.0"
+        self.workflow["jobs"]["policy"]["uses"] = (
+            f"{POLICY_REPO}/.github/workflows/check.yml@v9.0.0"
+        )
+        self.declare(policy_version="v9.0.0")
         for options in [[], ["--readiness"]]:
             with self.subTest(options=options):
                 status, report = self.run_policy(
@@ -919,28 +924,29 @@ class ProjectTests(ProjectFixture):
                     "--shell",
                 )
                 self.assertEqual(status, 1 if probe_error else 0)
-                self.assertEqual(report["status"], "fail" if probe_error else "ready")
+                self.assertEqual(report["status"], "fail" if probe_error else "pass")
 
     def test_readiness_cannot_waive_missing_approval_or_policy_version(self):
         self.config["projects"]["example"]["adopted"] = False
-        for missing in ["pins", "policyVersion"]:
-            with self.subTest(missing=missing):
-                self.pins["approved"] = None if missing == "pins" else PAIR
-                self.config["projects"]["example"]["policyVersion"] = (
-                    None if missing == "policyVersion" else RELEASE
-                )
-                status, report = self.run_policy(
-                    "check", str(self.root), "--project", "example", "--readiness"
-                )
-                self.assertEqual(status, 1)
-                self.assertEqual(report["status"], "fail")
+        self.pins["approved"] = None
+        status, report = self.run_policy(
+            "check", str(self.root), "--project", "example", "--readiness"
+        )
+        self.assertEqual(status, 1, report)
+        self.pins["approved"] = PAIR
+        del self.workflow["jobs"]["policy"]["with"]["policy_version"]
+        self.declare()
+        status, report = self.run_policy(
+            "check", str(self.root), "--project", "example", "--readiness"
+        )
+        self.assertEqual(status, 2, report)
 
     def test_pending_audit_reports_enrollment_readiness(self):
         self.config["projects"]["example"]["adopted"] = False
         status, report = self.run_policy("audit", str(self.root.parent))
         self.assertEqual(status, 0)
         self.assertEqual(report["projects"][0]["status"], "pending-adoption")
-        self.assertEqual(report["projects"][0]["assessment"], "ready")
+        self.assertEqual(report["projects"][0]["assessment"], "pass")
         self.assertEqual(report["projects"][0]["issues"], [])
 
     def test_registered_candidate_validation_is_not_approved_compliance(self):
@@ -1470,7 +1476,7 @@ class ProjectTests(ProjectFixture):
                     job["name"] = name
                 self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
                 self.assertIn(
-                    "ci: policy caller job must be named 'Policy'",
+                    "ci: Policy caller job must be named 'Policy'",
                     self.inspect()["issues"],
                 )
 
@@ -1479,9 +1485,7 @@ class ProjectTests(ProjectFixture):
             "matrix": {"system": ["x86_64-linux", "aarch64-linux"]}
         }
         self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-        self.assertTrue(
-            any("caller matrices" in issue for issue in self.inspect()["issues"])
-        )
+        self.assertTrue(any("strategy" in issue for issue in self.inspect()["issues"]))
 
     def test_policy_caller_cannot_depend_on_a_skipped_job(self):
         self.workflow["jobs"]["optional"] = {
@@ -1495,9 +1499,7 @@ class ProjectTests(ProjectFixture):
                 self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
                 result = self.inspect()
                 self.assertEqual(result["status"], "fail")
-                self.assertTrue(
-                    any("dependencies" in issue for issue in result["issues"])
-                )
+                self.assertTrue(any("needs" in issue for issue in result["issues"]))
 
     def test_caller_cannot_disable_or_supply_compatibility_selection(self):
         for setting in [
@@ -1518,7 +1520,7 @@ class ProjectTests(ProjectFixture):
                 code, report = self.run_policy(
                     "check", str(self.root), "--project", "example"
                 )
-                self.assertEqual(code, 1, report)
+                self.assertEqual(code, 2, report)
 
     def test_policy_caller_runs_after_title_edits(self):
         self.workflow["on"]["pull_request"] = {
@@ -1568,7 +1570,7 @@ class ProjectTests(ProjectFixture):
         self.workflow["jobs"]["policy"]["with"]["project"] = "another-project"
         self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
         self.assertTrue(
-            any("own registered project" in issue for issue in self.inspect()["issues"])
+            any("own project identity" in issue for issue in self.inspect()["issues"])
         )
 
 
@@ -1629,6 +1631,16 @@ class CompatibilityTests(ProjectFixture):
             "--output",
             str(output),
             *options,
+        )
+
+    def test_unenrolled_compatibility_uses_member_settings_and_approved_pins(self):
+        self.config["projects"] = {}
+        code, report = self.compatibility()
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["enrollment"], "not-enrolled")
+        self.assertEqual(
+            report["memberSettings"]["requiredArchitectures"],
+            ["x86_64-linux", "aarch64-linux"],
         )
 
     def test_both_channels_execute_full_checks_at_the_recorded_pin(self):
@@ -2057,7 +2069,7 @@ class WorkflowTests(unittest.TestCase):
             "matrix.check == 'Compliance' && github.event_name == 'pull_request'",
         )
 
-    def test_snapshot_job_generates_matrix_from_captured_member_records(self):
+    def test_snapshot_job_generates_matrix_from_member_inputs_and_checkout(self):
         workflow = yaml.load(
             (policy.SOURCE_ROOT / ".github/workflows/check.yml").read_text(),
             Loader=yaml.BaseLoader,
@@ -2102,12 +2114,28 @@ class WorkflowTests(unittest.TestCase):
                                         "policyVersion": RELEASE,
                                         "adopted": False,
                                         "vmTargets": [],
-                                        "requiredArchitectures": architectures,
+                                        "requiredArchitectures": ["x86_64-linux"],
                                     }
                                 },
                             }
                         )
                     )
+                    caller = yaml.load(
+                        (
+                            policy.SOURCE_ROOT / "templates/policy-caller.yml"
+                        ).read_text(),
+                        Loader=yaml.BaseLoader,
+                    )
+                    job = caller["jobs"]["policy"]
+                    job["uses"] = f"{POLICY_REPO}/.github/workflows/check.yml@{RELEASE}"
+                    job["with"] = {
+                        "project": "example",
+                        "policy_version": RELEASE,
+                        "required_architectures": json.dumps(architectures),
+                    }
+                    member = root / "project/.github/workflows"
+                    member.mkdir(parents=True, exist_ok=True)
+                    (member / "policy.yml").write_text(json.dumps(caller))
                     output.write_text("")
                     process = subprocess.run(
                         ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
@@ -2116,6 +2144,13 @@ class WorkflowTests(unittest.TestCase):
                             **os.environ,
                             "PATH": f"{temporary}:{os.environ['PATH']}",
                             "PROJECT": "example",
+                            "WORKFLOW_INPUTS": json.dumps(
+                                {
+                                    **job["with"],
+                                    "vm_targets": "[]",
+                                    "additional_required_checks": "[]",
+                                }
+                            ),
                             "GITHUB_OUTPUT": str(output),
                         },
                         capture_output=True,
@@ -2201,7 +2236,7 @@ class WorkflowTests(unittest.TestCase):
                     self.assertEqual(result.returncode == 0, passes, result.stderr)
                     self.assertEqual(
                         output.read_text(),
-                        f"revision={SOURCE}\nchecker_revision={CHECKER}\n"
+                        f"revision={SOURCE}\nchecker_revision={CHECKER}\nproject_revision={SOURCE}\n"
                         if passes
                         else "",
                     )
@@ -2360,7 +2395,7 @@ class WorkflowTests(unittest.TestCase):
             config = {
                 "policyRepository": POLICY_REPO,
                 "readmeSections": [],
-                "projects": {"example": {"policyVersion": RELEASE}},
+                "projects": {"example": {"policyVersion": "v0.3.0"}},
             }
             pins = {
                 "approved": PAIR,

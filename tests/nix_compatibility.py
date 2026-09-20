@@ -50,8 +50,33 @@ class NixCompatibilityTests(unittest.TestCase):
 }
 """.replace("STABLE", pins["stable"])
             )
+            release = "v" + (policy.SOURCE_ROOT / "VERSION").read_text().strip()
+            caller = project / ".github/workflows/policy.yml"
+            caller.parent.mkdir(parents=True)
+            caller.write_text(
+                json.dumps(
+                    {
+                        "on": {
+                            "pull_request": {
+                                "types": ["opened", "synchronize", "reopened", "edited"]
+                            }
+                        },
+                        "jobs": {
+                            "policy": {
+                                "name": "Policy",
+                                "uses": f"petohorvath/nixos-project-policy/.github/workflows/check.yml@{release}",
+                                "with": {
+                                    "project": "fixture",
+                                    "policy_version": release,
+                                    "required_architectures": '["x86_64-linux", "aarch64-linux"]',
+                                },
+                            }
+                        },
+                    }
+                )
+            )
             self.run_command(["git", "init", "-q", str(project)])
-            self.run_command(["git", "-C", str(project), "add", "flake.nix"])
+            self.run_command(["git", "-C", str(project), "add", "flake.nix", ".github"])
             self.run_command(["nix", "flake", "lock", str(project)])
             self.run_command(["git", "-C", str(project), "add", "flake.lock"])
             self.run_command(

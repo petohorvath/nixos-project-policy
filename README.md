@@ -26,7 +26,7 @@ nix run .# -- validate
 nix run .# -- --policy-root . audit ..
 ```
 
-An audit distinguishes `pending-adoption` from passing compliance. A direct member `check` fails until the required baseline and adoption configuration exist.
+Prepared v0.4.0 member checks read release selection and settings from the policy workflow and work before enrollment against approved shared pins. Reports distinguish enrollment, static check results, and compatibility execution. Older immutable releases retain their central selection and adoption contracts.
 
 ## Development
 

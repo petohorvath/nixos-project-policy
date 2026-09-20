@@ -49,7 +49,20 @@
       "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
       "adopted": true,
       "vmTargets": [],
-      "policyVersion": "v0.3.0"
+      "policyVersion": "v0.3.0",
+      "requiredChecks": [
+        "Policy / Verify policy version and load shared pins",
+        "Policy / Compatibility (stable, x86_64-linux)",
+        "Policy / Compatibility (stable, aarch64-linux)",
+        "Policy / Compatibility (unstable, x86_64-linux)",
+        "Policy / Compatibility (unstable, aarch64-linux)",
+        "Policy / Compliance (x86_64-linux)",
+        "Policy / Compliance (aarch64-linux)",
+        "Policy / Formatting and lint (x86_64-linux)",
+        "Policy / Formatting and lint (aarch64-linux)",
+        "Policy / Project tests (x86_64-linux)",
+        "Policy / Project tests (aarch64-linux)"
+      ]
     },
     "nixos-shields": {
       "repository": "petohorvath/nixos-shields",

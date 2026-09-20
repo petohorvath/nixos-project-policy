@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0 (prepared)
+
+- Read policy selection and member settings from one literal reusable-workflow caller, independently of central legacy selections or adoption state.
+- Require `required_architectures` as a JSON list encoded as a string; default `vm_targets` and `additional_required_checks` to empty lists. Reject ambiguous callers, dynamic inputs, malformed settings, and mismatched release references.
+- Use the same validated declarations for local checking, hosted planning, compatibility execution, and VM targets. Preserve separate compliance, formatting/lint, committed-lock, both compatibility channels, and applicable x86_64 VM gates.
+- Capture one member commit with checker and record commits for all hosted jobs; validate hosted input parity with that checkout.
+- Allow full pre-enrollment checks and report enrollment separately from check results. Preserve older immutable checker contracts and complete legacy records, including global check lists and historical batch identities.
+
+### Migration
+
+After separately authorized publication, update member policy links, the caller reference, and `policy_version` in one reviewed member PR. Put the intended architectures, VM targets, and additional gates into caller inputs. Use `ci PATH --project NAME` to review the generated names; verify actual statuses and merge settings, and justify any coverage reduction explicitly. Keep central legacy copies unchanged. This prepared release does not publish a tag, migrate members, change live settings, approve pins, or retire older releases. See [migration guidance](docs/maintenance.md#migration-to-v040-prepared).
+
 ## 0.3.0
 
 - Derive mandatory GitHub merge gates from the selected policy release, `requiredArchitectures`, and `vmTargets`, with optional `additionalRequiredChecks` for project-specific gates.

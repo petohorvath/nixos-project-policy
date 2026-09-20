@@ -17,6 +17,14 @@ from urllib.request import Request, urlopen
 
 import yaml
 
+if __package__:
+    from . import declarations
+else:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import declarations
+
+ci_plan = declarations.ci_plan
+
 
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
 POLICY_VERSION = re.compile(
@@ -53,7 +61,12 @@ def main(argv=None):
     ci = commands.add_parser(
         "ci", help="Report a member's CI matrix and required gates"
     )
+    ci.add_argument("project_dir", type=Path, nargs="?", default=Path("."))
     ci.add_argument("--project", required=True)
+    ci.add_argument(
+        "--inputs-json",
+        help="Hosted workflow inputs to compare with local declarations",
+    )
     title = commands.add_parser("title", help="Check a Conventional Commit PR title")
     title.add_argument("title")
     check = commands.add_parser(
@@ -64,7 +77,7 @@ def main(argv=None):
     check.add_argument(
         "--readiness",
         action="store_true",
-        help="Allow enrollment readiness before adoption",
+        help="Accepted for legacy invocations; checks do not require enrollment",
     )
     check.add_argument(
         "--batch", help="Registered candidate batch, bound to the tested commit"
@@ -95,7 +108,7 @@ def main(argv=None):
     )
     shell.add_argument("project_dir", type=Path)
     vm = commands.add_parser(
-        "vm", help="Run the centrally declared VM targets on a suitable host"
+        "vm", help="Run member-declared VM targets on a suitable host"
     )
     vm.add_argument("project_dir", type=Path)
     vm.add_argument("--project", required=True)
@@ -127,29 +140,26 @@ def main(argv=None):
             )
         records_root = args.policy_root or SOURCE_ROOT
         config, pins = load_policy(records_root)
-        if args.command == "compatibility":
-            selected = config["projects"][args.project]["policyVersion"]
-            if selected != f"v{version}":
-                raise ValueError(
-                    f"Project {args.project} must select checker v{version}"
-                )
-        if args.command in {"check", "ci"}:
-            selected = config["projects"][args.project]["policyVersion"]
-            if selected is None and args.command == "ci":
-                raise ValueError("CI planning requires a selected policy release")
-            if selected is not None and selected != f"v{version}":
-                raise ValueError(
-                    f"Project {args.project} selects policy {selected}; "
-                    f"run that release instead of checker v{version}"
-                )
+        project = None
+        if args.command in {"check", "ci", "compatibility", "vm"}:
+            project = member_project(
+                args.project_dir,
+                args.project,
+                config,
+                hosted_inputs=json.loads(args.inputs_json)
+                if args.command == "ci" and args.inputs_json is not None
+                else None,
+            )
         if args.command == "validate":
             result = {"status": "valid", "approvedPins": pins["approved"] is not None}
         elif args.command == "ci":
-            project = config["projects"][args.project]
             result = {
                 "status": "planned",
                 "project": args.project,
                 "policyVersion": project["policyVersion"],
+                "memberSettings": member_settings(project),
+                "enrollment": enrollment(config, args.project),
+                "revision": git_revision(args.project_dir),
                 **ci_plan(project, config["ci"]),
             }
         elif args.command == "title":
@@ -174,9 +184,10 @@ def main(argv=None):
                 args.channel,
                 args.batch,
                 args.output,
+                project=project,
             )
         elif args.command == "vm":
-            targets = config["projects"][args.project]["vmTargets"]
+            targets = project["vmTargets"]
             for target in targets:
                 subprocess.run(
                     [
@@ -192,6 +203,9 @@ def main(argv=None):
             result = {
                 "status": "pass" if targets else "not-applicable",
                 "targets": targets,
+                "policyVersion": project["policyVersion"],
+                "memberSettings": member_settings(project),
+                "enrollment": enrollment(config, args.project),
             }
         elif args.command == "check":
             result = inspect_project(
@@ -201,6 +215,7 @@ def main(argv=None):
                 pins,
                 args.batch,
                 readiness=args.readiness,
+                project=project,
             )
             if args.shell:
                 result["issues"].extend(
@@ -285,7 +300,6 @@ def load_policy(root):
     for tool in config["requiredTools"]:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]*", tool):
             raise ValueError(f"Invalid tool name: {tool}")
-    checker_version = f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}"
     for name, project in config["projects"].items():
         if not re.fullmatch(r"[a-z0-9-]+", name) or not REPOSITORY.fullmatch(
             project["repository"]
@@ -310,7 +324,7 @@ def load_policy(root):
                 or len(set(architectures)) != len(architectures)
             ):
                 raise ValueError(f"Invalid requiredArchitectures for {name}")
-        if project["policyVersion"] == checker_version:
+        if project["policyVersion"] == "v0.3.0":
             if "requiredArchitectures" not in project:
                 raise ValueError(f"Project {name} needs requiredArchitectures")
             unsupported = set(project["requiredArchitectures"]) - set(config["systems"])
@@ -330,7 +344,7 @@ def load_policy(root):
             raise ValueError(
                 f"Project {name} needs policy v0.3.0 or later for additionalRequiredChecks"
             )
-        if project["policyVersion"] == checker_version:
+        if project["policyVersion"] == "v0.3.0":
             if "requiredChecks" in project:
                 required = set(ci_plan(project, config["ci"])["requiredChecks"])
                 if set(project["requiredChecks"]) != required:
@@ -389,48 +403,6 @@ def load_policy(root):
     return config, pins
 
 
-def ci_plan(project, requirements):
-    jobs = [
-        {
-            "check": check,
-            "system": architecture,
-            "runner": requirements["runners"][architecture],
-        }
-        for check in requirements["architectureChecks"]
-        for architecture in project["requiredArchitectures"]
-    ]
-    compatibility_jobs = [
-        {
-            "check": check.format(architecture=architecture),
-            "channel": channel,
-            "system": architecture,
-            "runner": requirements["runners"][architecture],
-        }
-        for channel, check in requirements["compatibilityChecks"].items()
-        for architecture in project["requiredArchitectures"]
-    ]
-    checks = [
-        *requirements["requiredChecks"],
-        *(
-            f"{requirements['callerJobName']} / {job['check']}"
-            for job in compatibility_jobs
-        ),
-        *(
-            f"{requirements['callerJobName']} / {job['check']} ({job['system']})"
-            for job in jobs
-        ),
-    ]
-    if project["vmTargets"]:
-        checks.append(requirements["vmCheck"])
-    return {
-        "matrix": {"include": jobs},
-        "compatibilityMatrix": {"include": compatibility_jobs},
-        "requiredChecks": list(
-            dict.fromkeys([*checks, *project.get("additionalRequiredChecks", [])])
-        ),
-    }
-
-
 def valid_check_names(checks):
     return (
         isinstance(checks, list)
@@ -445,11 +417,48 @@ def uses_derived_checks(version):
     ) >= (0, 3, 0)
 
 
-def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False):
+def member_project(root, name, config, *, hosted_inputs=None):
+    return declarations.inspect(
+        root.resolve(),
+        config["policyRepository"],
+        name,
+        config,
+        checker_version=f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}",
+        hosted_inputs=hosted_inputs,
+    )
+
+
+def member_settings(project):
+    return {field: project[field] for field in declarations.INPUT_FIELDS.values()}
+
+
+def enrollment(config, name):
+    # The identity-only roster introduced separately will replace this legacy source.
+    return (
+        "enrolled"
+        if config["projects"].get(name, {}).get("adopted", False)
+        else "not-enrolled"
+    )
+
+
+def inspect_project(
+    root, name, config, pins, batch_id=None, *, readiness=False, project=None
+):
     root = root.resolve()
-    if name not in config["projects"]:
-        raise ValueError(f"Unknown project: {name}")
-    project = config["projects"][name]
+    if project is None:
+        legacy = config["projects"].get(name)
+        if legacy and not uses_member_declarations(legacy["policyVersion"]):
+            project = legacy
+        else:
+            try:
+                project = member_project(root, name, config)
+            except ValueError as error:
+                return {
+                    "project": name,
+                    "status": "fail",
+                    "issues": [f"ci: {error}"],
+                    "dependencies": [],
+                }
     issues = check_structure(root, config, project["policyVersion"])
     revision = git_revision(root)
     candidate = candidate_for(pins, name, revision, batch_id)
@@ -552,24 +561,25 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
         and not any(pins_match(shared_observations, pair) for pair in pairs)
     ):
         issues.append("pins: project lockfiles do not share one allowed pair")
-    issues.extend(
-        check_caller(
-            root,
-            config["policyRepository"],
-            project["policyVersion"],
-            name,
-            caller_name=config["ci"]["callerJobName"],
+    if "declaration" not in project:
+        issues.extend(
+            check_caller(
+                root,
+                config["policyRepository"],
+                project["policyVersion"],
+                name,
+                caller_name=config["ci"]["callerJobName"],
+            )
         )
-    )
-    if not project["adopted"] and not readiness:
-        issues.append(
-            "adoption: project is pending; use --readiness to validate enrollment"
-        )
+        if not project["adopted"] and not readiness:
+            issues.append(
+                "adoption: project is pending; use --readiness to validate enrollment"
+            )
     if issues:
         status = "fail"
     elif candidate:
         status = "candidate-ready"
-    elif not project["adopted"]:
+    elif "declaration" not in project and not project["adopted"]:
         status = "ready"
     else:
         status = "pass"
@@ -580,13 +590,21 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
         "candidateBatch": candidate["id"] if candidate else None,
         "status": status,
         "compatibility": "not-run",
+        "enrollment": enrollment(config, name),
         "issues": issues,
         "pins": observations,
         "dependencies": sorted(dependencies),
     }
     if project["policyVersion"] == f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}":
         report["requiredChecks"] = ci_plan(project, config["ci"])["requiredChecks"]
+        report["memberSettings"] = member_settings(project)
     return report
+
+
+def uses_member_declarations(version):
+    return version is not None and tuple(
+        map(int, version.removeprefix("v").split("."))
+    ) >= (0, 4, 0)
 
 
 def uses_input_overrides(version):
@@ -658,9 +676,23 @@ def check_structure(root, config, version=None):
     )
     for file in ["CONTRIBUTING.md", "AGENTS.md"]:
         path = root / file
-        if path.exists() and not rule_link.search(path.read_text()):
+        if path.exists() and (
+            not rule_link.search(path.read_text())
+            or (
+                version
+                and any(
+                    linked != version
+                    for linked in re.findall(
+                        r"https://github\.com/"
+                        + re.escape(config["policyRepository"])
+                        + r"/blob/([^/\s]+)/POLICY\.md(?:[)#\s]|$)",
+                        path.read_text(),
+                    )
+                )
+            )
+        ):
             issues.append(
-                f"documentation: {file} needs the registered policy release's POLICY.md link"
+                f"documentation: {file} needs only the selected policy release's POLICY.md links"
             )
     return issues
 
@@ -782,8 +814,11 @@ def candidate_for(pins, name, revision, batch_id=None):
     return matches[0] if matches else None
 
 
-def check_compatibility(root, name, config, pins, channel, batch_id=None, output=None):
+def check_compatibility(
+    root, name, config, pins, channel, batch_id=None, output=None, *, project=None
+):
     root = root.resolve()
+    project = project or member_project(root, name, config)
     artifacts = (
         output.resolve()
         if output
@@ -795,14 +830,21 @@ def check_compatibility(root, name, config, pins, channel, batch_id=None, output
         artifacts.mkdir(parents=True, exist_ok=False)
     result = {
         "project": name,
-        "policyVersion": config["projects"][name]["policyVersion"],
+        "policyVersion": project["policyVersion"],
+        "memberSettings": member_settings(project),
+        "enrollment": enrollment(config, name),
         "revision": git_revision(root),
         "checkerRevision": globals().get("PACKAGED_REVISION")
         or git_revision(SOURCE_ROOT),
         "checkerSourceDigest": hashlib.sha256(
             b"".join(
                 (SOURCE_ROOT / path).read_bytes()
-                for path in ("tools/policy.py", "policy/requirements.json", "VERSION")
+                for path in (
+                    "tools/policy.py",
+                    "tools/declarations.py",
+                    "policy/requirements.json",
+                    "VERSION",
+                )
             )
         ).hexdigest(),
         "channel": channel,

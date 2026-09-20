@@ -17,11 +17,14 @@ nix flake check --print-build-logs
 
 The complete command runs checker tests, policy-record validation, formatting, Nix lint, Python lint, and workflow validation for the host architecture. No VM execution is included. CI definitions run these checks on both supported Linux architectures. A separate host-level fixture executes real Nix metadata and full root checks with both exact overrides, verifies lock preservation, and verifies default-lock update rejection; nested Nix execution keeps this fixture outside build-sandbox checks.
 
+The packaged transition fixture builds the checker from a clean controlled central repository and invokes that executable through member upgrades, pre-enrollment checks, mixed-release audits, exact integration agreement, and the actual central PR workflow shell. It also validates the same retained records with the actual immutable older sources; fetch the repository's release tags before running it. Test-only Python startup adapters supply unpublished release metadata, GitHub requests, and Nix process outcomes. Git commits, record processing, selected checker code, and package entrypoints execute normally. These adapters demonstrate orchestration and evidence handling; the separate real-Nix fixture establishes native override and build behavior. Both host fixtures run in each native CI job, but neither activates or proves live merge protection.
+
 For a focused test run:
 
 ```bash
 nix develop --command python -m unittest discover -s tests -v
 nix develop --command python -m unittest tests.nix_compatibility -v
+nix develop --command python -m unittest tests.packaged_transition -v
 nix fmt -- --ci
 nix run .# -- validate
 nix run .# -- --version

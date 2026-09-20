@@ -2,7 +2,7 @@
 
 This reference describes the prepared v0.4.0 contract. Publication and each member migration remain separate decisions.
 
-The checker runs from a selected policy release or its packaged `nixos-project-policy` executable. `--version` reports its version. The global `--policy-root PATH` option selects a trusted checkout of current records and is required for `check`, `audit`, `vm`, `compatibility`, `agreement`, and `ci`. These commands never silently use a release's historical pin snapshot. Other commands default to bundled records when no path is given. Passing project tests alone does not establish family compliance.
+The checker runs from a selected policy release or its packaged `nixos-project-policy` executable. `--version` reports its version. The global `--policy-root PATH` option selects a trusted checkout of current records and is required for `check`, `audit`, `vm`, `compatibility`, `agreement`, and `ci`. These commands never silently use a release's historical pin snapshot. Candidate and PR coordination also require explicit trusted authority as described below. Other commands default to bundled records when no path is given. Passing project tests alone does not establish family compliance.
 
 ## Commands
 
@@ -23,9 +23,11 @@ The checker runs from a selected policy release or its packaged `nixos-project-p
 | `agreement PATH --project NAME`                                 | Compare the integration project's supported selection with declarations at its exact committed member dependency revisions.                       |
 | `vm PATH --project NAME`                                        | Execute the member-declared VM targets; report `not-applicable` when the member has none. Requires a suitable builder.                            |
 | `candidate --stable COMMIT --unstable COMMIT`                   | Emit an unapproved pair of exact commits. It neither writes locks nor registers or approves a batch.                                              |
+| `pin-batch plan\|execute\|aggregate`                            | [Plan, execute, and replay](#unmerged-candidate-coordination) unmerged candidates for one member or the complete trusted roster.                  |
+| `pin-pr capture\|collect\|finish\|invalidate`                   | [Validate central PR context and evidence](#central-pin-prs), report on the exact proposal head, and invalidate stale eligibility.                |
 | `title TITLE`                                                   | Validate Conventional Commit PR-title syntax.                                                                                                     |
 
-Commands print JSON with `checkerVersion`, `policyRecordsRevision` when Git metadata is available, and `policyRecordsDigest` for the records actually used. Member reports also identify their discovered `policyVersion` and validated `memberSettings`. Exit 0 means the requested operation succeeded; planning and candidate validation can succeed without establishing compliance. An audit succeeds only when every enrolled assessment passes (or its roster is empty). Exit 1 means enforced checks failed. Exit 2 means the request, record, or inspection could not be processed. Reports include checked project commits when Git metadata is available. Reusable CI separately logs the exact checker and record checkout revisions.
+Record and member commands print JSON with `checkerVersion`, `policyRecordsRevision` when Git metadata is available, and `policyRecordsDigest` for the records actually used. Member reports also identify their discovered `policyVersion` and validated `memberSettings`. Candidate and PR coordination use the plan, execution, and provenance envelopes documented below. Exit 0 means the requested operation succeeded; planning and candidate validation can succeed without establishing compliance. An audit succeeds only when every enrolled assessment passes (or its roster is empty). Exit 1 means enforced checks failed. Exit 2 means the request, record, or inspection could not be processed. Reports include checked project commits when Git metadata is available. Reusable CI separately logs the exact checker and record checkout revisions.
 
 After publication, a selected release can check a member against separate current records:
 

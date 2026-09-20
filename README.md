@@ -28,6 +28,8 @@ nix run .# -- --policy-root . audit ..
 
 Prepared v0.4.0 member checks read release selection and settings from the policy workflow and work before enrollment against approved shared pins. Reports distinguish enrollment, static check results, and compatibility execution. Older immutable releases retain their central selection and adoption contracts.
 
+After publication, an ordinary policy upgrade needs one reviewed member PR; the central enrollment and legacy selections stay unchanged. A routine root-only shared-pin update uses one [central pin PR](docs/maintenance.md#pin-candidates-and-approval), with complete enrolled-member validation before human approval and merge. Source repairs and locks still governed by older contracts can require coordinated member PRs.
+
 ## Development
 
 Use root `nix fmt` and `nix flake check`. The latter runs checker tests, formatting, Nix lint, Python lint, and workflow validation without VM execution. [Development instructions](docs/development.md) explain prerequisites, tools, and focused checks.

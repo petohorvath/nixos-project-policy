@@ -47,7 +47,7 @@ CI and runtime probes use `--no-update-lock-file` by itself to reject a required
 
 ## Unmerged candidate coordination
 
-`pin-batch plan`, `pin-batch execute`, and `pin-batch aggregate` validate one enrolled member against an explicitly selected unmerged proposal. These commands require separate `--policy-root BASELINE` and `--proposal-root PROPOSAL` checkouts. The baseline supplies enrollment, repository identities, legacy settings, and support decisions; the exact clean member commit supplies modern declarations. The proposal's selected `--batch` supplies an exact stable/unstable pair and registers that member commit. The coordinator verifies the commit in the trusted enrolled repository, resolves the selected published immutable release, and uses that release's requirements and checker by exact commit.
+`pin-batch plan`, `pin-batch execute`, and `pin-batch aggregate` validate enrolled members against an explicitly selected unmerged proposal. Planning selects one member with `--project` or the complete trusted roster with `--all`. These commands require separate `--policy-root BASELINE` and `--proposal-root PROPOSAL` checkouts. The baseline supplies enrollment, repository identities, legacy settings, and support decisions; each exact clean member commit supplies modern declarations. The proposal's selected `--batch` supplies an exact stable/unstable pair and registers member commits. The coordinator verifies each commit in its trusted enrolled repository, resolves the selected published immutable release, and uses that release's requirements and checker by exact commit.
 
 The proposal may contain the future approval change, but candidate execution copies the baseline records into a new evidence directory, keeps the baseline's approved pair, and normalizes the selected batch to `candidate`. Proposed enrollment, support, legacy settings, policy identity, and unrelated rollout-record changes are rejected. Proposed checker code and requirements are never executed. The original record and member checkouts are preserved. Record revisions and digests distinguish the trusted baseline, proposed snapshot, and temporary execution records.
 
@@ -80,6 +80,44 @@ nix run --no-update-lock-file ./coordinator -- \
 Planning and replay re-inspect trusted inputs and the selected release. Changed pins, sources, settings, records, checker code, or an effective retirement invalidate the prior plan. Aggregation requires every planned job and rejects substituted, missing, conflicting, failed, or unprocessable evidence. Reports and logs remain in the evidence directories on failure. `candidate-pass` means the requested candidate coverage succeeded; every single-member result remains `eligible: false` for the enrolled batch and grants no approval. Nix may satisfy executed builds from its cache; reports do not claim each derivation rebuilt.
 
 Plan/result digests bind content and freshness; they do not authenticate execution. Local aggregation requires trusted worker evidence. The central manual workflow uses artifacts from its own run with attempt-specific names, pinned coordinator/record/source snapshots, and read-only repository permissions. This workflow must run from trusted `main`; its single-member completion job is not a whole-batch PR approval gate. New workflow definitions need publication before a real hosted run, and local workflow fixtures do not establish live GitHub merge protection.
+
+## Complete enrolled batches
+
+Whole-batch planning enumerates the baseline roster and requires a registration for every enrolled identity. A proposal cannot choose a smaller participant set or replace selected-release requirements with its own matrix. Checkouts live at `WORKSPACE/PROJECT`; optional `--fetch` clones missing checkouts from the trusted repositories at the exact registered commits. Existing checkouts must already match and remain clean. A failed member capture remains visible while independently runnable members retain their plans and artifacts.
+
+```bash
+nix run --no-update-lock-file ./coordinator -- \
+  --policy-root ./baseline pin-batch plan ./members --all --fetch \
+  --proposal-root ./proposal --batch BATCH --attempt review-1 \
+  --output ./batch-plan
+```
+
+The parent plan records `scope: "whole-batch"`, the complete `roster`, registrations, baseline and proposal identities, candidate pair, attempt, coordinator identity, and each selected-release member plan. Its matrix supplies `project`, `repository`, `revision`, `system`, `runner`, a stable `worker` ID, and the expected native `job` name. Execute every row on its native architecture with the captured plan and an independently supplied expected attempt:
+
+```bash
+nix run --no-update-lock-file ./coordinator -- \
+  --policy-root ./baseline pin-batch execute ./members/MEMBER --all \
+  --proposal-root ./proposal --plan ./batch-plan/plan.json \
+  --project MEMBER --system x86_64-linux --attempt review-1 \
+  --output ./batch-results/MEMBER--x86_64-linux
+```
+
+Each worker re-inspects its selected subject and executes the same contract as single-member coordination. Reports bind the parent `batchPlanDigest`, child `planDigest`, attempt, worker ID, native system, exact source, checker, settings, and execution records. Historical members keep their committed-pin requirements. The `Integration / Policy agreement` gate invokes the integration project's selected immutable agreement checker directly, captures its actual locked members and `dependencySetDigest`, and checks that exact report during replay. The integration project's own committed-lock and candidate root checks still execute; member-head success and static policy agreement cannot replace behavioral integration coverage.
+
+Keep each worker's entire output directory as one artifact under the results directory. Its root `result.json` is the worker envelope; nested checker reports, metadata, and logs remain attached to that worker. Aggregate all artifacts against the original plan:
+
+```bash
+nix run --no-update-lock-file ./coordinator -- \
+  --policy-root ./baseline pin-batch aggregate ./members --all \
+  --proposal-root ./proposal --plan ./batch-plan/plan.json \
+  --results ./batch-results --attempt review-1 --output ./batch-summary
+```
+
+Aggregation re-inspects all planned members, accounts for every native worker and required child job, and retains full input artifacts and member outcomes on failure. Missing, duplicate, conflicting, skipped, cancelled, failed, malformed, or foreign evidence cannot produce eligibility. Source, setting, checker, enrollment, support, dependency, record, or candidate changes require a renewed plan and fresh attempt. This coordinator conservatively invalidates the captured batch when shared record identities change and does not combine saved reports across attempts. Ordinary Nix build-cache reuse remains valid during newly executed commands. Support is reassessed when evidence is consumed and again for every captured selection at completion, including retirements that become effective without a record edit.
+
+Only a complete successful aggregate reports both `status: "candidate-pass"` and `eligible: true`. Plans, workers, and single-member summaries remain ineligible; every summary retains `approval: "not-granted"`. No command changes approved pins, enrolls members, or authorizes a merge.
+
+The prepared `Complete candidate batch` manual workflow runs from trusted `main`, captures all sources through this CLI, executes independent native workers, and retains attempt-specific plan, worker, and summary artifacts. It passes the expected attempt separately and rejects an unsuccessful overall worker job through `--execution-status`. Integrations that verify individual external worker outcomes can pass `--worker-outcomes FILE`: schema version 1, the parent `planDigest`, expected `attempt`, and a `workers` list containing exactly one `{ "id": WORKER_ID, "status": "completed", "conclusion": "success" }` entry for every matrix row. Missing or unsuccessful entries fail aggregation. The caller must establish those outcomes' provenance; a supplied JSON file or digest does not authenticate a GitHub run. This manual workflow does not establish a required check on a central PR's proposal revision.
 
 ## Compatibility execution and evidence
 

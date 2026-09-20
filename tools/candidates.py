@@ -11,8 +11,9 @@ import subprocess
 import uuid
 
 if __package__:
-    from . import declarations, records, releases, support
+    from . import agreement, declarations, records, releases, support
 else:
+    import agreement
     import declarations
     import records
     import releases
@@ -51,16 +52,24 @@ def add_commands(commands):
         parser.add_argument("project_dir", type=Path)
         parser.add_argument("--proposal-root", required=True, type=Path)
         parser.add_argument("--output", required=True, type=Path)
+        parser.add_argument("--attempt", default=None)
         if operation == "plan":
-            parser.add_argument("--project", required=True)
+            subjects = parser.add_mutually_exclusive_group(required=True)
+            subjects.add_argument("--project")
+            subjects.add_argument("--all", action="store_true")
             parser.add_argument("--batch", required=True)
-            parser.add_argument("--attempt", default=None)
         else:
             parser.add_argument("--plan", required=True, type=Path)
+            parser.add_argument("--all", action="store_true")
         if operation == "execute":
+            parser.add_argument("--project")
             parser.add_argument("--system", required=True, choices=SYSTEMS)
+        else:
+            parser.add_argument("--fetch", action="store_true")
         if operation == "aggregate":
             parser.add_argument("--results", required=True, type=Path)
+            parser.add_argument("--worker-outcomes", type=Path)
+            parser.add_argument("--execution-status")
 
 
 class Coordinator:
@@ -113,7 +122,7 @@ class Coordinator:
         config, pins = self.load_policy(root)
         return config, pins, records.identity(config, pins, self.git_revision(root))
 
-    def authority(self, name, batch_id):
+    def authority(self, name, batch_id, *, check_source=True):
         config, pins, baseline = self.snapshot(self.baseline)
         proposed, proposed_pins, proposal = self.snapshot(self.proposal)
         if name not in config["_members"]:
@@ -156,7 +165,7 @@ class Coordinator:
             raise ValueError(
                 "Approved or historical batches cannot be reused as candidates"
             )
-        if batch["projects"].get(name) != self.source()["revision"]:
+        if check_source and batch["projects"].get(name) != self.source()["revision"]:
             raise ValueError("Candidate is not registered for this exact member commit")
         candidate_pins = copy.deepcopy(pins)
         candidate_pins["batches"] = [
@@ -182,6 +191,25 @@ class Coordinator:
         for file, value in values.items():
             write_json(directory / file, value)
         return root, records.identity(config, pins, self.git_revision(root))
+
+    def identity(self):
+        return {
+            "orchestratorVersion": "v"
+            + (self.source_root / "VERSION").read_text().strip(),
+            "orchestratorRevision": self.orchestrator_revision,
+            "orchestratorDigest": digest(
+                {
+                    str(path.relative_to(self.source_root)): hashlib.sha256(
+                        path.read_bytes()
+                    ).hexdigest()
+                    for path in [
+                        *sorted((self.source_root / "tools").glob("*.py")),
+                        self.source_root / "VERSION",
+                        self.source_root / "policy/requirements.json",
+                    ]
+                }
+            ),
+        }
 
     def capture(self, name, batch_id, attempt):
         before = self.source()
@@ -354,7 +382,7 @@ class Coordinator:
                 jobs.append(
                     {
                         "id": f"additional:{gate}",
-                        "kind": "additional",
+                        "kind": "agreement" if gate == agreement.GATE else "additional",
                         "system": settings["requiredArchitectures"][0],
                         "gate": gate,
                     }
@@ -386,22 +414,18 @@ class Coordinator:
                     if any(job["system"] == system for job in jobs)
                 ]
             },
-            "orchestratorVersion": "v"
-            + (self.source_root / "VERSION").read_text().strip(),
-            "orchestratorRevision": self.orchestrator_revision,
-            "orchestratorDigest": digest(
-                {
-                    str(path.relative_to(self.source_root)): hashlib.sha256(
-                        path.read_bytes()
-                    ).hexdigest()
-                    for path in [
-                        *sorted((self.source_root / "tools").glob("*.py")),
-                        self.source_root / "VERSION",
-                        self.source_root / "policy/requirements.json",
-                    ]
-                }
-            ),
+            **self.identity(),
         }
+        if any(job["kind"] == "agreement" for job in jobs):
+            process = run_process(
+                releases.checker_command(
+                    release, record_root, "agreement", self.root, "--project", name
+                ),
+                self.output / "planning-agreement",
+            )
+            report = child_report(process, release, execution)
+            validate_agreement_subject(report, plan)
+            plan["agreement"] = report
         self.verify_inputs(plan)
         self.verify_execution_records(record_root, plan)
         plan["planDigest"] = digest(plan)
@@ -418,13 +442,7 @@ class Coordinator:
             raise ValueError(
                 "Baseline or proposed records changed; renew candidate evidence"
             )
-        if (
-            support.assess(plan["release"]["version"], config["_support"])
-            != plan["support"]
-        ):
-            raise ValueError(
-                "Selected release support changed; renew candidate evidence"
-            )
+        verify_support(plan, config)
 
     def verify_execution_records(self, root, plan):
         if self.snapshot(root)[2] != plan["executionRecords"]:
@@ -434,6 +452,7 @@ class Coordinator:
         saved = records.read_json(self.args.plan)
         if not isinstance(saved, dict) or saved.get("scope") != "single-member":
             raise ValueError("Expected a captured single-member candidate plan")
+        require_attempt(self.args, saved)
         plan, root = self.capture(saved["project"], saved["batch"], saved["attempt"])
         if saved != plan:
             raise ValueError(
@@ -450,6 +469,11 @@ class Coordinator:
             "attempt": plan["attempt"],
             "project": plan["project"],
             "system": self.args.system,
+            "executionSubject": {
+                "root": str(self.root),
+                "records": str(record_root),
+                "source": plan["source"],
+            },
             "results": [],
             "issues": [],
         }
@@ -508,6 +532,7 @@ class Coordinator:
             ],
             "lint": ["lint", self.root],
             "vm": ["vm", self.root, "--project", plan["project"]],
+            "agreement": ["agreement", self.root, "--project", plan["project"]],
             "compatibility": [
                 "compatibility",
                 self.root,
@@ -618,7 +643,7 @@ class Coordinator:
             validate_member_report(report, plan, kind, job=job)
             result["report"] = report
 
-    def aggregate(self, plan):
+    def aggregate(self, plan, *, evidence=None):
         result = {
             "status": "candidate-pass",
             "scope": "single-member",
@@ -632,9 +657,14 @@ class Coordinator:
         }
         expected = {job["id"]: job for job in plan["jobs"]}
         seen = set()
-        for path in sorted(self.args.results.glob("**/result.json")):
+        paths = (
+            [(path, None) for path in sorted(self.args.results.glob("**/result.json"))]
+            if evidence is None
+            else evidence
+        )
+        for path, supplied in paths:
             try:
-                worker = records.read_json(path)
+                worker = records.read_json(path) if supplied is None else supplied
                 if worker.get("scope") != "native-member-results":
                     continue
                 if (
@@ -648,9 +678,22 @@ class Coordinator:
                 if (
                     worker.get("status") != "candidate-pass"
                     or not isinstance(worker.get("results"), list)
+                    or worker.get("issues") != []
+                    or type(worker.get("native", {}).get("returncode")) is not int
                     or worker.get("native", {}).get("returncode") != 0
                     or worker.get("native", {}).get("stdout", "").strip()
                     != worker.get("system")
+                    or worker.get("native", {}).get("command")
+                    != [
+                        "nix",
+                        "eval",
+                        "--raw",
+                        "--impure",
+                        "--expr",
+                        "builtins.currentSystem",
+                    ]
+                    or worker.get("executionSubject", {}).get("source")
+                    != plan["source"]
                 ):
                     raise ValueError(
                         "Required native worker failed or returned malformed evidence"
@@ -669,6 +712,7 @@ class Coordinator:
                     seen.add(key)
                     if item.get("status") != "pass" or item.get("issues"):
                         raise ValueError(f"Required job did not pass: {key}")
+                    validate_job_commands(item, worker, plan)
                     if job["kind"] == "additional":
                         # Refresh externally owned gates; saved strings cannot assert success.
                         item["evidence"] = additional_evidence(
@@ -798,7 +842,16 @@ def run_process(command, output):
 
 
 def child_report(process, release, snapshot):
-    if process["returncode"] not in {0, 1}:
+    if process.get("command", [])[:6] != [
+        "nix",
+        "run",
+        "--no-update-lock-file",
+        f"github:{release['repository']}/{release['revision']}",
+        "--",
+        "--policy-root",
+    ]:
+        raise ValueError("Selected checker execution did not use its immutable source")
+    if type(process["returncode"]) is not int or process["returncode"] not in {0, 1}:
         raise ValueError(
             process["stderr"].strip() or "Selected checker could not execute"
         )
@@ -832,6 +885,138 @@ def validate_committed_execution(process):
         )
     ):
         raise ValueError("Missing full committed-lock root execution")
+
+
+def validate_job_commands(item, worker, plan):
+    job = item["job"]
+    if job["kind"] == "additional":
+        return
+    subject = worker["executionSubject"]
+    root, record_root = subject["root"], subject["records"]
+    if (
+        not isinstance(root, str)
+        or not isinstance(record_root, str)
+        or not Path(root).is_absolute()
+        or not Path(record_root).is_absolute()
+    ):
+        raise ValueError("Missing captured execution paths")
+    commands = [process["command"] for process in item["commands"]]
+    if any(
+        type(process.get("returncode")) is not int or process["returncode"] != 0
+        for process in item["commands"]
+    ):
+        raise ValueError(
+            "Required execution did not return a successful process outcome"
+        )
+    committed = [
+        "nix",
+        "flake",
+        "check",
+        root,
+        "--no-update-lock-file",
+        "--print-build-logs",
+    ]
+    arguments = {
+        "compliance": [
+            "check",
+            root,
+            "--project",
+            plan["project"],
+            "--batch",
+            plan["batch"],
+            "--readiness",
+            "--shell",
+        ],
+        "lint": ["lint", root],
+        "vm": ["vm", root, "--project", plan["project"]],
+        "agreement": ["agreement", root, "--project", plan["project"]],
+    }
+    if job["kind"] == "tests":
+        expected = [committed]
+    elif (
+        job["kind"] == "compatibility" and plan["compatibilityMode"] == "committed-pair"
+    ):
+        expected = [
+            releases.checker_command(
+                plan["release"], Path(record_root), *arguments["compliance"][:-1]
+            ),
+            ["nix", "flake", "metadata", root, "--json", "--no-update-lock-file"],
+            [
+                "nix",
+                "eval",
+                "--json",
+                f"{root}#checks.{job['system']}",
+                "--apply",
+                "builtins.attrNames",
+                "--no-update-lock-file",
+            ],
+            committed,
+        ]
+        if item.get("checks") != json.loads(
+            item["commands"][2]["stdout"], object_pairs_hook=records.unique_mapping
+        ):
+            raise ValueError(
+                "Historical check coverage disagrees with execution output"
+            )
+    else:
+        if job["kind"] == "compatibility":
+            arguments["compatibility"] = [
+                "compatibility",
+                root,
+                "--project",
+                plan["project"],
+                "--batch",
+                plan["batch"],
+                "--channel",
+                job["channel"],
+                "--output",
+                commands[0][-1],
+            ]
+            for process in item.get("report", {}).get("commands", []):
+                command = process.get("command", [])
+                if command[:3] == ["nix", "flake", "check"] and (
+                    command[3] != root
+                    or command[-3:]
+                    != [
+                        "--override-input",
+                        "nixpkgs",
+                        f"github:NixOS/nixpkgs/{plan['pins'][job['channel']]}",
+                    ]
+                ):
+                    raise ValueError(
+                        "Compatibility execution substituted its root or candidate"
+                    )
+        expected = [
+            releases.checker_command(
+                plan["release"], Path(record_root), *arguments[job["kind"]]
+            )
+        ]
+    if commands != expected:
+        raise ValueError(
+            "Required execution substituted the selected checker, source, or gate"
+        )
+
+
+def validate_agreement_subject(report, plan):
+    for field, expected in {
+        "project": plan["project"],
+        "revision": plan["source"]["revision"],
+        "policyVersion": plan["release"]["version"],
+        "memberSettings": plan["memberSettings"],
+        "support": plan["support"],
+        "records": plan["executionRecords"],
+        "behavioralIntegration": "not-run",
+    }.items():
+        if report.get(field) != expected:
+            raise ValueError("Agreement checker substituted the integration subject")
+    if (
+        not isinstance(report.get("members"), list)
+        or not report["members"]
+        or not isinstance(report.get("lockfiles"), list)
+        or not report["lockfiles"]
+        or not re.fullmatch(r"[0-9a-f]{64}", str(report.get("dependencySetDigest")))
+    ):
+        raise ValueError("Agreement requires captured locked dependency evidence")
 
 
 def validate_member_report(report, plan, kind, *, job=None):
@@ -884,6 +1069,15 @@ def validate_member_report(report, plan, kind, *, job=None):
             )
     if kind == "vm" and report.get("targets") != plan["memberSettings"]["vmTargets"]:
         raise ValueError("Selected checker did not execute the required VM targets")
+    if kind == "agreement":
+        validate_agreement_subject(report, plan)
+        if report != plan.get("agreement") or any(
+            member.get("status") != "pass"
+            or member.get("policyVersion") != plan["release"]["version"]
+            or member.get("support", {}).get("status") != "supported"
+            for member in report["members"]
+        ):
+            raise ValueError("Integration agreement changed or did not pass")
     if releases.version_at_least(plan["release"]["version"], (0, 4, 0)) and kind in {
         "compliance",
         "compatibility",
@@ -951,7 +1145,42 @@ def additional_evidence(repository, revision, gate):
     }
 
 
+def require_attempt(args, plan):
+    if args.attempt is not None and args.attempt != plan.get("attempt"):
+        raise ValueError("Evidence belongs to a different expected attempt")
+
+
+def verify_support(plan, config, *, at=None):
+    if (
+        support.assess(plan["release"]["version"], config["_support"], at=at)
+        != plan["support"]
+    ):
+        raise ValueError("Selected release support changed; renew candidate evidence")
+    for member in plan.get("agreement", {}).get("members", []):
+        if (
+            "support" in member
+            and support.assess(member["policyVersion"], config["_support"], at=at)
+            != member["support"]
+        ):
+            raise ValueError(
+                "Locked member support changed; renew integration evidence"
+            )
+
+
 def run(args, **services):
+    whole = getattr(args, "all", False)
+    if args.operation != "plan" and not whole:
+        try:
+            saved = records.read_json(args.plan)
+            whole = isinstance(saved, dict) and saved.get("scope") == "whole-batch"
+        except ERRORS:
+            pass
+    if whole:
+        if __package__:
+            from . import batches
+        else:
+            import batches
+        return batches.run(args, **services)
     coordinator = None
     result = {
         "status": "error",

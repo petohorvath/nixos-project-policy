@@ -118,7 +118,11 @@ class Services:
         config, pins = policy.load_policy(record_root)
         version = declarations_version(self.root)
         operation = arguments[2]
-        name = "example"
+        name = (
+            arguments[arguments.index("--project") + 1]
+            if "--project" in arguments
+            else self.root.name
+        )
         member = config["projects"][name]
         if operation == "ci":
             report = {

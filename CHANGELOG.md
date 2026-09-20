@@ -15,6 +15,7 @@
 - Add single-member candidate planning, native execution, and replayable aggregation against unmerged proposals. Keep baseline authority separate from proposed approval fields, use each selected immutable checker, preserve legacy lock requirements, and retain complete gate evidence without granting batch approval.
 - Check integration policy agreement at exact committed member dependency revisions, including reachable transitive members, follows, aliases, and independent lock scopes. Preserve behavioral integration tests and reject mixed selections, cycles, missing declarations, and unavailable sources.
 - Provide the separate `Integration / Policy agreement` gate and caller template with primary Policy source/record snapshot outputs. Keep member upgrades independent of the integration project's locked set.
+- Extend candidate coordination to the complete trusted roster, with exact locked integration evidence, required native worker accounting, strict attempt and execution bindings, and retained replay artifacts. Add a manual whole-batch workflow and distinguish complete candidate eligibility from human approval.
 
 ### Migration
 

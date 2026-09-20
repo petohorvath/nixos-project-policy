@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.0 (prepared)
+
+- Read policy selection and member settings from one literal reusable-workflow caller, independently of central legacy selections or adoption state.
+- Require `required_architectures` as a JSON list encoded as a string; default `vm_targets` and `additional_required_checks` to empty lists. Reject ambiguous callers, dynamic inputs, malformed settings, and mismatched release references.
+- Use the same validated declarations for local checking, hosted planning, compatibility execution, and VM targets. Preserve separate compliance, formatting/lint, committed-lock, both compatibility channels, and applicable x86_64 VM gates.
+- Capture one member commit with checker and record commits for all hosted jobs; validate hosted input parity with that checkout.
+- Allow full pre-enrollment checks and report enrollment separately from check results. Preserve older immutable checker contracts and complete legacy records, including global check lists and historical batch identities.
+
+- Keep active enrollment in an identity-only roster, independently of complete legacy records. Audit exact member revisions with their discovered published immutable checkers and validated report identities; retain missing enforcement and inaccessible metadata as visible failures.
+
+- Add explicit retirement decisions with migration periods, shared enforcement in local commands, CI, and audits, and stable support assessments for evidence. Preserve support when newer releases publish.
+- Guard legacy cleanup against trusted prior records, supported immutable patch releases, and exact member migration evidence; keep all real retirement decisions empty.
+- Add single-member candidate planning, native execution, and replayable aggregation against unmerged proposals. Keep baseline authority separate from proposed approval fields, use each selected immutable checker, preserve legacy lock requirements, and retain complete gate evidence without granting batch approval.
+- Check integration policy agreement at exact committed member dependency revisions, including reachable transitive members, follows, aliases, and independent lock scopes. Preserve behavioral integration tests and reject mixed selections, cycles, missing declarations, and unavailable sources.
+- Provide the separate `Integration / Policy agreement` gate and caller template with primary Policy source/record snapshot outputs. Keep member upgrades independent of the integration project's locked set.
+- Extend candidate coordination to the complete trusted roster, with exact locked integration evidence, required native worker accounting, strict attempt and execution bindings, and retained replay artifacts. Add a manual whole-batch workflow and distinguish complete candidate eligibility from human approval.
+- Validate routine root-only shared-pin updates in one central PR. Attach `Pin batch / Complete candidate` to the exact proposal head after trusted native worker and artifact verification; renew evidence when its authority or subjects change. Keep candidate execution separate from human-reviewed approval and separately activate the live merge gate. See the [pin routine](docs/maintenance.md#pin-candidates-and-approval).
+
+### Migration
+
+After separately authorized publication, update member policy links, the caller reference, and `policy_version` in one reviewed member PR. Put the intended architectures, VM targets, and additional gates into caller inputs. Use `ci PATH --project NAME` to review the generated names; verify actual statuses and merge settings, and justify any coverage reduction explicitly. Keep central legacy copies unchanged until [explicit retirement and completed migration](docs/maintenance.md#retirement-and-legacy-cleanup) permit cleanup. This prepared release does not publish a tag, migrate members, change live settings, approve pins, or retire older releases. See [migration guidance](docs/maintenance.md#migration-to-v040-prepared).
+
 ## 0.3.0
 
 - Derive mandatory GitHub merge gates from the selected policy release, `requiredArchitectures`, and `vmTargets`, with optional `additionalRequiredChecks` for project-specific gates.

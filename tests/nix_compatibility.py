@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -50,8 +51,33 @@ class NixCompatibilityTests(unittest.TestCase):
 }
 """.replace("STABLE", pins["stable"])
             )
+            release = "v" + (policy.SOURCE_ROOT / "VERSION").read_text().strip()
+            caller = project / ".github/workflows/policy.yml"
+            caller.parent.mkdir(parents=True)
+            caller.write_text(
+                json.dumps(
+                    {
+                        "on": {
+                            "pull_request": {
+                                "types": ["opened", "synchronize", "reopened", "edited"]
+                            }
+                        },
+                        "jobs": {
+                            "policy": {
+                                "name": "Policy",
+                                "uses": f"petohorvath/nixos-project-policy/.github/workflows/check.yml@{release}",
+                                "with": {
+                                    "project": "fixture",
+                                    "policy_version": release,
+                                    "required_architectures": '["x86_64-linux", "aarch64-linux"]',
+                                },
+                            }
+                        },
+                    }
+                )
+            )
             self.run_command(["git", "init", "-q", str(project)])
-            self.run_command(["git", "-C", str(project), "add", "flake.nix"])
+            self.run_command(["git", "-C", str(project), "add", "flake.nix", ".github"])
             self.run_command(["nix", "flake", "lock", str(project)])
             self.run_command(["git", "-C", str(project), "add", "flake.lock"])
             self.run_command(
@@ -94,7 +120,14 @@ class NixCompatibilityTests(unittest.TestCase):
             (records / "pins.json").write_text(
                 json.dumps({"schemaVersion": 1, "approved": pins, "batches": []})
             )
+            (records / "members.json").write_text(
+                json.dumps({"schemaVersion": 1, "members": {}})
+            )
+            (records / "support.json").write_text(
+                json.dumps({"schemaVersion": 1, "retirements": {}})
+            )
             lock_before = (project / "flake.lock").read_bytes()
+            caller_before = caller.read_bytes()
             self.run_command(
                 [
                     "nix",
@@ -131,6 +164,55 @@ class NixCompatibilityTests(unittest.TestCase):
                     self.assertEqual(report["commands"][-1]["returncode"], 0)
                     self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
                     self.assertTrue((evidence / "metadata.json").is_file())
+            proposal = workspace / "proposal"
+            shutil.copytree(records.parent, proposal)
+            approved_before = (records / "pins.json").read_bytes()
+            (proposal / "policy/pins.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "approved": None,
+                        "batches": [
+                            {
+                                "id": "unmerged",
+                                "status": "candidate",
+                                "pins": pins,
+                                "projects": {"fixture": policy.git_revision(project)},
+                            }
+                        ],
+                    }
+                )
+            )
+            for channel, revision in pins.items():
+                with self.subTest(candidate_channel=channel):
+                    report = json.loads(
+                        self.run_command(
+                            [
+                                sys.executable,
+                                str(policy.SOURCE_ROOT / "tools/policy.py"),
+                                "--policy-root",
+                                str(proposal),
+                                "compatibility",
+                                str(project),
+                                "--project",
+                                "fixture",
+                                "--batch",
+                                "unmerged",
+                                "--channel",
+                                channel,
+                                "--output",
+                                str(workspace / f"candidate-{channel}"),
+                            ]
+                        )
+                    )
+                    self.assertEqual(report["status"], "candidate-pass", report)
+                    self.assertEqual(report["resolvedRevision"], revision)
+                    self.assertEqual(report["pinStatus"], "candidate")
+                    self.assertEqual(caller.read_bytes(), caller_before)
+                    self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
+                    self.assertEqual(
+                        (records / "pins.json").read_bytes(), approved_before
+                    )
             flake.write_text(
                 flake.read_text().replace(pins["stable"], pins["unstable"])
             )

@@ -1,0 +1,158 @@
+"""Test-only external services for the packaged release-transition scenario.
+
+Loaded by a temporary sitecustomize, never by production checker code. Real
+packaged entrypoints and immutable legacy sources execute all policy decisions.
+"""
+
+import base64
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+from urllib import request
+
+from tests.fixtures.github import GitHub, request_path
+
+
+CONFIG = json.loads(Path(os.environ["POLICY_TRANSITION_FIXTURE"]).read_text())
+REAL_RUN = subprocess.run
+REAL_OUTPUT = subprocess.check_output
+STATE = Path(CONFIG["state"])
+
+
+class PackagedGitHub(GitHub):
+    def lookup(self, query):
+        path = request_path(query)
+        if path in self.responses:
+            return super().lookup(query)
+        if "/releases/tags/" in path:
+            version = path.rsplit("/", 1)[1]
+            assert version in CONFIG["releases"], path
+            return {
+                "tag_name": version,
+                "immutable": True,
+                "draft": False,
+                "prerelease": False,
+            }
+        if "/git/ref/tags/" in path:
+            return {
+                "object": {
+                    "type": "commit",
+                    "sha": CONFIG["releases"][path.rsplit("/", 1)[1]]["revision"],
+                }
+            }
+        if "/contents/policy/requirements.json" in path:
+            revision = query.full_url.rsplit("ref=", 1)[1]
+            release = next(
+                value
+                for value in CONFIG["releases"].values()
+                if value["revision"] == revision
+            )
+            return {
+                "encoding": "base64",
+                "content": base64.b64encode(
+                    Path(release["requirements"]).read_bytes()
+                ).decode(),
+            }
+        if "/git/commits/" in path:
+            name, revision = path.split("/")[2], path.rsplit("/", 1)[1]
+            process = REAL_RUN(
+                [
+                    "git",
+                    "-C",
+                    CONFIG["members"][name],
+                    "cat-file",
+                    "-e",
+                    revision + "^{commit}",
+                ],
+                capture_output=True,
+            )
+            assert process.returncode == 0, path
+            return {"sha": revision}
+        if "/commits/" in path and path.endswith("/check-runs"):
+            return {
+                "check_runs": [
+                    {
+                        "name": "Member / Extra",
+                        "head_sha": path.split("/")[-2],
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
+            }
+        return super().lookup(query)
+
+
+def transport(query, **kwargs):
+    github = PackagedGitHub.load(STATE)
+    response = github.transport(query, **kwargs)
+    github.save(STATE)
+    return response
+
+
+def run(command, **kwargs):
+    command = list(map(str, command))
+    if Path(command[0]).name != "nix":
+        return REAL_RUN(command, **kwargs)
+    if command[1] == "run":
+        revision = command[3].rsplit("/", 1)[1]
+        assert command[1:4] == [
+            "run",
+            "--no-update-lock-file",
+            f"github:{CONFIG['policyRepository']}/{revision}",
+        ], command
+        release = next(
+            value
+            for value in CONFIG["releases"].values()
+            if value["revision"] == revision
+        )
+        arguments = command[command.index("--") + 1 :]
+        if "program" in release:
+            return REAL_RUN([release["program"], *arguments], **kwargs)
+        bootstrap = (
+            "import runpy; runpy.run_path("
+            + repr(release["source"])
+            + ", run_name='__main__', init_globals={'PACKAGED_REVISION': "
+            + repr(revision)
+            + "})"
+        )
+        return REAL_RUN([sys.executable, "-c", bootstrap, *arguments], **kwargs)
+    with Path(CONFIG["commands"]).open("a") as stream:
+        stream.write(json.dumps(command) + "\n")
+    output = ""
+    if command[1:3] == ["flake", "metadata"]:
+        graph = json.loads((Path(command[3]) / "flake.lock").read_text())
+        if "--override-input" in command:
+            root = graph["nodes"][graph["root"]]
+            graph["nodes"][root["inputs"]["nixpkgs"]]["locked"]["rev"] = command[
+                -1
+            ].rsplit("/", 1)[1]
+        output = json.dumps({"locks": graph})
+    elif command[1] == "eval":
+        output = (
+            os.environ.get("POLICY_TRANSITION_SYSTEM", CONFIG["system"])
+            if "--impure" in command
+            else '["behavior"]'
+        )
+    elif command[1] not in {"develop", "fmt", "build"} and command[1:3] != [
+        "flake",
+        "check",
+    ]:
+        raise AssertionError(f"Unconfigured Nix operation: {command}")
+    if not kwargs.get("text"):
+        output = output.encode()
+    return subprocess.CompletedProcess(
+        command, 0, output, "" if kwargs.get("text") else b""
+    )
+
+
+def check_output(command, **kwargs):
+    if Path(command[0]).name == "nix":
+        return run(command, **kwargs).stdout
+    return REAL_OUTPUT(command, **kwargs)
+
+
+request.urlopen = transport
+subprocess.run = run
+subprocess.check_output = check_output

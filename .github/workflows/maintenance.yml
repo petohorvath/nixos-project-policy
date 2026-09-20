@@ -1,15 +1,48 @@
 name: Maintenance
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: "23 6 * * *"
     - cron: "23 7 * * 1"
   workflow_dispatch:
+    inputs:
+      stable_revision:
+        description: Optional exact urgent stable revision; supply both revisions
+        type: string
+      unstable_revision:
+        description: Optional exact urgent unstable revision; supply both revisions
+        type: string
 
 permissions:
   contents: read
 
 jobs:
+  invalidate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.34.6/install
+      - name: Invalidate stale open pin proposal results
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: nix run --no-update-lock-file .# -- --policy-root . pin-pr invalidate --output "$RUNNER_TEMP/pin-invalidation"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: pin-invalidation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pin-invalidation
+          if-no-files-found: error
   audit:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 6 * * *'
     runs-on: ubuntu-24.04
@@ -20,7 +53,7 @@ jobs:
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
         with:
           install_url: https://releases.nixos.org/nix/nix-2.34.6/install
-      - name: Audit public checkouts and adopted merge gates
+      - name: Audit enrolled selections and merge gates
         env:
           GH_TOKEN: ${{ secrets.MEMBER_AUDIT_TOKEN }}
         run: nix run --no-update-lock-file .# -- --policy-root . audit "$RUNNER_TEMP/projects" --fetch --github > audit.json
@@ -41,10 +74,20 @@ jobs:
         with:
           install_url: https://releases.nixos.org/nix/nix-2.34.6/install
       - name: Prepare an unapproved pair for review
+        env:
+          STABLE_REVISION: ${{ inputs.stable_revision }}
+          UNSTABLE_REVISION: ${{ inputs.unstable_revision }}
         run: |
-          stable_branch=$(jq -r .stableBranch policy/projects.json)
-          stable_rev=$(git ls-remote https://github.com/NixOS/nixpkgs.git "refs/heads/$stable_branch" | cut -f1)
-          unstable_rev=$(git ls-remote https://github.com/NixOS/nixpkgs.git refs/heads/nixos-unstable | cut -f1)
+          if test -n "$STABLE_REVISION" || test -n "$UNSTABLE_REVISION"; then
+            [[ "$STABLE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$UNSTABLE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+            stable_rev=$STABLE_REVISION
+            unstable_rev=$UNSTABLE_REVISION
+          else
+            stable_branch=$(jq -r .stableBranch policy/projects.json)
+            stable_rev=$(git ls-remote https://github.com/NixOS/nixpkgs.git "refs/heads/$stable_branch" | cut -f1)
+            unstable_rev=$(git ls-remote https://github.com/NixOS/nixpkgs.git refs/heads/nixos-unstable | cut -f1)
+          fi
           nix run --no-update-lock-file .# -- candidate --stable "$stable_rev" --unstable "$unstable_rev" > candidate.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

@@ -1,0 +1,30 @@
+name: Integration project checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    name: Policy
+    uses: petohorvath/nixos-project-policy/.github/workflows/check.yml@POLICY_VERSION
+    with:
+      project: PROJECT_NAME
+      policy_version: POLICY_VERSION
+      required_architectures: '["x86_64-linux", "aarch64-linux"]'
+      additional_required_checks: '["Integration / Policy agreement"]'
+  agreement:
+    name: Integration
+    needs: policy
+    uses: petohorvath/nixos-project-policy/.github/workflows/agreement.yml@POLICY_VERSION
+    with:
+      project: PROJECT_NAME
+      policy_version: POLICY_VERSION
+      project_revision: ${{ needs.policy.outputs.project_revision }}
+      records_revision: ${{ needs.policy.outputs.records_revision }}

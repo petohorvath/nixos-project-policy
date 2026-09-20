@@ -1,0 +1,173 @@
+name: Candidate member validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      proposal_revision:
+        description: Exact policy commit containing the proposed pin batch
+        required: true
+        type: string
+      project:
+        description: One enrolled member to validate
+        required: true
+        type: string
+      batch:
+        description: Proposed batch identifier
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      baseline: ${{ steps.subject.outputs.baseline }}
+      proposal: ${{ steps.subject.outputs.proposal }}
+      repository: ${{ steps.subject.outputs.repository }}
+      revision: ${{ steps.subject.outputs.revision }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          path: authority
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.proposal_revision }}
+          path: proposal
+          persist-credentials: false
+      - name: Capture the exact enrolled subject
+        id: subject
+        env:
+          PROJECT: ${{ inputs.project }}
+          BATCH: ${{ inputs.batch }}
+          PROPOSAL_REVISION: ${{ inputs.proposal_revision }}
+        run: |
+          [[ "$PROPOSAL_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PROJECT" =~ ^[a-z0-9-]+$ ]]
+          repository=$(jq -er --arg project "$PROJECT" '.members[$project]' authority/policy/members.json)
+          revision=$(jq -er --arg batch "$BATCH" --arg project "$PROJECT" '.batches[] | select(.id == $batch) | .projects[$project]' proposal/policy/pins.json)
+          [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C proposal rev-parse HEAD)" = "$PROPOSAL_REVISION"
+          git init member
+          git -C member fetch --depth 1 "https://github.com/$repository.git" "$revision"
+          git -C member checkout --detach FETCH_HEAD
+          printf 'baseline=%s\n' "$(git -C authority rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          printf 'proposal=%s\nrepository=%s\nrevision=%s\n' "$PROPOSAL_REVISION" "$repository" "$revision" >> "$GITHUB_OUTPUT"
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.34.6/install
+      - name: Plan selected-release candidate coverage
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROJECT: ${{ inputs.project }}
+          BATCH: ${{ inputs.batch }}
+          ATTEMPT: ${{ github.run_id }}:${{ github.run_attempt }}
+        run: |
+          nix run --no-update-lock-file ./authority -- --policy-root ./authority pin-batch plan ./member --proposal-root ./proposal --project "$PROJECT" --batch "$BATCH" --attempt "$ATTEMPT" --output "$RUNNER_TEMP/candidate-plan"
+          matrix=$(jq -ce '.matrix' "$RUNNER_TEMP/candidate-plan/plan.json")
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+      - name: Preserve plan and inspection failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-plan-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-plan
+          if-no-files-found: error
+  execute:
+    name: Candidate member (${{ matrix.system }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.baseline }}
+          path: authority
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.proposal }}
+          path: proposal
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ needs.plan.outputs.repository }}
+          ref: ${{ needs.plan.outputs.revision }}
+          path: member
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: candidate-plan-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-plan
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.34.6/install
+          enable_kvm: ${{ matrix.system == 'x86_64-linux' }}
+      - name: Execute required native candidate checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SYSTEM: ${{ matrix.system }}
+        run: nix run --no-update-lock-file ./authority -- --policy-root ./authority pin-batch execute ./member --proposal-root ./proposal --plan "$RUNNER_TEMP/candidate-plan/plan.json" --system "$SYSTEM" --output "$RUNNER_TEMP/candidate-result"
+      - name: Preserve native results and failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-result-${{ github.run_attempt }}-${{ matrix.system }}
+          path: ${{ runner.temp }}/candidate-result
+          if-no-files-found: error
+  aggregate:
+    name: Complete candidate member
+    needs: [plan, execute]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.baseline }}
+          path: authority
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.proposal }}
+          path: proposal
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ needs.plan.outputs.repository }}
+          ref: ${{ needs.plan.outputs.revision }}
+          path: member
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: candidate-plan-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: candidate-result-${{ github.run_attempt }}-*
+          path: ${{ runner.temp }}/candidate-results
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.34.6/install
+      - name: Require complete single-member evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXECUTION_RESULT: ${{ needs.execute.result }}
+        run: |
+          nix run --no-update-lock-file ./authority -- --policy-root ./authority pin-batch aggregate ./member --proposal-root ./proposal --plan "$RUNNER_TEMP/candidate-plan/plan.json" --results "$RUNNER_TEMP/candidate-results" --output "$RUNNER_TEMP/candidate-summary"
+          test "$EXECUTION_RESULT" = success
+      - name: Preserve the partial-batch assessment
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-summary-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-summary
+          if-no-files-found: error

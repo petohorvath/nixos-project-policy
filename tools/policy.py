@@ -12,10 +12,39 @@ import subprocess
 import sys
 import tempfile
 from urllib.error import HTTPError
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-import yaml
+if __package__:
+    from . import (
+        agreement,
+        batches,
+        candidates,
+        declarations,
+        locks,
+        pin_pr,
+        records,
+        releases,
+        support,
+        transitions,
+    )
+else:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import agreement
+    import batches
+    import candidates
+    import declarations
+    import locks
+    import pin_pr
+    import records
+    import releases
+    import support
+    import transitions
+
+ci_plan = declarations.ci_plan
+LockGraph = locks.LockGraph
+repository_identity = locks.repository_identity
+dependency_cycles = locks.dependency_cycles
 
 
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
@@ -25,7 +54,6 @@ POLICY_VERSION = re.compile(
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 REQUIREMENT_FIELDS = ("systems", "requiredTools", "readmeSections", "ci")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
-PR_ACTIVITIES = {"opened", "synchronize", "reopened", "edited"}
 ACTIVE_BATCH_STATES = {"approved", "rolling", "paused"}
 TITLE = re.compile(
     r"(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)"
@@ -49,11 +77,32 @@ def main(argv=None):
         "--policy-root", type=Path, help="Trusted checkout of current central records"
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("validate", help="Validate the central records")
+    validate = commands.add_parser("validate", help="Validate the central records")
+    validate.add_argument(
+        "--previous-policy-root",
+        type=Path,
+        help="Trusted prior snapshot for reviewing legacy-record removals",
+    )
+    validate.add_argument(
+        "--workspace",
+        type=Path,
+        help="Exact member checkouts needed to prove migration before legacy cleanup",
+    )
     ci = commands.add_parser(
         "ci", help="Report a member's CI matrix and required gates"
     )
+    ci.add_argument("project_dir", type=Path, nargs="?", default=Path("."))
     ci.add_argument("--project", required=True)
+    ci.add_argument(
+        "--inputs-json",
+        help="Hosted workflow inputs to compare with local declarations",
+    )
+    agreement_command = commands.add_parser(
+        "agreement",
+        help="Compare policy selections at committed member dependency revisions",
+    )
+    agreement_command.add_argument("project_dir", type=Path)
+    agreement_command.add_argument("--project", required=True)
     title = commands.add_parser("title", help="Check a Conventional Commit PR title")
     title.add_argument("title")
     check = commands.add_parser(
@@ -64,7 +113,7 @@ def main(argv=None):
     check.add_argument(
         "--readiness",
         action="store_true",
-        help="Allow enrollment readiness before adoption",
+        help="Accepted for legacy invocations; checks do not require enrollment",
     )
     check.add_argument(
         "--batch", help="Registered candidate batch, bound to the tested commit"
@@ -95,30 +144,42 @@ def main(argv=None):
     )
     shell.add_argument("project_dir", type=Path)
     vm = commands.add_parser(
-        "vm", help="Run the centrally declared VM targets on a suitable host"
+        "vm", help="Run member-declared VM targets on a suitable host"
     )
     vm.add_argument("project_dir", type=Path)
     vm.add_argument("--project", required=True)
     audit = commands.add_parser(
-        "audit", help="Report family drift and pending adoption"
+        "audit", help="Inspect every enrolled member's selected policy"
     )
     audit.add_argument("workspace", type=Path)
     audit.add_argument(
         "--fetch", action="store_true", help="Clone missing public checkouts"
     )
     audit.add_argument(
-        "--github", action="store_true", help="Inspect adopted projects' merge gates"
+        "--github", action="store_true", help="Inspect enrolled members' merge gates"
     )
     candidate = commands.add_parser(
         "candidate", help="Print an unapproved pin proposal"
     )
     candidate.add_argument("--stable", required=True)
     candidate.add_argument("--unstable", required=True)
+    candidates.add_commands(commands)
+    pin_pr.add_commands(commands)
     args = parser.parse_args(argv)
     try:
         require_policy_version(f"v{version}")
         if (
-            args.command in {"check", "audit", "vm", "compatibility", "ci"}
+            args.command
+            in {
+                "check",
+                "audit",
+                "vm",
+                "compatibility",
+                "ci",
+                "agreement",
+                "pin-batch",
+                "pin-pr",
+            }
             and args.policy_root is None
         ):
             raise ValueError(
@@ -126,30 +187,100 @@ def main(argv=None):
                 "a policy release's bundled pins do not establish current approval"
             )
         records_root = args.policy_root or SOURCE_ROOT
+        if args.command == "pin-pr":
+            result = pin_pr.run(args, load_policy=load_policy)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return {"fail": 1, "error": 2}.get(result.get("status"), 0)
+        if args.command == "pin-batch":
+            whole = args.all
+            if args.operation != "plan" and not whole:
+                try:
+                    saved = records.read_json(args.plan)
+                    whole = (
+                        isinstance(saved, dict) and saved.get("scope") == "whole-batch"
+                    )
+                except candidates.ERRORS:
+                    pass
+            run_batch = batches.run if whole else candidates.run
+            result = run_batch(
+                args,
+                source_root=SOURCE_ROOT,
+                load_policy=load_policy,
+                git_revision=git_revision,
+                git_dirty=git_dirty,
+                fingerprints=fingerprints,
+                lock_graph=LockGraph,
+                repository_identity=repository_identity,
+                orchestrator_revision=globals().get("PACKAGED_REVISION")
+                or git_revision(SOURCE_ROOT),
+            )
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return {"fail": 1, "error": 2}.get(result.get("status"), 0)
         config, pins = load_policy(records_root)
-        if args.command == "compatibility":
-            selected = config["projects"][args.project]["policyVersion"]
-            if selected != f"v{version}":
-                raise ValueError(
-                    f"Project {args.project} must select checker v{version}"
+        project = None
+        assessment = None
+        if args.command in {"check", "ci", "compatibility", "vm", "agreement"}:
+            project = member_project(
+                args.project_dir,
+                args.project,
+                config,
+                hosted_inputs=json.loads(args.inputs_json)
+                if args.command == "ci" and args.inputs_json is not None
+                else None,
+            )
+            assessment = support.assess(project["policyVersion"], config["_support"])
+        if assessment is not None and assessment["status"] == "retired":
+            records_revision = git_revision(records_root)
+            result = {
+                "status": "fail",
+                "project": args.project,
+                "policyVersion": project["policyVersion"],
+                "revision": git_revision(args.project_dir),
+                "memberSettings": member_settings(project),
+                "enrollment": enrollment(config, args.project),
+                "issues": [support.retirement_issue(assessment)],
+            }
+        elif args.command == "validate":
+            result = {
+                "status": "valid",
+                "approvedPins": pins["approved"] is not None,
+                "legacyCleanup": "not-assessed",
+            }
+            if args.previous_policy_root is not None:
+                result.update(
+                    transitions.validate_legacy_removal(
+                        args.previous_policy_root,
+                        records_root,
+                        args.workspace,
+                        config,
+                        pins,
+                        git_revision=git_revision,
+                        git_dirty=git_dirty,
+                    )
                 )
-        if args.command in {"check", "ci"}:
-            selected = config["projects"][args.project]["policyVersion"]
-            if selected is None and args.command == "ci":
-                raise ValueError("CI planning requires a selected policy release")
-            if selected is not None and selected != f"v{version}":
-                raise ValueError(
-                    f"Project {args.project} selects policy {selected}; "
-                    f"run that release instead of checker v{version}"
-                )
-        if args.command == "validate":
-            result = {"status": "valid", "approvedPins": pins["approved"] is not None}
+        elif args.command == "agreement":
+            result = agreement.inspect(
+                args.project_dir,
+                project,
+                config,
+                pins,
+                records_root,
+                git_revision=git_revision,
+                git_dirty=git_dirty,
+                load_records=load_policy,
+            )
+            result.update(
+                memberSettings=member_settings(project),
+                enrollment=enrollment(config, args.project),
+            )
         elif args.command == "ci":
-            project = config["projects"][args.project]
             result = {
                 "status": "planned",
                 "project": args.project,
                 "policyVersion": project["policyVersion"],
+                "memberSettings": member_settings(project),
+                "enrollment": enrollment(config, args.project),
+                "revision": git_revision(args.project_dir),
                 **ci_plan(project, config["ci"]),
             }
         elif args.command == "title":
@@ -174,9 +305,10 @@ def main(argv=None):
                 args.channel,
                 args.batch,
                 args.output,
+                project=project,
             )
         elif args.command == "vm":
-            targets = config["projects"][args.project]["vmTargets"]
+            targets = project["vmTargets"]
             for target in targets:
                 subprocess.run(
                     [
@@ -192,6 +324,9 @@ def main(argv=None):
             result = {
                 "status": "pass" if targets else "not-applicable",
                 "targets": targets,
+                "policyVersion": project["policyVersion"],
+                "memberSettings": member_settings(project),
+                "enrollment": enrollment(config, args.project),
             }
         elif args.command == "check":
             result = inspect_project(
@@ -200,7 +335,7 @@ def main(argv=None):
                 config,
                 pins,
                 args.batch,
-                readiness=args.readiness,
+                project=project,
             )
             if args.shell:
                 result["issues"].extend(
@@ -217,26 +352,30 @@ def main(argv=None):
                 args.github,
                 records_root=records_root,
             )
+        if assessment is not None:
+            current_support = support.assess(
+                project["policyVersion"], config["_support"]
+            )
+            if (
+                current_support["status"] == "retired"
+                and assessment["status"] != "retired"
+            ):
+                result["status"] = "error" if result["status"] == "error" else "fail"
+                result.setdefault("issues", []).append(
+                    support.retirement_issue(current_support)
+                )
+                result.pop("matrix", None)
+                result.pop("compatibilityMatrix", None)
+            result["support"] = current_support
+            result["selectionStatus"] = current_support["status"]
         result["checkerVersion"] = f"v{version}"
         result["policyRecordsRevision"] = (
             records_revision
             if args.command == "compatibility"
             else git_revision(records_root)
         )
-        result["policyRecordsDigest"] = hashlib.sha256(
-            json.dumps(
-                {
-                    "projects": {
-                        key: value
-                        for key, value in config.items()
-                        if key not in REQUIREMENT_FIELDS
-                    },
-                    "pins": pins,
-                },
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
-        if args.command == "compatibility":
+        result["policyRecordsDigest"] = records.digest(config, pins)
+        if args.command == "compatibility" and "artifacts" in result:
             (Path(result["artifacts"]) / "result.json").write_text(
                 json.dumps(result, indent=2, sort_keys=True) + "\n"
             )
@@ -249,7 +388,18 @@ def main(argv=None):
         TypeError,
         subprocess.SubprocessError,
     ) as error:
-        print(json.dumps({"status": "error", "error": str(error)}), file=sys.stderr)
+        print(
+            json.dumps(
+                {
+                    "status": "error",
+                    "selectionStatus": "invalid"
+                    if isinstance(error, (InvalidDeclaration, releases.InvalidRelease))
+                    else "unknown",
+                    "error": str(error),
+                }
+            ),
+            file=sys.stdout if args.command in {"audit", "agreement"} else sys.stderr,
+        )
         return 2
 
 
@@ -260,6 +410,12 @@ def load_policy(root):
         raise ValueError("Policy records must be JSON objects")
     if config.get("schemaVersion") != 2 or pins.get("schemaVersion") != 1:
         raise ValueError("Unsupported policy record schema")
+    if "_members" in config or "_support" in config:
+        raise ValueError(
+            "Enrollment and support belong in their own policy record files"
+        )
+    config["_members"] = records.load_members(root, config["projects"])
+    config["_support"] = support.load(root)
     requirements = read_json(SOURCE_ROOT / "policy/requirements.json")
     if requirements.get("schemaVersion") != 1:
         raise ValueError("Unsupported policy requirements schema")
@@ -285,7 +441,6 @@ def load_policy(root):
     for tool in config["requiredTools"]:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]*", tool):
             raise ValueError(f"Invalid tool name: {tool}")
-    checker_version = f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}"
     for name, project in config["projects"].items():
         if not re.fullmatch(r"[a-z0-9-]+", name) or not REPOSITORY.fullmatch(
             project["repository"]
@@ -310,7 +465,7 @@ def load_policy(root):
                 or len(set(architectures)) != len(architectures)
             ):
                 raise ValueError(f"Invalid requiredArchitectures for {name}")
-        if project["policyVersion"] == checker_version:
+        if project["policyVersion"] == "v0.3.0":
             if "requiredArchitectures" not in project:
                 raise ValueError(f"Project {name} needs requiredArchitectures")
             unsupported = set(project["requiredArchitectures"]) - set(config["systems"])
@@ -330,7 +485,7 @@ def load_policy(root):
             raise ValueError(
                 f"Project {name} needs policy v0.3.0 or later for additionalRequiredChecks"
             )
-        if project["policyVersion"] == checker_version:
+        if project["policyVersion"] == "v0.3.0":
             if "requiredChecks" in project:
                 required = set(ci_plan(project, config["ci"])["requiredChecks"])
                 if set(project["requiredChecks"]) != required:
@@ -343,18 +498,12 @@ def load_policy(root):
                 raise ValueError(
                     f"Adopted project {name} needs verified required check names"
                 )
-    # Older selected checkers validate every adopted record, including other releases.
-    if any(
-        project["policyVersion"] is not None
-        and not uses_derived_checks(project["policyVersion"])
-        for project in config["projects"].values()
-    ):
-        for name, project in config["projects"].items():
-            if project["adopted"] and not project.get("requiredChecks"):
-                raise ValueError(
-                    f"Adopted project {name} needs legacy requiredChecks while any "
-                    "member selects a policy release before v0.3.0"
-                )
+    # Retirement alone is not migration proof; retained adopted legacy entries stay readable.
+    for name, project in config["projects"].items():
+        if project["adopted"] and not project.get("requiredChecks"):
+            raise ValueError(
+                f"Adopted project {name} needs legacy requiredChecks until reviewed legacy cleanup"
+            )
     if pins["approved"] is not None:
         validate_pair(pins["approved"])
     ids = set()
@@ -389,48 +538,6 @@ def load_policy(root):
     return config, pins
 
 
-def ci_plan(project, requirements):
-    jobs = [
-        {
-            "check": check,
-            "system": architecture,
-            "runner": requirements["runners"][architecture],
-        }
-        for check in requirements["architectureChecks"]
-        for architecture in project["requiredArchitectures"]
-    ]
-    compatibility_jobs = [
-        {
-            "check": check.format(architecture=architecture),
-            "channel": channel,
-            "system": architecture,
-            "runner": requirements["runners"][architecture],
-        }
-        for channel, check in requirements["compatibilityChecks"].items()
-        for architecture in project["requiredArchitectures"]
-    ]
-    checks = [
-        *requirements["requiredChecks"],
-        *(
-            f"{requirements['callerJobName']} / {job['check']}"
-            for job in compatibility_jobs
-        ),
-        *(
-            f"{requirements['callerJobName']} / {job['check']} ({job['system']})"
-            for job in jobs
-        ),
-    ]
-    if project["vmTargets"]:
-        checks.append(requirements["vmCheck"])
-    return {
-        "matrix": {"include": jobs},
-        "compatibilityMatrix": {"include": compatibility_jobs},
-        "requiredChecks": list(
-            dict.fromkeys([*checks, *project.get("additionalRequiredChecks", [])])
-        ),
-    }
-
-
 def valid_check_names(checks):
     return (
         isinstance(checks, list)
@@ -445,11 +552,37 @@ def uses_derived_checks(version):
     ) >= (0, 3, 0)
 
 
-def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False):
+class InvalidDeclaration(ValueError):
+    """The inspected caller cannot select a valid policy contract."""
+
+
+def member_project(root, name, config, *, hosted_inputs=None):
+    try:
+        project = declarations.inspect(
+            root.resolve(),
+            config["policyRepository"],
+            name,
+            config,
+            checker_version=f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}",
+            hosted_inputs=hosted_inputs,
+        )
+        if agreement.GATE in project["additionalRequiredChecks"]:
+            agreement.require_caller(root, project, config["policyRepository"])
+        return project
+    except ValueError as error:
+        raise InvalidDeclaration(str(error)) from error
+
+
+def member_settings(project):
+    return {field: project[field] for field in declarations.INPUT_FIELDS.values()}
+
+
+def enrollment(config, name):
+    return "enrolled" if name in config["_members"] else "not-enrolled"
+
+
+def inspect_project(root, name, config, pins, batch_id=None, *, project):
     root = root.resolve()
-    if name not in config["projects"]:
-        raise ValueError(f"Unknown project: {name}")
-    project = config["projects"][name]
     issues = check_structure(root, config, project["policyVersion"])
     revision = git_revision(root)
     candidate = candidate_for(pins, name, revision, batch_id)
@@ -470,13 +603,14 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
     known_repos = {
         item["repository"].lower(): key for key, item in config["projects"].items()
     }
+    known_repos.update(
+        {repository.lower(): name for name, repository in config["_members"].items()}
+    )
     known_repos["petohorvath/nix-nftzones"] = "nixos-nftzones"
     for path in locks:
         lock = LockGraph(read_json(path))
         independent_node = None
-        if path == root / "flake.lock" and uses_input_overrides(
-            project["policyVersion"]
-        ):
+        if path == root / "flake.lock":
             try:
                 independent_node = selected_nixpkgs(lock)
             except ValueError as error:
@@ -552,49 +686,32 @@ def inspect_project(root, name, config, pins, batch_id=None, *, readiness=False)
         and not any(pins_match(shared_observations, pair) for pair in pairs)
     ):
         issues.append("pins: project lockfiles do not share one allowed pair")
-    issues.extend(
-        check_caller(
-            root,
-            config["policyRepository"],
-            project["policyVersion"],
-            name,
-            caller_name=config["ci"]["callerJobName"],
-        )
-    )
-    if not project["adopted"] and not readiness:
-        issues.append(
-            "adoption: project is pending; use --readiness to validate enrollment"
-        )
     if issues:
         status = "fail"
     elif candidate:
         status = "candidate-ready"
-    elif not project["adopted"]:
-        status = "ready"
     else:
         status = "pass"
-    report = {
+    return {
         "project": name,
         "policyVersion": project["policyVersion"],
         "revision": revision,
         "candidateBatch": candidate["id"] if candidate else None,
         "status": status,
         "compatibility": "not-run",
+        "enrollment": enrollment(config, name),
         "issues": issues,
         "pins": observations,
         "dependencies": sorted(dependencies),
+        "requiredChecks": ci_plan(project, config["ci"])["requiredChecks"],
+        "memberSettings": member_settings(project),
     }
-    if project["policyVersion"] == f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}":
-        report["requiredChecks"] = ci_plan(project, config["ci"])["requiredChecks"]
-    return report
 
 
-def uses_input_overrides(version):
-    return version is None or tuple(map(int, version.removeprefix("v").split("."))) >= (
-        0,
-        2,
-        0,
-    )
+def uses_member_declarations(version):
+    return version is not None and tuple(
+        map(int, version.removeprefix("v").split("."))
+    ) >= (0, 4, 0)
 
 
 def selected_nixpkgs(lock):
@@ -658,88 +775,24 @@ def check_structure(root, config, version=None):
     )
     for file in ["CONTRIBUTING.md", "AGENTS.md"]:
         path = root / file
-        if path.exists() and not rule_link.search(path.read_text()):
-            issues.append(
-                f"documentation: {file} needs the registered policy release's POLICY.md link"
+        if path.exists() and (
+            not rule_link.search(path.read_text())
+            or (
+                version
+                and any(
+                    linked != version
+                    for linked in re.findall(
+                        r"https://github\.com/"
+                        + re.escape(config["policyRepository"])
+                        + r"/blob/([^/\s]+)/POLICY\.md(?:[)#\s]|$)",
+                        path.read_text(),
+                    )
+                )
             )
-    return issues
-
-
-def check_caller(root, repository, version, project_name, *, caller_name):
-    issues = []
-    if version is None:
-        issues.append("ci: no policy release version is recorded")
-    expected = f"{repository}/.github/workflows/check.yml@{version}"
-    for path in sorted((root / ".github/workflows").glob("*")):
-        if path.suffix not in {".yml", ".yaml"}:
-            continue
-        try:
-            workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
-        except yaml.YAMLError as error:
-            issues.append(f"ci: invalid YAML in {path.name}: {error}")
-            continue
-        if not isinstance(workflow, dict):
-            continue
-        events = workflow.get("on", {})
-        has_pr = events == "pull_request" or (
-            isinstance(events, (dict, list)) and "pull_request" in events
-        )
-        for job in workflow.get("jobs", {}).values():
-            if (
-                has_pr
-                and isinstance(job, dict)
-                and version
-                and job.get("uses") == expected
-            ):
-                if job.get("name") != caller_name:
-                    issues.append(
-                        f"ci: policy caller job must be named '{caller_name}'"
-                    )
-                if "strategy" in job:
-                    issues.append(
-                        "ci: policy caller matrices are not supported; keep fixed status names"
-                    )
-                if job.get("if"):
-                    issues.append(
-                        "ci: the required policy caller must run for every PR"
-                    )
-                if "needs" in job:
-                    issues.append(
-                        "ci: policy caller dependencies are not supported; run it independently for every PR"
-                    )
-                if "continue-on-error" in job:
-                    issues.append("ci: policy caller must not suppress failures")
-                if uses_input_overrides(version) and set(job.get("with", {})) != {
-                    "project",
-                    "policy_version",
-                }:
-                    issues.append(
-                        "ci: policy caller accepts only project and policy_version; compatibility selection belongs to the policy runner"
-                    )
-                trigger = (
-                    events.get("pull_request") if isinstance(events, dict) else None
-                )
-                supported_activities = (
-                    isinstance(trigger, dict)
-                    and set(trigger) == {"types"}
-                    and isinstance(trigger["types"], list)
-                    and all(isinstance(activity, str) for activity in trigger["types"])
-                    and set(trigger["types"]) == PR_ACTIVITIES
-                )
-                if not supported_activities:
-                    issues.append(
-                        "ci: policy PR trigger must declare exactly opened, synchronize, reopened, edited activities without other filters"
-                    )
-                if job.get("with", {}).get("policy_version") != version:
-                    issues.append(
-                        "ci: policy_version must equal the registered release tag"
-                    )
-                if job.get("with", {}).get("project") != project_name:
-                    issues.append("ci: caller must select its own registered project")
-                return issues
-    issues.append(
-        "ci: missing unconditional PR caller at the registered policy release"
-    )
+        ):
+            issues.append(
+                f"documentation: {file} needs only the selected policy release's POLICY.md links"
+            )
     return issues
 
 
@@ -782,8 +835,11 @@ def candidate_for(pins, name, revision, batch_id=None):
     return matches[0] if matches else None
 
 
-def check_compatibility(root, name, config, pins, channel, batch_id=None, output=None):
+def check_compatibility(
+    root, name, config, pins, channel, batch_id=None, output=None, *, project=None
+):
     root = root.resolve()
+    project = project or member_project(root, name, config)
     artifacts = (
         output.resolve()
         if output
@@ -795,14 +851,20 @@ def check_compatibility(root, name, config, pins, channel, batch_id=None, output
         artifacts.mkdir(parents=True, exist_ok=False)
     result = {
         "project": name,
-        "policyVersion": config["projects"][name]["policyVersion"],
+        "policyVersion": project["policyVersion"],
+        "memberSettings": member_settings(project),
+        "enrollment": enrollment(config, name),
         "revision": git_revision(root),
         "checkerRevision": globals().get("PACKAGED_REVISION")
         or git_revision(SOURCE_ROOT),
         "checkerSourceDigest": hashlib.sha256(
             b"".join(
-                (SOURCE_ROOT / path).read_bytes()
-                for path in ("tools/policy.py", "policy/requirements.json", "VERSION")
+                path.read_bytes()
+                for path in (
+                    *sorted((SOURCE_ROOT / "tools").glob("*.py")),
+                    SOURCE_ROOT / "policy/requirements.json",
+                    SOURCE_ROOT / "VERSION",
+                )
             )
         ).hexdigest(),
         "channel": channel,
@@ -1077,127 +1139,194 @@ def audit_family(
 ):
     reports = []
     graph = {}
-    checker_version = f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}"
-    for name, project in config["projects"].items():
+    snapshot = records.identity(config, pins, git_revision(records_root))
+    for name, repository in config["_members"].items():
         root = workspace / name
-        if fetch and not root.exists():
-            workspace.mkdir(parents=True, exist_ok=True)
-            subprocess.run(
-                [
-                    "git",
-                    "clone",
-                    "--depth",
-                    "1",
-                    f"https://github.com/{project['repository']}.git",
-                    str(root),
-                ],
-                check=True,
-                timeout=180,
-            )
-        if not root.exists():
-            report = {"project": name, "status": "fail", "issues": ["checkout missing"]}
-        elif (
-            records_root is not None
-            and project["adopted"]
-            and project["policyVersion"] != checker_version
-        ):
-            report = inspect_released_project(
-                root,
-                name,
-                config["policyRepository"],
-                project["policyVersion"],
-                records_root,
-            )
-            graph[name] = report.get("dependencies", [])
-        else:
-            report = inspect_project(root, name, config, pins, readiness=True)
-            graph[name] = report["dependencies"]
-        if not project["adopted"]:
-            report["assessment"] = report["status"]
-            report["status"] = "pending-adoption"
-        elif github and root.exists() and report["status"] != "error":
-            try:
-                checks = (
-                    report["requiredChecks"]
-                    if uses_derived_checks(project["policyVersion"])
-                    else project["requiredChecks"]
+        report = {
+            "project": name,
+            "repository": repository,
+            "enrollment": "enrolled",
+            "revision": None,
+            "policyVersion": None,
+            "selectionStatus": "unknown",
+            "checkerVersion": None,
+            "checkerRepository": config["policyRepository"],
+            "checkerRevision": None,
+            "records": snapshot,
+            "status": "fail",
+            "issues": [],
+        }
+        try:
+            if fetch and not root.exists():
+                workspace.mkdir(parents=True, exist_ok=True)
+                subprocess.run(
+                    [
+                        "git",
+                        "clone",
+                        "--depth",
+                        "1",
+                        f"https://github.com/{repository}.git",
+                        str(root),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=180,
                 )
-                report["issues"].extend(check_github(project, checks))
-            except (ValueError, OSError) as error:
-                report["issues"].append(f"github: {error}")
-                report["status"] = "error"
+            if not root.exists():
+                report["issues"].append("checkout missing")
             else:
-                if report["issues"] and report["status"] != "error":
-                    report["status"] = "fail"
+                revision = git_revision(root)
+                require_revision(revision)
+                report["revision"] = revision
+                if git_dirty(root):
+                    raise ValueError("Audit requires a clean exact member commit")
+                try:
+                    caller_path, _, caller, version = declarations.read_identity(
+                        root, config["policyRepository"], name
+                    )
+                    report["policyVersion"] = version
+                    inputs = caller["with"]
+                except ValueError as error:
+                    report["selectionStatus"] = "invalid"
+                    report["issues"].append(f"ci: {error}")
+                else:
+                    assessment = support.assess(version, config["_support"])
+                    report["support"] = assessment
+                    report["selectionStatus"] = assessment["status"]
+                    if assessment["status"] == "retired":
+                        report["assessment"] = "retired"
+                        report["issues"].append(support.retirement_issue(assessment))
+                    else:
+                        release = releases.inspect_release(
+                            config["policyRepository"], version
+                        )
+                        report["checkerRevision"] = release["revision"]
+                        settings = None
+                        if uses_member_declarations(version):
+                            settings = {
+                                field: json.loads(inputs.get(key, "[]"))
+                                for key, field in declarations.INPUT_FIELDS.items()
+                            }
+                        assessed = releases.check_member(
+                            release,
+                            root,
+                            name,
+                            repository,
+                            revision,
+                            records_root,
+                            snapshot,
+                            settings=settings,
+                            support_assessment=assessment,
+                        )
+                        report.update(assessed)
+                        # Historical reports cannot redefine trusted enrollment or identity.
+                        report.update(
+                            repository=repository,
+                            enrollment="enrolled",
+                            records=snapshot,
+                        )
+                        report["assessment"] = assessed["status"]
+                        if report["status"] == "candidate-ready":
+                            report["status"] = "fail"
+                            report["issues"].append(
+                                "Candidate validation does not establish approved-pin compliance"
+                            )
+                        graph[name] = report["dependencies"]
+                        if github:
+                            checks = (
+                                report["requiredChecks"]
+                                if uses_derived_checks(version)
+                                else config["projects"][name]["requiredChecks"]
+                            )
+                            if not checks or not declarations.valid_check_names(checks):
+                                raise ValueError(
+                                    "Selected legacy release requires trusted complete gate names"
+                                )
+                            report["issues"].extend(
+                                check_github(
+                                    {"repository": repository},
+                                    checks,
+                                    workflow=str(caller_path.relative_to(root)),
+                                )
+                            )
+                            if report["issues"]:
+                                report["status"] = "fail"
+                if git_revision(root) != revision or git_dirty(root):
+                    raise ValueError("Member checkout changed during audit")
+        except (
+            ValueError,
+            OSError,
+            KeyError,
+            TypeError,
+            subprocess.SubprocessError,
+        ) as error:
+            report["status"] = "error"
+            report["selectionStatus"] = (
+                "invalid" if isinstance(error, releases.InvalidRelease) else "unknown"
+            )
+            report["issues"].append(f"inspection: {error}")
         reports.append(report)
+    # A released checker reads the same directory; reject a concurrently changed snapshot.
+    try:
+        current_config, current_pins = load_policy(records_root)
+        changed = (
+            records.identity(current_config, current_pins, git_revision(records_root))
+            != snapshot
+        )
+    except (ValueError, OSError, KeyError, TypeError):
+        changed = True
+    if changed:
+        for report in reports:
+            report["status"] = "error"
+            report["issues"].append("Central records changed during audit")
+    # Later members can run past an earlier member's retirement deadline.
+    assessment_time = support.now()
+    for report in reports:
+        if "support" in report:
+            current_support = support.assess(
+                report["policyVersion"], config["_support"], at=assessment_time
+            )
+            if current_support != report["support"]:
+                report["support"] = current_support
+                report["selectionStatus"] = current_support["status"]
+                if current_support["status"] == "retired":
+                    report["status"] = (
+                        "error" if report["status"] == "error" else "fail"
+                    )
+                    report["issues"].append(support.retirement_issue(current_support))
     cycles = dependency_cycles(graph)
     return {
         "status": "error"
-        if any(item["status"] == "error" for item in reports)
+        if changed or any(item["status"] == "error" for item in reports)
         else "fail"
         if cycles or any(item["status"] == "fail" for item in reports)
         else "reported",
         "approvedPins": pins["approved"] is not None,
         "projects": reports,
         "cycles": cycles,
+        "records": snapshot,
+        "issues": ["Central records changed during audit"] if changed else [],
     }
 
 
-def inspect_released_project(root, name, repository, version, records_root):
-    require_policy_version(version)
-    command = [
-        "nix",
-        "run",
-        "--no-update-lock-file",
-        f"github:{repository}/{version}",
-        "--",
-        "--policy-root",
-        str(records_root.resolve()),
-        "check",
-        str(root.resolve()),
-        "--project",
-        name,
-    ]
-    try:
-        process = subprocess.run(
-            command, capture_output=True, text=True, timeout=900, check=False
-        )
-        if process.returncode not in {0, 1}:
-            raise ValueError(process.stderr.strip() or "Released checker could not run")
-        report = json.loads(process.stdout)
-        if (
-            not isinstance(report, dict)
-            or report.get("project") != name
-            or report.get("checkerVersion") != version
-            or report.get("status") not in {"pass", "fail", "candidate-ready"}
-            or (report["status"] == "fail") != (process.returncode == 1)
-            or not isinstance(report.get("issues"), list)
-            or not isinstance(report.get("dependencies"), list)
-            or (
-                uses_derived_checks(version)
-                and (
-                    not report.get("requiredChecks")
-                    or not valid_check_names(report["requiredChecks"])
-                )
-            )
-        ):
-            raise ValueError("Released checker returned an incompatible report")
-        return report
-    except (ValueError, OSError, subprocess.SubprocessError) as error:
-        return {
-            "project": name,
-            "policyVersion": version,
-            "status": "error",
-            "issues": [f"policy release: {error}"],
-        }
-
-
-def check_github(project, checks):
+def check_github(project, checks, *, workflow):
     repository = project["repository"]
     info = github_get(f"repos/{repository}")
+    if (
+        not isinstance(info, dict)
+        or not isinstance(info.get("default_branch"), str)
+        or not info["default_branch"]
+    ):
+        raise ValueError("GitHub branch inspection is incomplete; settings are unknown")
     merge_settings = github_merge_settings(repository, info)
     branch = quote(info["default_branch"], safe="")
     rules = github_get(f"repos/{repository}/rules/branches/{branch}")
+    if not isinstance(rules, list) or any(
+        not isinstance(rule, dict) or not isinstance(rule.get("type"), str)
+        for rule in rules
+    ):
+        raise ValueError("GitHub rule inspection is incomplete; settings are unknown")
     issues = []
     if (
         not merge_settings["allow_squash_merge"]
@@ -1209,26 +1338,105 @@ def check_github(project, checks):
     contexts = set()
     for rule in rules:
         if rule["type"] == "required_status_checks":
-            contexts.update(
-                check["context"]
-                for check in rule["parameters"]["required_status_checks"]
-            )
+            parameters = rule.get("parameters")
+            if not isinstance(parameters, dict):
+                raise ValueError(
+                    "GitHub required checks are incomplete; settings are unknown"
+                )
+            contexts.update(github_contexts(parameters.get("required_status_checks")))
     if not pr_rule or not set(checks).issubset(contexts):
         details = github_get(f"repos/{repository}/branches/{branch}")
+        if not isinstance(details, dict) or not isinstance(
+            details.get("protected"), bool
+        ):
+            raise ValueError(
+                "GitHub protection inspection is incomplete; settings are unknown"
+            )
         if details["protected"]:
             protection = github_get(f"repos/{repository}/branches/{branch}/protection")
+            if (
+                not isinstance(protection, dict)
+                or not {"required_pull_request_reviews", "required_status_checks"}
+                <= protection.keys()
+            ):
+                raise ValueError(
+                    "GitHub protection inspection is incomplete; settings are unknown"
+                )
+            reviews = protection["required_pull_request_reviews"]
+            if reviews is not None and (
+                not isinstance(reviews, dict)
+                or type(reviews.get("required_approving_review_count")) is not int
+                or reviews["required_approving_review_count"] < 0
+            ):
+                raise ValueError(
+                    "GitHub review inspection is incomplete; settings are unknown"
+                )
             pr_rule = pr_rule or bool(protection.get("required_pull_request_reviews"))
-            status_checks = protection.get("required_status_checks") or {}
+            status_checks = protection["required_status_checks"]
+            if status_checks is not None and (
+                not isinstance(status_checks, dict)
+                or not {"contexts", "checks"} & status_checks.keys()
+            ):
+                raise ValueError(
+                    "GitHub required checks are incomplete; settings are unknown"
+                )
+            status_checks = {} if status_checks is None else status_checks
+            if not isinstance(status_checks, dict) or not valid_check_names(
+                status_checks.get("contexts", [])
+            ):
+                raise ValueError(
+                    "GitHub required checks are incomplete; settings are unknown"
+                )
             contexts.update(status_checks.get("contexts", []))
-            contexts.update(
-                check["context"] for check in status_checks.get("checks", [])
-            )
+            contexts.update(github_contexts(status_checks.get("checks", [])))
     if not pr_rule:
         issues.append("github: pull requests are not required")
     for check in checks:
         if check not in contexts:
             issues.append(f"github: missing required check '{check}'")
+    issues.extend(check_github_enforcement(repository, workflow))
     return issues
+
+
+def check_github_enforcement(repository, workflow):
+    permissions = github_get(f"repos/{repository}/actions/permissions")
+    if not isinstance(permissions, dict) or not isinstance(
+        permissions.get("enabled"), bool
+    ):
+        raise ValueError(
+            "GitHub Actions inspection is incomplete; enforcement is unknown"
+        )
+    details = github_get(
+        f"repos/{repository}/actions/workflows/{quote(Path(workflow).name, safe='')}"
+    )
+    if (
+        not isinstance(details, dict)
+        or details.get("path") != workflow
+        or not isinstance(details.get("state"), str)
+        or not details["state"]
+    ):
+        raise ValueError(
+            "GitHub workflow inspection is incomplete or disagrees with the discovered caller; enforcement is unknown"
+        )
+    issues = []
+    if not permissions["enabled"]:
+        issues.append("github: repository Actions are disabled")
+    if details["state"] != "active":
+        issues.append(
+            f"github: policy caller workflow {workflow} is not active ({details['state']})"
+        )
+    return issues
+
+
+def github_contexts(checks):
+    if not isinstance(checks, list) or any(
+        not isinstance(check, dict)
+        or not isinstance(check.get("context"), str)
+        or not check["context"].strip()
+        for check in checks
+    ):
+        raise ValueError("GitHub required checks are incomplete; settings are unknown")
+    return [check["context"] for check in checks]
 
 
 def github_merge_settings(repository, info):
@@ -1279,7 +1487,7 @@ def github_request(path, payload=None):
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
         raise ValueError(
-            "GitHub inspection requires a token in GH_TOKEN or GITHUB_TOKEN with Administration, Contents, and Metadata read access to enrolled members; configure the MEMBER_AUDIT_TOKEN secret for maintenance"
+            "GitHub inspection requires a token in GH_TOKEN or GITHUB_TOKEN with Actions, Administration, Contents, and Metadata read access to enrolled members; configure the MEMBER_AUDIT_TOKEN secret for maintenance"
         )
     headers["Authorization"] = f"Bearer {token}"
     data = None
@@ -1296,75 +1504,6 @@ def github_request(path, payload=None):
         raise ValueError(
             f"GitHub inspection unavailable for {path}: HTTP {error.code}; verify repository access and read permissions; settings are unknown"
         ) from error
-
-
-class LockGraph:
-    def __init__(self, lock):
-        if not isinstance(lock, dict) or lock.get("version") != 7:
-            raise ValueError("Unsupported flake lock format")
-        self.nodes = lock["nodes"]
-        self.root = lock["root"]
-        if not isinstance(self.nodes, dict) or not isinstance(self.root, str):
-            raise ValueError("Invalid lock nodes or root")
-        if self.root not in self.nodes:
-            raise ValueError("Missing lock root")
-        for node in self.nodes.values():
-            if not isinstance(node, dict) or any(
-                not isinstance(node.get(field, {}), dict)
-                for field in ("inputs", "locked", "original")
-            ):
-                raise ValueError("Invalid lock node structure")
-
-    def resolve(self, reference, aliases=()):
-        if isinstance(reference, str):
-            if reference not in self.nodes:
-                raise ValueError(f"Missing lock node: {reference}")
-            return reference
-        if not isinstance(reference, list) or not all(
-            isinstance(item, str) for item in reference
-        ):
-            raise ValueError("Invalid lock input reference")
-        path = tuple(reference)
-        if path in aliases:
-            raise ValueError(f"Cyclic follows path: {reference}")
-        current = self.root
-        for part in path:
-            inputs = self.nodes[current].get("inputs", {})
-            if part not in inputs:
-                raise ValueError(f"Missing follows path: {reference}")
-            current = self.resolve(inputs[part], (*aliases, path))
-        return current
-
-    def reachable(self):
-        result = {}
-        pending = [self.root]
-        while pending:
-            current = pending.pop()
-            if current in result:
-                continue
-            result[current] = self.nodes[current]
-            pending.extend(
-                self.resolve(reference)
-                for reference in self.nodes[current].get("inputs", {}).values()
-            )
-        return result
-
-
-def dependency_cycles(graph):
-    visited = set()
-    cycles = []
-
-    def visit(node, stack):
-        if node in stack:
-            cycles.append([*stack[stack.index(node) :], node])
-        elif node not in visited:
-            for dependency in graph.get(node, []):
-                visit(dependency, [*stack, node])
-            visited.add(node)
-
-    for node in graph:
-        visit(node, [])
-    return cycles
 
 
 def source_files(root, filename, include_vendor=False):
@@ -1386,28 +1525,6 @@ def source_files(root, filename, include_vendor=False):
                 raise ValueError("Source file escapes the project directory")
             result.append(path)
     return sorted(result)
-
-
-def repository_identity(node):
-    for source in [node.get("locked", {}), node.get("original", {})]:
-        host = source.get("host", "github.com")
-        if (
-            source.get("type") in {None, "github"}
-            and isinstance(host, str)
-            and host.lower() == "github.com"
-            and "owner" in source
-            and "repo" in source
-        ):
-            return f"{source['owner']}/{source['repo']}".lower()
-        if source.get("type") == "github":
-            continue
-        url = source.get("url", "")
-        scp = re.fullmatch(r"(?:git@)?github\.com:([^/]+/[^/?#]+)/*", url)
-        parsed = urlsplit(url)
-        path = (scp.group(1) if scp else parsed.path.removeprefix("/")).rstrip("/")
-        if (scp or parsed.hostname == "github.com") and REPOSITORY.fullmatch(path):
-            return path.removesuffix(".git").lower()
-    return None
 
 
 def nixpkgs_channel(node):
@@ -1444,8 +1561,7 @@ def require_revision(value):
 
 
 def read_json(path):
-    with path.open() as stream:
-        return json.load(stream)
+    return records.read_json(path)
 
 
 def git_revision(root):

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "members": {
+    "nixos-cross-config": "petohorvath/nixos-cross-config",
+    "nixos-registry": "petohorvath/nixos-registry"
+  }
+}

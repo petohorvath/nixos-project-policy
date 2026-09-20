@@ -6,7 +6,7 @@ Shared development and maintenance rules for independently released Nix and NixO
 
 The development shell and CI definitions target x86_64 Linux and aarch64 Linux. The policy repository has no VM suites. Member VM suites run separately on suitable x86_64 Linux builders.
 
-The current [project records](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/projects.json) identify enrolled members, and current [pin records](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/pins.json) identify the approved baseline and update batches. The root lockfile pins this repository's tooling; it does not approve those revisions for the family.
+The current [member roster](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/members.json) identifies enrolled repository identities, and current [pin records](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/pins.json) identify the approved baseline and update batches. The root lockfile pins this repository's tooling; it does not approve those revisions for the family.
 
 Policy releases version the shared rules and checker code. Members select an exact release tag such as `v0.1.0`; checks read shared pins and enrollment from current records on `main`. A nixpkgs update does not require a policy release. [VERSION](VERSION) identifies the prepared version; publication follows the [release procedure](docs/maintenance.md#releases).
 
@@ -20,13 +20,15 @@ nix flake check
 nix run .# -- validate
 ```
 
-`nix develop` is the explicit shell entrypoint. To inspect existing sibling checkouts without changing them:
+`nix develop` is the explicit shell entrypoint. To audit exact clean sibling checkouts using their published immutable selected checkers:
 
 ```bash
 nix run .# -- --policy-root . audit ..
 ```
 
-An audit distinguishes `pending-adoption` from passing compliance. A direct member `check` fails until the required baseline and adoption configuration exist.
+Prepared v0.4.0 member checks read release selection and settings from the policy workflow and work before enrollment against approved shared pins. Reports distinguish enrollment, static check results, and compatibility execution. Older immutable releases retain their central selection and adoption contracts.
+
+After publication, an ordinary policy upgrade needs one reviewed member PR; the central enrollment and legacy selections stay unchanged. A routine root-only shared-pin update uses one [central pin PR](docs/maintenance.md#pin-candidates-and-approval), with complete enrolled-member validation before human approval and merge. Source repairs and locks still governed by older contracts can require coordinated member PRs.
 
 ## Development
 

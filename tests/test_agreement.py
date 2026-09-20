@@ -11,36 +11,16 @@ from unittest.mock import patch
 
 import yaml
 
-from tests.test_policy import ProjectFixture, RELEASE, lockfile
-from tests.test_support import BEFORE, EFFECTIVE, retirement
+from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.data import BEFORE, EFFECTIVE, RELEASE, lockfile, retirement
+from tests.fixtures.process import commit, git, initialize, isolated_git
 from tools import agreement, policy, support
 
 
 GATE = "Integration / Policy agreement"
 
 
-def git(root, *arguments):
-    return subprocess.check_output(
-        ["git", "-C", str(root), *arguments], text=True, stderr=subprocess.PIPE
-    ).strip()
-
-
-def initialize(root):
-    root.mkdir(parents=True, exist_ok=True)
-    git(root, "init", "--quiet")
-    git(root, "config", "user.email", "fixture@example.invalid")
-    git(root, "config", "user.name", "Policy fixture")
-    git(root, "config", "commit.gpgsign", "false")
-    git(root, "config", "core.hooksPath", "/dev/null")
-
-
-def commit(root):
-    git(root, "add", ".")
-    git(root, "commit", "--quiet", "--allow-empty", "-m", "Fixture revision")
-    return git(root, "rev-parse", "HEAD")
-
-
-class AgreementTests(ProjectFixture):
+class AgreementTests(ProjectTestCase):
     def setUp(self):
         super().setUp()
         self.workflow["jobs"]["integration"] = {
@@ -55,19 +35,7 @@ class AgreementTests(ProjectFixture):
             },
         }
         self.declare(additional_required_checks=json.dumps([GATE]))
-        config = Path(self.temp.name) / "gitconfig"
-        config.write_text("")
-        environment = patch.dict(
-            os.environ,
-            {
-                "GIT_CONFIG_GLOBAL": str(config),
-                "GIT_CONFIG_NOSYSTEM": "1",
-                "GIT_TERMINAL_PROMPT": "0",
-                "GIT_ALLOW_PROTOCOL": "file:https:ssh",
-            },
-        )
-        environment.start()
-        self.addCleanup(environment.stop)
+        self.enterContext(isolated_git(Path(self.temp.name)))
         initialize(self.root)
         self.repositories = {}
         self.revisions = {}

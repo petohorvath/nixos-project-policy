@@ -5,13 +5,14 @@ packaged entrypoints and immutable legacy sources execute all policy decisions.
 """
 
 import base64
-import io
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 from urllib import request
+
+from tests.fixtures.github import GitHub, request_path
 
 
 CONFIG = json.loads(Path(os.environ["POLICY_TRANSITION_FIXTURE"]).read_text())
@@ -20,88 +21,74 @@ REAL_OUTPUT = subprocess.check_output
 STATE = Path(CONFIG["state"])
 
 
-def transport(query, **kwargs):
-    path = query.full_url.removeprefix("https://api.github.com/").split("?")[0]
-    state = json.loads(STATE.read_text())
-    method = query.get_method()
-    payload = json.loads(query.data) if query.data else None
-    state["requests"].append([method, path, payload])
-    if method == "POST" and path.endswith("/check-runs"):
-        value = {
-            **payload,
-            "id": len(state["checks"]) + 1,
-            "app": {"slug": "github-actions"},
-        }
-        state["checks"].append(value)
-    elif "/check-runs/" in path:
-        value = state["checks"][int(path.rsplit("/", 1)[1]) - 1]
-        if method == "PATCH":
-            value.update(payload)
-    elif path in state["github"]:
-        value = state["github"][path]
-    elif "/releases/tags/" in path:
-        version = path.rsplit("/", 1)[1]
-        assert version in CONFIG["releases"], path
-        value = {
-            "tag_name": version,
-            "immutable": True,
-            "draft": False,
-            "prerelease": False,
-        }
-    elif "/git/ref/tags/" in path:
-        value = {
-            "object": {
-                "type": "commit",
-                "sha": CONFIG["releases"][path.rsplit("/", 1)[1]]["revision"],
+class PackagedGitHub(GitHub):
+    def lookup(self, query):
+        path = request_path(query)
+        if path in self.responses:
+            return super().lookup(query)
+        if "/releases/tags/" in path:
+            version = path.rsplit("/", 1)[1]
+            assert version in CONFIG["releases"], path
+            return {
+                "tag_name": version,
+                "immutable": True,
+                "draft": False,
+                "prerelease": False,
             }
-        }
-    elif "/contents/policy/requirements.json" in path:
-        revision = query.full_url.rsplit("ref=", 1)[1]
-        release = next(
-            value
-            for value in CONFIG["releases"].values()
-            if value["revision"] == revision
-        )
-        value = {
-            "encoding": "base64",
-            "content": base64.b64encode(
-                Path(release["requirements"]).read_bytes()
-            ).decode(),
-        }
-    elif "/git/commits/" in path:
-        name, revision = path.split("/")[2], path.rsplit("/", 1)[1]
-        process = REAL_RUN(
-            [
-                "git",
-                "-C",
-                CONFIG["members"][name],
-                "cat-file",
-                "-e",
-                revision + "^{commit}",
-            ],
-            capture_output=True,
-        )
-        assert process.returncode == 0, path
-        value = {"sha": revision}
-    elif "/commits/" in path and path.endswith("/check-runs"):
-        value = {
-            "check_runs": [
-                {
-                    "name": "Member / Extra",
-                    "head_sha": path.split("/")[-2],
-                    "status": "completed",
-                    "conclusion": "success",
+        if "/git/ref/tags/" in path:
+            return {
+                "object": {
+                    "type": "commit",
+                    "sha": CONFIG["releases"][path.rsplit("/", 1)[1]]["revision"],
                 }
-            ]
-        }
-    elif path.endswith("/check-runs"):
-        value = {"check_runs": state["checks"]}
-    else:
-        raise AssertionError(f"Unconfigured external request: {method} {path}")
-    STATE.write_text(json.dumps(state))
-    if isinstance(value, dict) and set(value) == {"binary"}:
-        return io.BytesIO(bytes.fromhex(value["binary"]))
-    return io.BytesIO(json.dumps(value).encode())
+            }
+        if "/contents/policy/requirements.json" in path:
+            revision = query.full_url.rsplit("ref=", 1)[1]
+            release = next(
+                value
+                for value in CONFIG["releases"].values()
+                if value["revision"] == revision
+            )
+            return {
+                "encoding": "base64",
+                "content": base64.b64encode(
+                    Path(release["requirements"]).read_bytes()
+                ).decode(),
+            }
+        if "/git/commits/" in path:
+            name, revision = path.split("/")[2], path.rsplit("/", 1)[1]
+            process = REAL_RUN(
+                [
+                    "git",
+                    "-C",
+                    CONFIG["members"][name],
+                    "cat-file",
+                    "-e",
+                    revision + "^{commit}",
+                ],
+                capture_output=True,
+            )
+            assert process.returncode == 0, path
+            return {"sha": revision}
+        if "/commits/" in path and path.endswith("/check-runs"):
+            return {
+                "check_runs": [
+                    {
+                        "name": "Member / Extra",
+                        "head_sha": path.split("/")[-2],
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
+            }
+        return super().lookup(query)
+
+
+def transport(query, **kwargs):
+    github = PackagedGitHub.load(STATE)
+    response = github.transport(query, **kwargs)
+    github.save(STATE)
+    return response
 
 
 def run(command, **kwargs):

@@ -2,27 +2,26 @@
 
 import copy
 import json
-import os
-from pathlib import Path
 import shutil
-import subprocess
-import sys
 from unittest.mock import patch
 
 import yaml
 
-from tests import test_candidates as fixture
-from tests.test_audits import invoke
-from tests.test_policy import (
+from tests.fixtures import workflows
+from tests.fixtures.candidates import BatchFixture
+from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.cli import invoke
+from tests.fixtures.data import (
+    BEFORE,
     CHECKER,
+    EFFECTIVE,
     NEW_PAIR,
     PAIR,
-    POLICY_REPO,
-    ProjectFixture,
     RELEASE,
+    retirement,
 )
-from tests.test_support import BEFORE, EFFECTIVE, retirement
-from tools import agreement, batches, candidates, policy, records, releases, support
+from tests.fixtures.services import BatchServices
+from tools import batches, candidates, policy, records, releases, support
 
 
 def outcome(report):
@@ -36,189 +35,11 @@ def outcome(report):
     }
 
 
-class Services(fixture.Services):
-    def __init__(self, roots):
-        super().__init__(roots["example"])
-        self.roots = roots
-        self.failed_member = None
-
-    def lookup(self, path):
-        if "/git/commits/" in path:
-            name = path.split("/")[2]
-            self.root = self.roots[name]
-        return super().lookup(path)
-
-    def run(self, command, **kwargs):
-        previous = self.root
-        command = list(map(str, command))
-        if command[0] == "nix":
-            if command[1] == "run":
-                arguments = command[command.index("--") + 1 :]
-                if not arguments[3].startswith("--"):
-                    self.root = Path(arguments[3])
-                elif "--project" in arguments:
-                    self.root = self.roots[arguments[arguments.index("--project") + 1]]
-            elif command[1:3] in (["flake", "metadata"], ["flake", "check"]):
-                self.root = Path(command[3])
-        failure = self.failure
-        if self.failed_member and self.root.name != self.failed_member:
-            self.failure = None
-        try:
-            return super().run(command, **kwargs)
-        finally:
-            self.root, self.failure = previous, failure
-
-
-class BatchTests(ProjectFixture):
-    commit = fixture.CandidateTests.commit
-
+class BatchTests(BatchFixture, ProjectTestCase):
     def setUp(self):
         super().setUp()
-        self.workspace = self.root.parent / "members"
-        self.workspace.mkdir()
-        original = self.root
-        self.root = self.workspace / "example"
-        original.rename(self.root)
-        lock = records.read_json(self.root / "flake.lock")
-        lock["nodes"]["entry"]["inputs"].pop("nixpkgs-unstable")
-        lock["nodes"].pop("rolling")
-        candidates.write_json(self.root / "flake.lock", lock)
-        self.roots = {"example": self.root}
-        self.locked = {}
-        configuration = self.root.parent.parent / "gitconfig"
-        configuration.write_text("")
-        environment = patch.dict(
-            os.environ,
-            {
-                "GIT_CONFIG_GLOBAL": str(configuration),
-                "GIT_CONFIG_NOSYSTEM": "1",
-                "GIT_TERMINAL_PROMPT": "0",
-                "GIT_ALLOW_PROTOCOL": "file:https:ssh",
-            },
-        )
-        environment.start()
-        self.addCleanup(environment.stop)
-        for name in ("alpha", "legacy"):
-            root = self.workspace / name
-            shutil.copytree(self.root, root)
-            self.roots[name] = root
-            self.members[name] = f"owner/{name}"
-            self.config["projects"][name] = {
-                **copy.deepcopy(self.config["projects"]["example"]),
-                "repository": f"owner/{name}",
-            }
-            self.declaration(name, RELEASE)
-            self.commit(root)
-            self.locked[name] = policy.git_revision(root)
-            fixture.REAL_RUN(
-                [
-                    "git",
-                    "config",
-                    "--global",
-                    f"url.{root.as_uri()}.insteadOf",
-                    f"https://github.com/owner/{name}.git",
-                ],
-                check=True,
-            )
-        fixture.REAL_RUN(
-            [
-                "git",
-                "config",
-                "--global",
-                f"url.{self.root.as_uri()}.insteadOf",
-                "https://github.com/owner/example.git",
-            ],
-            check=True,
-        )
-        self.declaration("legacy", "v0.3.0")
-        self.config["projects"]["legacy"]["policyVersion"] = "v0.3.0"
-        self.commit(self.roots["legacy"])
-        self.declaration(
-            "alpha",
-            RELEASE,
-            required_architectures='["aarch64-linux"]',
-            vm_targets='["vm-test"]',
-            additional_required_checks='["Member / Extra"]',
-        )
-        self.commit(self.roots["alpha"])
-        self.workflow["jobs"]["integration"] = {
-            "name": "Integration",
-            "needs": "policy",
-            "uses": f"{POLICY_REPO}/.github/workflows/agreement.yml@{RELEASE}",
-            "with": {
-                "project": "example",
-                "policy_version": RELEASE,
-                "project_revision": "${{ needs.policy.outputs.project_revision }}",
-                "records_revision": "${{ needs.policy.outputs.records_revision }}",
-            },
-        }
-        self.declare(additional_required_checks=json.dumps([agreement.GATE]))
-        for name, revision in self.locked.items():
-            lock["nodes"]["entry"]["inputs"][name] = name
-            lock["nodes"][name] = {
-                "locked": {
-                    "type": "github",
-                    "owner": "owner",
-                    "repo": name,
-                    "rev": revision,
-                },
-                "original": {"type": "github", "owner": "owner", "repo": name},
-                "inputs": {"nixpkgs": ["nixpkgs"]},
-            }
-        candidates.write_json(self.root / "flake.lock", lock)
-        self.commit(self.root)
-        self.baseline = self.write_records()
-        self.commit(self.baseline)
-        self.proposal = self.workspace.parent / "proposal"
-        shutil.copytree(
-            self.baseline, self.proposal, ignore=shutil.ignore_patterns(".git")
-        )
-        self.propose()
-        self.commit(self.proposal)
-        self.services = Services(self.roots)
+        self.services = self.enterContext(BatchServices(self.roots).installed())
         self.output_number = 0
-        for adapter in [
-            patch.object(releases, "public_get", side_effect=self.services.lookup),
-            patch.object(subprocess, "run", side_effect=self.services.run),
-            patch.object(subprocess, "check_output", side_effect=self.services.output),
-            patch.object(policy, "PACKAGED_REVISION", CHECKER, create=True),
-        ]:
-            adapter.start()
-            self.addCleanup(adapter.stop)
-
-    def declaration(self, name, version, **settings):
-        root = self.roots[name]
-        workflow = copy.deepcopy(self.workflow)
-        job = workflow["jobs"]["policy"]
-        job["uses"] = f"{POLICY_REPO}/.github/workflows/check.yml@{version}"
-        job["with"] = {"project": name, "policy_version": version}
-        if version == RELEASE:
-            job["with"].update(
-                {
-                    "required_architectures": '["x86_64-linux", "aarch64-linux"]',
-                    **settings,
-                }
-            )
-        candidates.write_json(root / ".github/workflows/policy.yml", workflow)
-        for name in ("AGENTS.md", "CONTRIBUTING.md"):
-            (root / name).write_text(
-                f"[Rules](https://github.com/{POLICY_REPO}/blob/{version}/POLICY.md)\n"
-            )
-
-    def propose(self):
-        pins = copy.deepcopy(self.pins)
-        pins["batches"].append(
-            {
-                "id": "next",
-                "status": "candidate",
-                "previous": PAIR,
-                "pins": NEW_PAIR,
-                "projects": {
-                    name: policy.git_revision(root) for name, root in self.roots.items()
-                },
-            }
-        )
-        candidates.write_json(self.proposal / "policy/pins.json", pins)
 
     def call(self, operation, *options, root=None):
         output = self.workspace.parent / f"batch-output-{self.output_number}"
@@ -770,19 +591,9 @@ class BatchTests(ProjectFixture):
         workspace.mkdir()
         for name, root in (("authority", self.baseline), ("proposal", self.proposal)):
             (workspace / name).symlink_to(root, target_is_directory=True)
-        binary = workspace / "bin"
-        binary.mkdir()
-        stub = binary / "nix"
-        stub.write_text(
-            f"#!{sys.executable}\nimport sys\nsys.path.insert(0, {str(policy.SOURCE_ROOT)!r})\nfrom tests.test_batches import workflow_adapter\nworkflow_adapter()\n"
-        )
-        stub.chmod(0o755)
         output = workspace / "github-output"
         environment = {
-            **os.environ,
-            "PATH": f"{binary}:{os.environ['PATH']}",
-            "RUNNER_TEMP": str(workspace),
-            "GITHUB_OUTPUT": str(output),
+            **workflows.environment(workspace, adapter="batch_adapter"),
             "BATCH": "next",
             "ATTEMPT": "batch-1",
             "BATCH_FIXTURE_ROOTS": json.dumps(
@@ -791,17 +602,8 @@ class BatchTests(ProjectFixture):
         }
 
         def shell(job, **extra):
-            step = next(
-                step
-                for step in workflow["jobs"][job]["steps"]
-                if f"pin-batch {job}" in step.get("run", "")
-            )
-            return fixture.REAL_RUN(
-                ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-                cwd=workspace,
-                env={**environment, **extra},
-                text=True,
-                capture_output=True,
+            return workflows.run_step(
+                workflow, job, workspace, environment, match=f"pin-batch {job}", **extra
             )
 
         process = shell("plan")
@@ -863,22 +665,3 @@ class BatchTests(ProjectFixture):
                 if "upload-artifact" in step.get("uses", "")
             )
             self.assertEqual(upload["if"], "always()")
-
-
-def workflow_adapter():
-    services = Services(
-        {
-            name: Path(root)
-            for name, root in json.loads(os.environ["BATCH_FIXTURE_ROOTS"]).items()
-        }
-    )
-    services.host = os.environ.get("SYSTEM", "x86_64-linux")
-    services.failure = os.environ.get("BATCH_FIXTURE_FAILURE")
-    services.failed_member = os.environ.get("BATCH_FIXTURE_FAILED_MEMBER")
-    with (
-        patch.object(releases, "public_get", side_effect=services.lookup),
-        patch.object(subprocess, "run", side_effect=services.run),
-        patch.object(subprocess, "check_output", side_effect=services.output),
-        patch.object(policy, "PACKAGED_REVISION", CHECKER, create=True),
-    ):
-        sys.exit(policy.main(sys.argv[sys.argv.index("--") + 1 :]))

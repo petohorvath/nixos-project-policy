@@ -16,67 +16,26 @@ import yaml
 from tools import policy
 
 
-STABLE = "a" * 40
-UNSTABLE = "b" * 40
-NEW_STABLE = "c" * 40
-NEW_UNSTABLE = "d" * 40
-CHECKER = "e" * 40
-RELEASE = f"v{(policy.SOURCE_ROOT / 'VERSION').read_text().strip()}"
-SOURCE = "f" * 40
-PAIR = {"stable": STABLE, "unstable": UNSTABLE}
-NEW_PAIR = {"stable": NEW_STABLE, "unstable": NEW_UNSTABLE}
-POLICY_REPO = "petohorvath/nixos-project-policy"
-COMPATIBILITY_CHECKS = [
-    "Policy / Compatibility (stable, x86_64-linux)",
-    "Policy / Compatibility (stable, aarch64-linux)",
-    "Policy / Compatibility (unstable, x86_64-linux)",
-    "Policy / Compatibility (unstable, aarch64-linux)",
-]
-REQUIRED_CHECKS = [
-    "Policy / Verify policy version and load shared pins",
-    *COMPATIBILITY_CHECKS,
-    "Policy / Compliance (x86_64-linux)",
-    "Policy / Compliance (aarch64-linux)",
-    "Policy / Formatting and lint (x86_64-linux)",
-    "Policy / Formatting and lint (aarch64-linux)",
-    "Policy / Project tests (x86_64-linux)",
-    "Policy / Project tests (aarch64-linux)",
-]
-VM_CHECK = "Policy / VM tests (x86_64-linux)"
-
-
-def nixpkgs(revision, branch):
-    return {
-        "locked": {
-            "type": "github",
-            "owner": "NixOS",
-            "repo": "nixpkgs",
-            "rev": revision,
-        },
-        "original": {
-            "type": "github",
-            "owner": "NixOS",
-            "repo": "nixpkgs",
-            "ref": branch,
-        },
-    }
-
-
-def lockfile():
-    return {
-        "version": 7,
-        "root": "entry",
-        "nodes": {
-            "entry": {
-                "inputs": {
-                    "nixpkgs": "arbitrary-node",
-                    "nixpkgs-unstable": "rolling",
-                }
-            },
-            "arbitrary-node": nixpkgs(STABLE, "nixos-26.05"),
-            "rolling": nixpkgs(UNSTABLE, "nixos-unstable"),
-        },
-    }
+from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.compatibility import CompatibilityFixture
+from tests.fixtures.data import (
+    CHECKER,
+    COMPATIBILITY_CHECKS,
+    NEW_PAIR,
+    NEW_STABLE,
+    NEW_UNSTABLE,
+    PAIR,
+    POLICY_REPO,
+    RELEASE,
+    REQUIRED_CHECKS,
+    SOURCE,
+    STABLE,
+    UNSTABLE,
+    VM_CHECK,
+    lockfile,
+    nixpkgs,
+)
+from tests.fixtures.projects import enabled_enforcement
 
 
 class LockTests(unittest.TestCase):
@@ -172,133 +131,7 @@ class PinStateTests(unittest.TestCase):
             policy.validate_pair({"stable": "nixos-26.05", "unstable": UNSTABLE})
 
 
-class ProjectFixture(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name) / "example"
-        self.config = {
-            "schemaVersion": 2,
-            "policyRepository": POLICY_REPO,
-            "systems": ["x86_64-linux", "aarch64-linux"],
-            "requiredTools": [],
-            "ci": json.loads(
-                (policy.SOURCE_ROOT / "policy/requirements.json").read_text()
-            )["ci"],
-            "readmeSections": [
-                "Support",
-                "Quickstart",
-                "Development",
-                "Contributing",
-                "Documentation",
-            ],
-            "projects": {
-                "example": {
-                    "repository": "owner/example",
-                    "adopted": True,
-                    "policyVersion": RELEASE,
-                    "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
-                    "vmTargets": [],
-                    "requiredChecks": list(REQUIRED_CHECKS),
-                }
-            },
-        }
-        self.pins = {"schemaVersion": 1, "approved": PAIR, "batches": []}
-        self.members = {"example": "owner/example"}
-        self.config["_members"] = self.members
-        self.support = {"schemaVersion": 1, "retirements": {}}
-        self.config["_support"] = self.support
-        self.write("flake.nix", "{}")
-        self.write(".envrc", "use flake\n")
-        self.write("LICENSE", "MIT")
-        self.write(
-            "README.md",
-            "# Example\n\nPurpose.\n"
-            + "\n".join(f"## {section}\n" for section in self.config["readmeSections"]),
-        )
-        for file in ["CONTRIBUTING.md", "AGENTS.md"]:
-            self.write(
-                file,
-                f"[Rules](https://github.com/{POLICY_REPO}/blob/{RELEASE}/POLICY.md)\n",
-            )
-        self.workflow = {
-            "on": {
-                "pull_request": {
-                    "types": ["opened", "synchronize", "reopened", "edited"]
-                }
-            },
-            "jobs": {
-                "policy": {
-                    "name": "Policy",
-                    "uses": f"{POLICY_REPO}/.github/workflows/check.yml@{RELEASE}",
-                    "with": {
-                        "policy_version": RELEASE,
-                        "project": "example",
-                        "required_architectures": '["x86_64-linux", "aarch64-linux"]',
-                    },
-                }
-            },
-        }
-        self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-        self.write("flake.lock", json.dumps(lockfile()))
-
-    def write(self, relative, text):
-        path = self.root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-
-    def declare(self, **inputs):
-        self.workflow["jobs"]["policy"]["with"].update(inputs)
-        self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-
-    def inspect(self):
-        return self.run_policy("check", str(self.root), "--project", "example")[1]
-
-    def write_records(self):
-        records = Path(self.temp.name) / "records"
-        (records / "policy").mkdir(parents=True, exist_ok=True)
-        records_config = {
-            key: value
-            for key, value in self.config.items()
-            if key
-            not in {
-                "systems",
-                "requiredTools",
-                "readmeSections",
-                "ci",
-                "_members",
-                "_support",
-            }
-        }
-        (records / "policy/projects.json").write_text(json.dumps(records_config))
-        (records / "policy/pins.json").write_text(json.dumps(self.pins))
-        (records / "policy/members.json").write_text(
-            json.dumps({"schemaVersion": 1, "members": self.members})
-        )
-        (records / "policy/support.json").write_text(json.dumps(self.support))
-        return records
-
-    def run_policy(self, *args):
-        if args[0] == "ci" and (len(args) == 1 or args[1].startswith("--")):
-            args = ("ci", str(self.root), *args[1:])
-        records = self.write_records()
-        output, errors = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-            code = policy.main(["--policy-root", str(records), *args])
-        return code, json.loads(output.getvalue() or errors.getvalue())
-
-
-def enabled_enforcement(repository):
-    return {
-        f"{repository}/actions/permissions": {"enabled": True},
-        f"{repository}/actions/workflows/policy.yml": {
-            "path": ".github/workflows/policy.yml",
-            "state": "active",
-        },
-    }
-
-
-class ProjectTests(ProjectFixture):
+class ProjectTests(ProjectTestCase):
     def run_policy(self, *args):
         if args[0] != "audit":
             return super().run_policy(*args)
@@ -1544,65 +1377,7 @@ class ProjectTests(ProjectFixture):
         self.assertIn("own project identity", self.inspect()["error"])
 
 
-class CompatibilityTests(ProjectFixture):
-    def setUp(self):
-        super().setUp()
-        self.host = "x86_64-linux"
-        self.metadata = {"locks": lockfile()}
-        self.commands = []
-        self.check_returncode = 0
-        self.dirty = ""
-        self.host_checks = ["behavior"]
-        self.fail_stage = None
-        self.command_error = None
-        self.committed_lock = (self.root / "flake.lock").read_bytes()
-        self.addCleanup(patch.stopall)
-        patch.object(policy.subprocess, "check_output", side_effect=self.output).start()
-        patch.object(policy.subprocess, "run", side_effect=self.run_command).start()
-
-    def output(self, command, **kwargs):
-        if command[0] == "git":
-            if "show" in command:
-                return self.committed_lock
-            if "status" in command:
-                return self.dirty
-            return SOURCE if command[2] == str(self.root) else CHECKER
-        raise AssertionError(command)
-
-    def run_command(self, command, **kwargs):
-        self.commands.append(command)
-        if self.command_error:
-            raise self.command_error
-        if self.fail_stage and command[: len(self.fail_stage)] == self.fail_stage:
-            return subprocess.CompletedProcess(command, 1, "")
-        if command[:3] == ["nix", "flake", "metadata"]:
-            return subprocess.CompletedProcess(command, 0, json.dumps(self.metadata))
-        if command[:2] == ["nix", "eval"]:
-            output = (
-                self.host if "--impure" in command else json.dumps(self.host_checks)
-            )
-            return subprocess.CompletedProcess(command, 0, output)
-        if command[:3] == ["nix", "flake", "check"]:
-            return subprocess.CompletedProcess(command, self.check_returncode)
-        raise AssertionError(command)
-
-    def compatibility(self, channel="stable", *options):
-        output = (
-            Path(self.temp.name)
-            / f"evidence-{len(list(Path(self.temp.name).glob('evidence-*')))}"
-        )
-        return self.run_policy(
-            "compatibility",
-            str(self.root),
-            "--project",
-            "example",
-            "--channel",
-            channel,
-            "--output",
-            str(output),
-            *options,
-        )
-
+class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
     def test_unenrolled_compatibility_uses_member_settings_and_approved_pins(self):
         self.config["projects"] = {}
         self.members.clear()

@@ -1,6 +1,5 @@
 """Public support decisions, retirement boundaries, and legacy cleanup review."""
 
-import contextlib
 import json
 import os
 import shutil
@@ -10,37 +9,25 @@ from unittest.mock import patch
 
 import yaml
 
-from tests import test_audits, test_policy
-from tests.test_policy import ProjectFixture, RELEASE, SOURCE
+from tests.fixtures.audits import AuditFixture, checked_process
+from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.cli import invoke
+from tests.fixtures.compatibility import CompatibilityFixture
+from tests.fixtures.data import (
+    AFTER,
+    BEFORE,
+    EFFECTIVE,
+    POLICY_REPO,
+    RELEASE,
+    SOURCE,
+    START,
+    retirement,
+)
+from tests.fixtures.services import published
 from tools import policy, records, releases, support
 
 
-START = "2030-01-01T00:00:00Z"
-BEFORE = "2030-01-31T23:59:59Z"
-EFFECTIVE = "2030-02-01T00:00:00Z"
-AFTER = "2030-02-02T00:00:00Z"
-
-
-def retirement():
-    return {
-        "decision": "https://github.com/example/policy/pull/123",
-        "reason": "Reviewed fixture retirement after the announced migration period",
-        "migrationStartsAt": START,
-        "retiresAt": EFFECTIVE,
-    }
-
-
-@contextlib.contextmanager
-def prepared(kind):
-    fixture = kind()
-    fixture.setUp()
-    try:
-        yield fixture
-    finally:
-        fixture.doCleanups()
-
-
-class SupportTests(ProjectFixture):
+class SupportTests(ProjectTestCase):
     def test_support_identity_is_stable_until_retirement_becomes_effective(self):
         self.support["retirements"][RELEASE] = retirement()
         reports = []
@@ -90,7 +77,7 @@ class SupportTests(ProjectFixture):
     def test_compatibility_execution_uses_the_same_decision_before_and_after_retirement(
         self,
     ):
-        with prepared(test_policy.CompatibilityTests) as fixture:
+        with CompatibilityFixture().prepared() as fixture:
             fixture.support["retirements"][RELEASE] = retirement()
             with patch.object(support, "now", return_value=support.timestamp(BEFORE)):
                 code, before = fixture.compatibility()
@@ -126,7 +113,7 @@ class SupportTests(ProjectFixture):
         self.declare(policy_version=RELEASE)
         root = self.write_records()
         (root / "policy/support.json").unlink()
-        code, unknown = test_audits.invoke(
+        code, unknown = invoke(
             "--policy-root", str(root), "ci", str(self.root), "--project", "example"
         )
         self.assertEqual(code, 2, unknown)
@@ -182,20 +169,16 @@ class SupportTests(ProjectFixture):
         for record in cases:
             with self.subTest(record=record):
                 path.write_text(json.dumps(record))
-                code, report = test_audits.invoke(
-                    "--policy-root", str(root), "validate"
-                )
+                code, report = invoke("--policy-root", str(root), "validate")
                 self.assertEqual(code, 2, report)
                 self.assertEqual(report["selectionStatus"], "unknown")
         path.write_text('{"schemaVersion":1,"retirements":{},"retirements":{}}')
-        self.assertEqual(
-            test_audits.invoke("--policy-root", str(root), "validate")[0], 2
-        )
+        self.assertEqual(invoke("--policy-root", str(root), "validate")[0], 2)
 
     def test_new_publication_preserves_older_support_and_retired_members_stay_visible(
         self,
     ):
-        with prepared(test_audits.AuditTests) as fixture:
+        with AuditFixture().prepared() as fixture:
             fixture.add_member("legacy", "v0.1.1")
             for instant in [BEFORE, EFFECTIVE]:
                 with patch.object(
@@ -233,7 +216,7 @@ class SupportTests(ProjectFixture):
                 self.assertIn("legacy", fixture.config["projects"])
 
     def test_audit_rechecks_earlier_members_after_later_members_finish(self):
-        with prepared(test_audits.AuditTests) as fixture:
+        with AuditFixture().prepared() as fixture:
             fixture.add_member("legacy", "v0.1.1")
             fixture.support["retirements"][RELEASE] = retirement()
             current_time = support.timestamp(BEFORE)
@@ -321,7 +304,7 @@ class SupportTests(ProjectFixture):
                     self.assertEqual(output.read_text(), "")
 
 
-class LegacyCleanupTests(ProjectFixture):
+class LegacyCleanupTests(ProjectTestCase):
     def prepare_removal(self):
         self.pins["batches"] = [
             {
@@ -390,10 +373,8 @@ class LegacyCleanupTests(ProjectFixture):
             with (
                 patch.object(policy, "git_revision", return_value=SOURCE),
                 patch.object(policy, "git_dirty", return_value=False),
-                patch.object(releases, "public_get", side_effect=test_audits.published),
-                patch.object(
-                    releases.subprocess, "run", side_effect=test_audits.checked_process
-                ),
+                patch.object(releases, "public_get", side_effect=published),
+                patch.object(releases.subprocess, "run", side_effect=checked_process),
             ):
                 code, migrated = self.validate_removal(
                     previous, "--workspace", str(self.root.parent)
@@ -401,7 +382,7 @@ class LegacyCleanupTests(ProjectFixture):
                 self.assertEqual(code, 0, migrated)
                 self.assertEqual(migrated["migrationEvidence"][0]["revision"], SOURCE)
                 self.workflow["jobs"]["policy"]["uses"] = (
-                    f"{test_policy.POLICY_REPO}/.github/workflows/check.yml@v0.1.1"
+                    f"{POLICY_REPO}/.github/workflows/check.yml@v0.1.1"
                 )
                 self.declare(policy_version="v0.1.1")
                 code, old = self.validate_removal(
@@ -419,7 +400,7 @@ class LegacyCleanupTests(ProjectFixture):
         previous = self.prepare_removal()
         self.retire_legacy()
         inventory = [
-            test_audits.published(f"/releases/tags/{version}")
+            published(f"/releases/tags/{version}")
             for version in [*support.KNOWN_LEGACY_RELEASES, "v0.1.2", RELEASE]
         ]
         with (

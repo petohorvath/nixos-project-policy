@@ -10,17 +10,12 @@ from unittest.mock import patch
 
 import yaml
 
-from tests.test_policy import (
-    POLICY_REPO,
-    ProjectFixture,
-    RELEASE,
-    REQUIRED_CHECKS,
-    VM_CHECK,
-)
+from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.data import POLICY_REPO, RELEASE, REQUIRED_CHECKS, VM_CHECK
 from tools import policy
 
 
-class DeclarationTests(ProjectFixture):
+class DeclarationTests(ProjectTestCase):
     def test_actual_vm_workflow_step_uses_defaults_targets_and_failure_status(self):
         workflow = yaml.load(
             (policy.SOURCE_ROOT / ".github/workflows/check.yml").read_text(),

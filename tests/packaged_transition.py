@@ -1,7 +1,6 @@
 """Host fixture: the built release package with controlled external services."""
 
 import copy
-import hashlib
 import io
 import json
 import os
@@ -10,20 +9,21 @@ import shutil
 import sys
 import tarfile
 import unittest
-import zipfile
 
 import yaml
 
-from tests import test_batches, test_candidates
-from tests.test_policy import NEW_PAIR, PAIR, POLICY_REPO, RELEASE, enabled_enforcement
+from tests.fixtures import workflows
+from tests.fixtures.candidates import BatchFixture
+from tests.fixtures.data import NEW_PAIR, PAIR, POLICY_REPO, RELEASE
+from tests.fixtures.github import GitHub
+from tests.fixtures.process import REAL_RUN
+from tests.fixtures.projects import enabled_enforcement
 from tools import candidates, policy, records
 
 
 class PackagedTransitionTests(unittest.TestCase):
     def setUp(self):
-        self.fixture = test_batches.BatchTests()
-        self.fixture.setUp()
-        self.addCleanup(self.fixture.doCleanups)
+        self.fixture = self.enterContext(BatchFixture().prepared())
         fixture = self.fixture
         self.workspace = fixture.workspace.parent
         self.legacy = {}
@@ -131,7 +131,9 @@ class PackagedTransitionTests(unittest.TestCase):
         startup = self.workspace / "startup"
         startup.mkdir()
         (startup / "sitecustomize.py").write_text(
-            "import runpy\nrunpy.run_path("
+            "import runpy, sys\nsys.path.insert(0, "
+            + repr(str(policy.SOURCE_ROOT))
+            + ")\nrunpy.run_path("
             + repr(str(policy.SOURCE_ROOT / "tests/packaged_adapter.py"))
             + ")\n"
         )
@@ -146,7 +148,7 @@ class PackagedTransitionTests(unittest.TestCase):
     def command(
         self, arguments, *, binary=False, environment=None, cwd=None, expected=0
     ):
-        result = test_candidates.REAL_RUN(
+        result = REAL_RUN(
             arguments,
             text=not binary,
             capture_output=True,
@@ -437,32 +439,9 @@ class PackagedTransitionTests(unittest.TestCase):
         self.save(state)
 
     def artifact(self, name, directory):
-        stream = io.BytesIO()
-        with zipfile.ZipFile(stream, "w") as archive:
-            for path in directory.rglob("*"):
-                if path.is_file():
-                    archive.writestr(
-                        str(path.relative_to(directory)), path.read_bytes()
-                    )
-        data = stream.getvalue()
-        state = records.read_json(self.state)
-        entries = state["github"].setdefault(
-            f"repos/{POLICY_REPO}/actions/runs/91/artifacts", {"artifacts": []}
-        )["artifacts"]
-        identity = len(entries) + 1
-        entries.append(
-            {
-                "id": identity,
-                "name": name,
-                "expired": False,
-                "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
-                "workflow_run": {"id": 91, "head_sha": self.base},
-            }
-        )
-        state["github"][f"repos/{POLICY_REPO}/actions/artifacts/{identity}/zip"] = {
-            "binary": data.hex()
-        }
-        self.save(state)
+        github = GitHub.load(self.state)
+        github.artifact(POLICY_REPO, self.base, name, directory)
+        github.save(self.state)
 
     def routine_pr(self):
         fixture = self.fixture
@@ -489,37 +468,9 @@ class PackagedTransitionTests(unittest.TestCase):
         candidates.write_json(fixture.proposal / "policy/pins.json", pins)
         fixture.commit(fixture.proposal)
         head = policy.git_revision(fixture.proposal)
-        state = records.read_json(self.state)
-        state["github"].update(
-            {
-                f"repos/{POLICY_REPO}": {
-                    "full_name": POLICY_REPO,
-                    "default_branch": "main",
-                },
-                f"repos/{POLICY_REPO}/git/ref/heads/main": {
-                    "object": {"sha": self.base}
-                },
-                f"repos/{POLICY_REPO}/pulls/7": {
-                    "number": 7,
-                    "state": "open",
-                    "head": {"sha": head},
-                    "base": {
-                        "ref": "main",
-                        "sha": self.base,
-                        "repo": {"full_name": POLICY_REPO},
-                    },
-                },
-                f"repos/{POLICY_REPO}/actions/runs/91": {
-                    "id": 91,
-                    "run_attempt": 2,
-                    "event": "pull_request_target",
-                    "path": ".github/workflows/pin-pr.yml",
-                    "head_sha": self.base,
-                    "repository": {"full_name": POLICY_REPO},
-                },
-            }
-        )
-        self.save(state)
+        github = GitHub.load(self.state)
+        github.pin_pr(POLICY_REPO, self.base, head)
+        github.save(self.state)
         workflow = yaml.load(
             (policy.SOURCE_ROOT / ".github/workflows/pin-pr.yml").read_text(),
             Loader=yaml.BaseLoader,
@@ -532,18 +483,10 @@ class PackagedTransitionTests(unittest.TestCase):
             ("members", fixture.workspace),
         ):
             (workspace / name).symlink_to(root, target_is_directory=True)
-        binary = workspace / "bin"
-        binary.mkdir()
-        stub = binary / "nix"
-        stub.write_text(
-            f"#!{sys.executable}\nimport os,sys\nassert sys.argv[1:4] == ['run','--no-update-lock-file','./authority']\nos.execv({self.program!r}, [{self.program!r}, *sys.argv[sys.argv.index('--')+1:]])\n"
-        )
-        stub.chmod(0o755)
         environment = {
-            **self.environment,
-            "PATH": f"{binary}:{os.environ['PATH']}",
-            "RUNNER_TEMP": str(workspace),
-            "GITHUB_OUTPUT": str(workspace / "github-output"),
+            **workflows.environment(
+                workspace, program=self.program, inherited=self.environment
+            ),
             "PR_NUMBER": "7",
             "PROPOSAL_HEAD": head,
             "RUN_ID": "91",
@@ -553,16 +496,9 @@ class PackagedTransitionTests(unittest.TestCase):
         }
 
         def shell(job, **extra):
-            step = next(
-                step
-                for step in workflow["jobs"][job]["steps"]
-                if "nix run" in step.get("run", "")
-            )
-            return self.command(
-                ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-                cwd=workspace,
-                environment={**environment, **extra},
-            )
+            process = workflows.run_step(workflow, job, workspace, environment, **extra)
+            self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+            return process.stdout
 
         shell("capture")
         shell("plan")

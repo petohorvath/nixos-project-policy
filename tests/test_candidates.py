@@ -1,252 +1,29 @@
 """Public candidate coordination with exact Git sources and supplied execution seams."""
 
-import base64
 import copy
 from datetime import datetime, timezone
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
-import sys
 from unittest.mock import patch
 
 import yaml
 
-from tests.test_audits import invoke, published
-from tests.test_policy import (
-    CHECKER,
-    NEW_PAIR,
-    PAIR,
-    POLICY_REPO,
-    ProjectFixture,
-    RELEASE,
-)
+from tests.fixtures import workflows
+from tests.fixtures.candidates import CandidateFixture
+from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.cli import invoke
+from tests.fixtures.data import CHECKER, NEW_PAIR, PAIR, POLICY_REPO, RELEASE
+from tests.fixtures.services import Services
 from tools import candidates, policy, records, releases, support
 
 
-REAL_RUN = subprocess.run
-REAL_OUTPUT = subprocess.check_output
-
-
-class Services:
-    def __init__(self, root):
-        self.root = root
-        self.host = "x86_64-linux"
-        self.commands = []
-        self.failure = None
-        self.mutation = None
-        self.report_mutation = None
-        self.additional = "success"
-
-    def lookup(self, path):
-        if "/git/commits/" in path:
-            return {"sha": policy.git_revision(self.root)}
-        if "/contents/" in path:
-            requirements = records.read_json(
-                policy.SOURCE_ROOT / "policy/requirements.json"
-            )
-            if declarations_version(self.root) == "v0.1.1":
-                requirements.pop("ci")
-            return {
-                "encoding": "base64",
-                "content": base64.b64encode(json.dumps(requirements).encode()).decode(),
-            }
-        if "/check-runs?" in path:
-            return {
-                "check_runs": [
-                    {
-                        "id": 1,
-                        "name": "Member / Extra",
-                        "head_sha": policy.git_revision(self.root),
-                        "status": "completed",
-                        "conclusion": self.additional,
-                    }
-                ]
-            }
-        return published(path)
-
-    def output(self, command, **kwargs):
-        if command[0] == "nix":
-            return self.host if kwargs.get("text") else self.host.encode()
-        return REAL_OUTPUT(command, **kwargs)
-
-    def run(self, command, **kwargs):
-        if command[0] != "nix":
-            return REAL_RUN(command, **kwargs)
-        command = list(map(str, command))
-        self.commands.append(command)
-        if command[1] == "run":
-            arguments = command[command.index("--") + 1 :]
-            operation = arguments[2]
-            if declarations_version(self.root) == RELEASE:
-                code, report = invoke(*arguments)
-            else:
-                code, report = self.released_report(arguments)
-            if self.report_mutation:
-                self.report_mutation(operation, report)
-            return subprocess.CompletedProcess(command, code, json.dumps(report), "")
-        status = 0
-        output = ""
-        if command[1:3] == ["flake", "metadata"]:
-            graph = records.read_json(self.root / "flake.lock")
-            selected = policy.selected_nixpkgs(policy.LockGraph(graph))
-            if "--override-input" in command:
-                graph["nodes"][selected]["locked"]["rev"] = command[-1].rsplit("/", 1)[
-                    1
-                ]
-            output = json.dumps({"locks": graph})
-        elif command[1] == "eval":
-            output = self.host if "--impure" in command else '["behavior"]'
-        elif command[1:3] == ["flake", "check"]:
-            if self.mutation:
-                self.mutation(command)
-            if self.failure == "tests" and "--override-input" not in command:
-                status = 1
-            if self.failure == "compatibility" and "--override-input" in command:
-                status = 1
-        elif command[1] == "fmt" and self.failure == "lint":
-            status = 1
-        if status and kwargs.get("check"):
-            raise subprocess.CalledProcessError(status, command)
-        return subprocess.CompletedProcess(
-            command, status, output, "controlled failure" if status else ""
-        )
-
-    def released_report(self, arguments):
-        """Supply process reports; packaged_transition executes the older checkers."""
-        record_root = Path(arguments[1])
-        config, pins = policy.load_policy(record_root)
-        version = declarations_version(self.root)
-        operation = arguments[2]
-        name = (
-            arguments[arguments.index("--project") + 1]
-            if "--project" in arguments
-            else self.root.name
-        )
-        member = config["projects"][name]
-        report = {
-            "status": "pass",
-            "issues": [],
-            "project": name,
-            "policyVersion": version,
-            "revision": policy.git_revision(self.root),
-            "checkerVersion": version,
-            "policyRecordsRevision": policy.git_revision(record_root),
-            "policyRecordsDigest": records.digest(config, pins, legacy=True),
-        }
-        if operation == "ci":
-            report.update(status="planned", **policy.ci_plan(member, config["ci"]))
-        elif operation in {"check", "compatibility"}:
-            report.update(
-                status="candidate-ready",
-                candidateBatch=arguments[arguments.index("--batch") + 1],
-            )
-        elif operation == "vm":
-            report["targets"] = member["vmTargets"]
-        if operation == "compatibility":
-            channel = arguments[arguments.index("--channel") + 1]
-            batch = next(
-                batch
-                for batch in pins["batches"]
-                if batch["id"] == report["candidateBatch"]
-            )
-            revision = batch["pins"][channel]
-            report.update(
-                status="candidate-pass",
-                system=self.host,
-                channel=channel,
-                pinStatus="candidate",
-                expectedRevision=revision,
-                resolvedRevision=revision,
-                checkerRevision=CHECKER,
-                sourceDirty=False,
-                sourceDigest=candidates.digest(policy.fingerprints(self.root)),
-                checks=["behavior"],
-                commands=[
-                    {
-                        "command": [
-                            "nix",
-                            "flake",
-                            "check",
-                            str(self.root),
-                            "--print-build-logs",
-                            "--override-input",
-                            "nixpkgs",
-                            f"github:NixOS/nixpkgs/{revision}",
-                        ],
-                        "returncode": 0,
-                    }
-                ],
-            )
-        return 0, report
-
-
-def declarations_version(root):
-    return policy.declarations.discover(root, POLICY_REPO)[3]
-
-
-class CandidateTests(ProjectFixture):
+class CandidateTests(CandidateFixture, ProjectTestCase):
     def setUp(self):
         super().setUp()
-        lock = records.read_json(self.root / "flake.lock")
-        lock["nodes"]["entry"]["inputs"].pop("nixpkgs-unstable")
-        lock["nodes"].pop("rolling")
-        candidates.write_json(self.root / "flake.lock", lock)
-        self.baseline = self.write_records()
-        self.proposal = self.root.parent / "proposal"
-        self.commit(self.root)
-        self.commit(self.baseline)
-        shutil.copytree(
-            self.baseline, self.proposal, ignore=shutil.ignore_patterns(".git")
-        )
-        self.propose()
-        self.commit(self.proposal)
-        self.services = Services(self.root)
+        self.services = self.enterContext(Services(self.root).installed())
         self.output_number = 0
-        for adapter in [
-            patch.object(releases, "public_get", side_effect=self.services.lookup),
-            patch.object(subprocess, "run", side_effect=self.services.run),
-            patch.object(subprocess, "check_output", side_effect=self.services.output),
-            patch.object(policy, "PACKAGED_REVISION", CHECKER, create=True),
-        ]:
-            adapter.start()
-            self.addCleanup(adapter.stop)
-
-    def commit(self, root):
-        if not (root / ".git").exists():
-            REAL_RUN(["git", "init", "-q", str(root)], check=True)
-        REAL_RUN(["git", "-C", str(root), "add", "."], check=True)
-        REAL_RUN(
-            [
-                "git",
-                "-C",
-                str(root),
-                "-c",
-                "user.name=Fixture",
-                "-c",
-                "user.email=fixture@example.invalid",
-                "commit",
-                "--allow-empty",
-                "-qm",
-                "test: Capture candidate fixture",
-            ],
-            check=True,
-        )
-
-    def propose(self, *, status="candidate", approved=PAIR):
-        pins = copy.deepcopy(self.pins)
-        pins["approved"] = approved
-        pins["batches"].append(
-            {
-                "id": "next",
-                "status": status,
-                "previous": PAIR,
-                "pins": NEW_PAIR,
-                "projects": {"example": policy.git_revision(self.root)},
-            }
-        )
-        candidates.write_json(self.proposal / "policy/pins.json", pins)
 
     def call(self, operation, *options):
         output = self.root.parent / f"output-{self.output_number}"
@@ -740,11 +517,6 @@ class CandidateTests(ProjectFixture):
         )
         self.assertEqual(workflow["permissions"], {"contents": "read"})
         self.assertEqual(workflow["jobs"]["execute"]["strategy"]["fail-fast"], "false")
-        step = next(
-            step
-            for step in workflow["jobs"]["plan"]["steps"]
-            if step.get("id") == "plan"
-        )
         workspace = self.root.parent / "workflow"
         workspace.mkdir()
         for name, root in [
@@ -753,80 +525,41 @@ class CandidateTests(ProjectFixture):
             ("member", self.root),
         ]:
             (workspace / name).symlink_to(root, target_is_directory=True)
-        binary = workspace / "bin"
-        binary.mkdir()
-        stub = binary / "nix"
-        stub.write_text(
-            f"#!{sys.executable}\nimport sys\nsys.path.insert(0, {str(policy.SOURCE_ROOT)!r})\nfrom tests.test_candidates import workflow_adapter\nworkflow_adapter()\n"
-        )
-        stub.chmod(0o755)
         output = workspace / "github-output"
         environment = {
-            **os.environ,
-            "PATH": f"{binary}:{os.environ['PATH']}",
-            "RUNNER_TEMP": str(workspace),
-            "GITHUB_OUTPUT": str(output),
+            **workflows.environment(workspace, adapter="candidate_adapter"),
             "PROJECT": "example",
             "BATCH": "next",
             "ATTEMPT": "workflow-1",
             "CANDIDATE_FIXTURE_ROOT": str(self.root),
         }
-        result = REAL_RUN(
-            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-            cwd=workspace,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+
+        def shell(job, **extra):
+            return workflows.run_step(
+                workflow, job, workspace, environment, match=f"pin-batch {job}", **extra
+            )
+
+        result = shell("plan")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("matrix=", output.read_text())
         plan = records.read_json(workspace / "candidate-plan/plan.json")
         self.assertEqual(plan["repository"], "owner/example")
         self.assertFalse(plan["eligible"])
-        execute = next(
-            step
-            for step in workflow["jobs"]["execute"]["steps"]
-            if "pin-batch execute" in step.get("run", "")
-        )
         results = workspace / "candidate-results"
         results.mkdir()
         for system in candidates.SYSTEMS:
-            process = REAL_RUN(
-                ["bash", "-e", "-o", "pipefail", "-c", execute["run"]],
-                cwd=workspace,
-                env={**environment, "SYSTEM": system},
-                text=True,
-                capture_output=True,
-            )
+            process = shell("execute", SYSTEM=system)
             self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
             (workspace / "candidate-result").rename(results / system)
-        aggregate = next(
-            step
-            for step in workflow["jobs"]["aggregate"]["steps"]
-            if "pin-batch aggregate" in step.get("run", "")
-        )
-        process = REAL_RUN(
-            ["bash", "-e", "-o", "pipefail", "-c", aggregate["run"]],
-            cwd=workspace,
-            env={**environment, "EXECUTION_RESULT": "success"},
-            text=True,
-            capture_output=True,
-        )
+        process = shell("aggregate", EXECUTION_RESULT="success")
         self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
         self.assertFalse(
             records.read_json(workspace / "candidate-summary/result.json")["eligible"]
         )
-        process = REAL_RUN(
-            ["bash", "-e", "-o", "pipefail", "-c", execute["run"]],
-            cwd=workspace,
-            env={
-                **environment,
-                "SYSTEM": "x86_64-linux",
-                "CANDIDATE_FIXTURE_FAILURE": "lint",
-            },
-            text=True,
-            capture_output=True,
+        process = shell(
+            "execute",
+            SYSTEM="x86_64-linux",
+            CANDIDATE_FIXTURE_FAILURE="lint",
         )
         self.assertNotEqual(process.returncode, 0)
         self.assertEqual(
@@ -840,16 +573,3 @@ class CandidateTests(ProjectFixture):
                 if "upload-artifact" in step.get("uses", "")
             )
             self.assertEqual(upload["if"], "always()")
-
-
-def workflow_adapter():
-    services = Services(Path(os.environ["CANDIDATE_FIXTURE_ROOT"]))
-    services.host = os.environ.get("SYSTEM", "x86_64-linux")
-    services.failure = os.environ.get("CANDIDATE_FIXTURE_FAILURE")
-    with (
-        patch.object(releases, "public_get", side_effect=services.lookup),
-        patch.object(subprocess, "run", side_effect=services.run),
-        patch.object(subprocess, "check_output", side_effect=services.output),
-        patch.object(policy, "PACKAGED_REVISION", CHECKER, create=True),
-    ):
-        sys.exit(policy.main(sys.argv[sys.argv.index("--") + 1 :]))

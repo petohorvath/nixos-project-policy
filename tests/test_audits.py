@@ -1,11 +1,9 @@
 """Audit the public CLI with controlled Git, release, process, and GitHub seams."""
 
-import contextlib
 import copy
 import io
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
@@ -14,116 +12,15 @@ from urllib.error import HTTPError
 
 import yaml
 
-from tests.test_policy import (
-    CHECKER,
-    POLICY_REPO,
-    ProjectFixture,
-    RELEASE,
-    REQUIRED_CHECKS,
-    SOURCE,
-)
-from tools import policy, records, releases
+from tests.fixtures.audits import AuditFixture, checked_process
+from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.cli import invoke
+from tests.fixtures.data import CHECKER, POLICY_REPO, RELEASE, REQUIRED_CHECKS, SOURCE
+from tests.fixtures.services import published
+from tools import policy, records
 
 
-def invoke(*arguments):
-    output, errors = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-        code = policy.main(list(arguments))
-    return code, json.loads(output.getvalue() or errors.getvalue())
-
-
-def published(path):
-    if "/releases/tags/" in path:
-        return {
-            "tag_name": path.rsplit("/", 1)[1],
-            "immutable": True,
-            "draft": False,
-            "prerelease": False,
-        }
-    return {"object": {"type": "commit", "sha": CHECKER}}
-
-
-def checked_process(command, **kwargs):
-    arguments = command[command.index("--") + 1 :]
-    root = Path(arguments[arguments.index("check") + 1])
-    record_root = Path(arguments[arguments.index("--policy-root") + 1])
-    name = arguments[arguments.index("--project") + 1]
-    _, _, _, version = policy.declarations.discover(root, POLICY_REPO)
-    if version == RELEASE:
-        code, report = invoke(*arguments)
-    else:
-        config, pins = policy.load_policy(record_root)
-        report = {
-            "project": name,
-            "policyVersion": version,
-            "checkerVersion": version,
-            "revision": SOURCE,
-            "policyRecordsRevision": SOURCE,
-            "policyRecordsDigest": records.digest(config, pins, legacy=True),
-            "status": "pass",
-            "issues": [],
-            "dependencies": [],
-            "requiredChecks": config["projects"][name]["requiredChecks"],
-        }
-        code = 0
-    return subprocess.CompletedProcess(
-        command,
-        code,
-        json.dumps(report) if code != 2 else "",
-        json.dumps(report) if code == 2 else "",
-    )
-
-
-class AuditTests(ProjectFixture):
-    def setUp(self):
-        super().setUp()
-        self.config["projects"]["example"]["requiredChecks"] = list(REQUIRED_CHECKS)
-        self.release_requests = []
-        self.commands = []
-        self.process = checked_process
-        self.release_response = published
-
-        def lookup(path):
-            self.release_requests.append(path)
-            return self.release_response(path)
-
-        def execute(command, **kwargs):
-            self.commands.append(command)
-            return self.process(command, **kwargs)
-
-        for adapter in [
-            patch.object(policy, "git_revision", return_value=SOURCE),
-            patch.object(policy, "git_dirty", return_value=False),
-            patch.object(releases, "public_get", side_effect=lookup),
-            patch.object(releases.subprocess, "run", side_effect=execute),
-        ]:
-            adapter.start()
-            self.addCleanup(adapter.stop)
-
-    def audit(self, *options):
-        return self.run_policy("audit", str(self.root.parent), *options)
-
-    def add_member(self, name, version):
-        root = self.root.parent / name
-        shutil.copytree(self.root, root)
-        workflow = copy.deepcopy(self.workflow)
-        caller = workflow["jobs"]["policy"]
-        caller["uses"] = f"{POLICY_REPO}/.github/workflows/check.yml@{version}"
-        caller["with"] = {"project": name, "policy_version": version}
-        if releases.version_at_least(version, (0, 4, 0)):
-            caller["with"]["required_architectures"] = '["x86_64-linux"]'
-        (root / ".github/workflows/policy.yml").write_text(json.dumps(workflow))
-        self.members[name] = f"owner/{name}"
-        self.config["projects"][name] = {
-            "repository": f"owner/{name}",
-            "adopted": True,
-            "policyVersion": version,
-            "vmTargets": [],
-            "requiredArchitectures": ["x86_64-linux"],
-            "requiredChecks": ["Historical / Release-specific tests"],
-        }
-        return root
-
+class AuditTests(AuditFixture, ProjectTestCase):
     def test_mixed_selections_use_verified_commits_and_separate_gate_contracts(self):
         self.add_member("legacy", "v0.1.1")
         self.add_member("derived", "v0.3.0")
@@ -503,7 +400,7 @@ class AuditTests(ProjectFixture):
                     )
 
 
-class RosterTests(ProjectFixture):
+class RosterTests(ProjectTestCase):
     def test_changed_records_are_an_error_even_with_no_enrolled_members(self):
         self.members.clear()
         load = policy.load_policy
@@ -612,7 +509,7 @@ class RosterTests(ProjectFixture):
         self.assertEqual(step["env"], {"GH_TOKEN": "${{ secrets.MEMBER_AUDIT_TOKEN }}"})
         stub = workspace / "nix"
         stub.write_text(
-            f"#!{sys.executable}\nimport sys\nsys.path.insert(0, {str(policy.SOURCE_ROOT)!r})\nfrom tests.test_audits import maintenance_adapter\nmaintenance_adapter()\n"
+            f"#!{sys.executable}\nimport sys\nsys.path.insert(0, {str(policy.SOURCE_ROOT)!r})\nfrom tests.fixtures.workflows import audit_adapter\naudit_adapter()\n"
         )
         stub.chmod(0o755)
         original = (projects / "example/.github/workflows/policy.yml").read_text()
@@ -678,25 +575,3 @@ class RosterTests(ProjectFixture):
                     report["projects"][0]["status"],
                     {0: "pass", 1: "fail", 2: "error"}[expected],
                 )
-
-
-def maintenance_adapter():
-    """Controlled external services for the actual maintenance shell invocation."""
-
-    def gates(project, checks, *, workflow):
-        if os.environ["AUDIT_TEST_MODE"] == "github-error":
-            raise ValueError("GitHub inspection unavailable; settings are unknown")
-        if project["repository"] not in {"owner/example", "owner/legacy"}:
-            raise AssertionError("Member declaration redirected GitHub inspection")
-        if workflow != ".github/workflows/policy.yml":
-            raise AssertionError("GitHub inspection ignored the discovered caller")
-        return []
-
-    with (
-        patch.object(policy, "git_revision", return_value=SOURCE),
-        patch.object(policy, "git_dirty", return_value=False),
-        patch.object(releases, "public_get", side_effect=published),
-        patch.object(releases.subprocess, "run", side_effect=checked_process),
-        patch.object(policy, "check_github", side_effect=gates),
-    ):
-        sys.exit(policy.main(sys.argv[sys.argv.index("--") + 1 :]))

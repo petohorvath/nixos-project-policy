@@ -3,129 +3,50 @@
 import copy
 import io
 import json
-import os
 import shutil
-import subprocess
 import sys
 import zipfile
-from pathlib import Path
-from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import yaml
 
-from tests.test_audits import invoke
-from tests import test_candidates as fixture
-from tests.test_policy import CHECKER, NEW_PAIR, PAIR, POLICY_REPO, ProjectFixture
-from tools import candidates, policy, records, releases, support
-from tests.test_support import BEFORE, EFFECTIVE, retirement
+from tests.fixtures import workflows
+from tests.fixtures.candidates import CandidateFixture
+from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.cli import invoke
+from tests.fixtures.data import (
+    BEFORE,
+    EFFECTIVE,
+    NEW_PAIR,
+    PAIR,
+    POLICY_REPO,
+    retirement,
+)
+from tests.fixtures.github import GitHub
+from tests.fixtures.services import Services
+from tools import candidates, policy, records, support
 
 
-class PinPRTests(ProjectFixture):
-    commit = fixture.CandidateTests.commit
-
+class PinPRTests(CandidateFixture, ProjectTestCase):
     def setUp(self):
         super().setUp()
-        lock = records.read_json(self.root / "flake.lock")
-        lock["nodes"]["entry"]["inputs"].pop("nixpkgs-unstable")
-        lock["nodes"].pop("rolling")
-        candidates.write_json(self.root / "flake.lock", lock)
-        self.commit(self.root)
-        self.baseline = self.write_records()
-        self.commit(self.baseline)
-        self.proposal = self.root.parent / "proposal"
-        shutil.copytree(
-            self.baseline, self.proposal, ignore=shutil.ignore_patterns(".git")
-        )
-        pins = copy.deepcopy(self.pins)
-        pins["approved"] = NEW_PAIR
-        pins["batches"].append(
-            {
-                "id": "next",
-                "status": "complete",
-                "pins": NEW_PAIR,
-                "previous": PAIR,
-                "projects": {"example": policy.git_revision(self.root)},
-            }
-        )
-        candidates.write_json(self.proposal / "policy/pins.json", pins)
+        self.propose(status="complete", approved=NEW_PAIR)
         self.commit(self.proposal)
         self.head = policy.git_revision(self.proposal)
         self.base = policy.git_revision(self.baseline)
-        self.requests = []
-        self.checks = []
-        self.github = {
-            f"repos/{POLICY_REPO}": {
-                "full_name": POLICY_REPO,
-                "default_branch": "main",
-            },
-            f"repos/{POLICY_REPO}/pulls/7": {
-                "number": 7,
-                "state": "open",
-                "head": {"sha": self.head},
-                "base": {
-                    "sha": self.base,
-                    "ref": "main",
-                    "repo": {"full_name": POLICY_REPO},
-                },
-            },
-            f"repos/{POLICY_REPO}/git/ref/heads/main": {"object": {"sha": self.base}},
-            f"repos/{POLICY_REPO}/actions/runs/91": {
-                "id": 91,
-                "run_attempt": 2,
-                "event": "pull_request_target",
-                "path": ".github/workflows/pin-pr.yml",
-                "head_sha": self.base,
-                "repository": {"full_name": POLICY_REPO},
-            },
-        }
+        self.hosted = GitHub()
+        self.hosted.pin_pr(POLICY_REPO, self.base, self.head)
         self.number = 0
-        self.archives = {}
-
-    def transport(self, request, **kwargs):
-        path = request.full_url.removeprefix("https://api.github.com/").split("?")[0]
-        method = request.get_method()
-        payload = json.loads(request.data) if request.data else None
-        self.requests.append((method, path, payload))
-        if method == "POST" and path.endswith("/check-runs"):
-            value = {
-                **payload,
-                "id": len(self.checks) + 1,
-                "app": {"slug": "github-actions"},
-            }
-            self.checks.append(value)
-        elif "/check-runs/" in path:
-            value = self.checks[int(path.rsplit("/", 1)[1]) - 1]
-            if method == "PATCH":
-                value.update(payload)
-        elif path.endswith("/check-runs"):
-            value = {"check_runs": self.checks}
-        else:
-            value = self.github[path]
-        if isinstance(value, bytes):
-            return io.BytesIO(value)
-        return io.BytesIO(json.dumps(value).encode())
 
     def evidence(self):
         workspace = self.root.parent / "members"
         workspace.mkdir()
         (workspace / "example").symlink_to(self.root, target_is_directory=True)
-        services = fixture.Services(self.root)
-
-        def execute(command, **kwargs):
-            if command[:2] == ["nix", "run"]:
-                with patch.object(policy, "PACKAGED_REVISION", CHECKER, create=True):
-                    return services.run(command, **kwargs)
-            return services.run(command, **kwargs)
+        services = Services(self.root)
 
         common = ["--policy-root", str(self.baseline), "pin-batch"]
-        with (
-            patch.object(releases, "public_get", side_effect=services.lookup),
-            patch.object(subprocess, "run", side_effect=execute),
-            patch.object(subprocess, "check_output", side_effect=services.output),
-            patch.object(policy, "PACKAGED_REVISION", self.base, create=True),
-        ):
+        with services.installed(coordinator=self.base):
             plan_dir = self.root.parent / "plan"
             code, plan = invoke(
                 *common,
@@ -203,9 +124,6 @@ class PinPRTests(ProjectFixture):
                 str(summary),
             )
             self.assertEqual(code, 0, result)
-        import hashlib
-
-        artifacts = []
         for name, directory in [
             ("pin-plan-91-2", plan_dir),
             ("pin-summary-91-2", summary),
@@ -214,28 +132,7 @@ class PinPRTests(ProjectFixture):
                 for row in plan["matrix"]["include"]
             ],
         ]:
-            stream = io.BytesIO()
-            with zipfile.ZipFile(stream, "w") as archive:
-                for path in directory.rglob("*"):
-                    if path.is_file():
-                        archive.writestr(
-                            str(path.relative_to(directory)), path.read_bytes()
-                        )
-            data = stream.getvalue()
-            identity = len(artifacts) + 1
-            artifacts.append(
-                {
-                    "id": identity,
-                    "name": name,
-                    "expired": False,
-                    "digest": f"sha256:{hashlib.sha256(data).hexdigest()}",
-                    "workflow_run": {"id": 91, "head_sha": self.base},
-                }
-            )
-            self.github[f"repos/{POLICY_REPO}/actions/artifacts/{identity}/zip"] = data
-        self.github[f"repos/{POLICY_REPO}/actions/runs/91/artifacts"] = {
-            "artifacts": artifacts
-        }
+            self.hosted.artifact(POLICY_REPO, self.base, name, directory)
         jobs = [
             {
                 "id": 1,
@@ -266,9 +163,9 @@ class PinPRTests(ProjectFixture):
             }
             for index, row in enumerate(plan["matrix"]["include"])
         ]
-        self.github[f"repos/{POLICY_REPO}/actions/runs/91/attempts/2/jobs"] = {
-            "jobs": jobs
-        }
+        self.hosted.responses[
+            f"repos/{POLICY_REPO}/actions/runs/91/attempts/2/jobs"
+        ] = {"jobs": jobs}
         return plan
 
     def call(self, operation, *options):
@@ -296,7 +193,7 @@ class PinPRTests(ProjectFixture):
                 "2",
             ]
         with (
-            patch("urllib.request.urlopen", side_effect=self.transport),
+            patch("urllib.request.urlopen", side_effect=self.hosted.transport),
             patch.dict("os.environ", {"GH_TOKEN": "fixture-read-or-report-token"}),
         ):
             code, report = invoke(*arguments, *options)
@@ -309,15 +206,17 @@ class PinPRTests(ProjectFixture):
         )
         self.commit(self.proposal)
         self.head = policy.git_revision(self.proposal)
-        self.github[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = self.head
+        self.hosted.responses[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = self.head
         code, report, _ = self.call("capture")
         self.assertEqual(code, 0, report)
         self.assertEqual(report["classification"], "candidate")
         self.assertEqual(report["batch"], "next")
         self.assertFalse(report["eligible"])
-        self.assertEqual(self.checks[0]["head_sha"], self.head)
-        self.assertEqual(self.checks[0]["status"], "in_progress")
-        self.assertEqual(self.checks[0]["name"], "Pin batch / Complete candidate")
+        self.assertEqual(self.hosted.checks[0]["head_sha"], self.head)
+        self.assertEqual(self.hosted.checks[0]["status"], "in_progress")
+        self.assertEqual(
+            self.hosted.checks[0]["name"], "Pin batch / Complete candidate"
+        )
         self.assertEqual(
             records.read_json(self.baseline / "policy/pins.json")["approved"], PAIR
         )
@@ -348,7 +247,9 @@ class PinPRTests(ProjectFixture):
                 candidates.write_json(path, data)
                 self.commit(self.proposal)
                 self.head = policy.git_revision(self.proposal)
-                self.github[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = self.head
+                self.hosted.responses[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = (
+                    self.head
+                )
                 code, result, _ = self.call("capture")
                 self.assertEqual(code, 2, result)
                 self.assertFalse(result["eligible"])
@@ -365,9 +266,9 @@ class PinPRTests(ProjectFixture):
         self.assertEqual(manifest["attempt"], "91:2")
         self.assertEqual(manifest["planDigest"], plan["planDigest"])
         self.assertEqual(len(list((output / "workers").glob("*/result.json"))), 2)
-        jobs = self.github[f"repos/{POLICY_REPO}/actions/runs/91/attempts/2/jobs"][
-            "jobs"
-        ]
+        jobs = self.hosted.responses[
+            f"repos/{POLICY_REPO}/actions/runs/91/attempts/2/jobs"
+        ]["jobs"]
         jobs[-1]["conclusion"] = "cancelled"
         code, report, output = self.call("collect")
         self.assertNotEqual(code, 0, report)
@@ -380,67 +281,71 @@ class PinPRTests(ProjectFixture):
         code, report, _ = self.call("finish", "--check", str(captured["check"]))
         self.assertEqual(code, 0, report)
         self.assertTrue(report["eligible"])
-        self.assertEqual(self.checks[0]["conclusion"], "success")
-        self.assertEqual(self.checks[0]["head_sha"], self.head)
-        self.github[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = "f" * 40
+        self.assertEqual(self.hosted.checks[0]["conclusion"], "success")
+        self.assertEqual(self.hosted.checks[0]["head_sha"], self.head)
+        self.hosted.responses[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = "f" * 40
         code, report, _ = self.call("finish", "--check", str(captured["check"]))
         self.assertNotEqual(code, 0, report)
-        self.assertEqual(self.checks[0]["conclusion"], "failure")
+        self.assertEqual(self.hosted.checks[0]["conclusion"], "failure")
         self.assertIn("head", str(report["issues"]))
 
     def test_old_target_workflow_cannot_attest_newer_baseline_on_rerun(self):
-        self.github[f"repos/{POLICY_REPO}/actions/runs/91"]["head_sha"] = "f" * 40
+        self.hosted.responses[f"repos/{POLICY_REPO}/actions/runs/91"]["head_sha"] = (
+            "f" * 40
+        )
         code, report, _ = self.call("capture")
         self.assertNotEqual(code, 0, report)
-        self.assertFalse(self.checks)
+        self.assertFalse(self.hosted.checks)
 
     def test_hosted_failures_and_unavailable_artifacts_never_publish_success(self):
         _, captured, _ = self.call("capture")
         self.evidence()
-        original = copy.deepcopy(self.github)
+        original = copy.deepcopy(self.hosted.responses)
         job_path = f"repos/{POLICY_REPO}/actions/runs/91/attempts/2/jobs"
         artifact_path = f"repos/{POLICY_REPO}/actions/runs/91/artifacts"
         mutations = {
-            "missing artifact": lambda: self.github[artifact_path]["artifacts"].pop(),
-            "expired artifact": lambda: self.github[artifact_path]["artifacts"][
-                -1
-            ].update(expired=True),
-            "wrong run": lambda: self.github[artifact_path]["artifacts"][-1][
+            "missing artifact": lambda: self.hosted.responses[artifact_path][
+                "artifacts"
+            ].pop(),
+            "expired artifact": lambda: self.hosted.responses[artifact_path][
+                "artifacts"
+            ][-1].update(expired=True),
+            "wrong run": lambda: self.hosted.responses[artifact_path]["artifacts"][-1][
                 "workflow_run"
             ].update(id=92),
-            "wrong attempt": lambda: self.github[
+            "wrong attempt": lambda: self.hosted.responses[
                 f"repos/{POLICY_REPO}/actions/runs/91"
             ].update(run_attempt=3),
-            "manual workflow": lambda: self.github[
+            "manual workflow": lambda: self.hosted.responses[
                 f"repos/{POLICY_REPO}/actions/runs/91"
             ].update(event="workflow_dispatch"),
-            "substituted workflow": lambda: self.github[
+            "substituted workflow": lambda: self.hosted.responses[
                 f"repos/{POLICY_REPO}/actions/runs/91"
             ].update(path=".github/workflows/untrusted.yml"),
-            "skipped worker": lambda: self.github[job_path]["jobs"][-1].update(
-                conclusion="skipped"
+            "skipped worker": lambda: self.hosted.responses[job_path]["jobs"][
+                -1
+            ].update(conclusion="skipped"),
+            "missing worker": lambda: self.hosted.responses[job_path]["jobs"].pop(),
+            "wrong native runner": lambda: self.hosted.responses[job_path]["jobs"][
+                -1
+            ].update(labels=["ubuntu-24.04"]),
+            "failed aggregate upload": lambda: self.hosted.responses[job_path]["jobs"][
+                2
+            ].update(conclusion="failure"),
+            "duplicate job": lambda: self.hosted.responses[job_path]["jobs"].append(
+                self.hosted.responses[job_path]["jobs"][-1]
             ),
-            "missing worker": lambda: self.github[job_path]["jobs"].pop(),
-            "wrong native runner": lambda: self.github[job_path]["jobs"][-1].update(
-                labels=["ubuntu-24.04"]
-            ),
-            "failed aggregate upload": lambda: self.github[job_path]["jobs"][2].update(
-                conclusion="failure"
-            ),
-            "duplicate job": lambda: self.github[job_path]["jobs"].append(
-                self.github[job_path]["jobs"][-1]
-            ),
-            "duplicate artifact": lambda: self.github[artifact_path][
+            "duplicate artifact": lambda: self.hosted.responses[artifact_path][
                 "artifacts"
-            ].append(self.github[artifact_path]["artifacts"][-1]),
+            ].append(self.hosted.responses[artifact_path]["artifacts"][-1]),
         }
         for name, mutate in mutations.items():
-            self.github = copy.deepcopy(original)
+            self.hosted.responses = copy.deepcopy(original)
             mutate()
             with self.subTest(change=name):
                 code, result, _ = self.call("finish", "--check", str(captured["check"]))
                 self.assertNotEqual(code, 0, result)
-                self.assertEqual(self.checks[0]["conclusion"], "failure")
+                self.assertEqual(self.hosted.checks[0]["conclusion"], "failure")
 
     def test_artifact_archives_cannot_escape_or_redirect_evidence_extraction(self):
         self.call("capture")
@@ -460,10 +365,10 @@ class PinPRTests(ProjectFixture):
                 else:
                     archive.writestr("plan.json", "not json")
             data = stream.getvalue()
-            self.github[f"repos/{POLICY_REPO}/actions/artifacts/1/zip"] = data
-            self.github[f"repos/{POLICY_REPO}/actions/runs/91/artifacts"]["artifacts"][
-                0
-            ]["digest"] = "sha256:" + (
+            self.hosted.responses[f"repos/{POLICY_REPO}/actions/artifacts/1/zip"] = data
+            self.hosted.responses[f"repos/{POLICY_REPO}/actions/runs/91/artifacts"][
+                "artifacts"
+            ][0]["digest"] = "sha256:" + (
                 "0" * 64 if mode == "wrong-digest" else hashlib.sha256(data).hexdigest()
             )
             with self.subTest(mode=mode):
@@ -472,7 +377,9 @@ class PinPRTests(ProjectFixture):
                 self.assertFalse((output / "outside").exists())
 
     def test_state_only_recovery_and_non_pin_changes_do_not_require_a_new_batch(self):
-        self.github[f"repos/{POLICY_REPO}/actions/runs/91/attempts/2/jobs"] = {
+        self.hosted.responses[
+            f"repos/{POLICY_REPO}/actions/runs/91/attempts/2/jobs"
+        ] = {
             "jobs": [
                 {
                     "id": 1,
@@ -482,7 +389,7 @@ class PinPRTests(ProjectFixture):
                 }
             ]
         }
-        self.github[f"repos/{POLICY_REPO}/actions/runs/91/artifacts"] = {
+        self.hosted.responses[f"repos/{POLICY_REPO}/actions/runs/91/artifacts"] = {
             "artifacts": []
         }
         pins = records.read_json(self.proposal / "policy/pins.json")
@@ -490,17 +397,21 @@ class PinPRTests(ProjectFixture):
         candidates.write_json(self.baseline / "policy/pins.json", pins)
         self.commit(self.baseline)
         self.base = policy.git_revision(self.baseline)
-        self.github[f"repos/{POLICY_REPO}/git/ref/heads/main"]["object"]["sha"] = (
+        self.hosted.responses[f"repos/{POLICY_REPO}/git/ref/heads/main"]["object"][
+            "sha"
+        ] = self.base
+        self.hosted.responses[f"repos/{POLICY_REPO}/actions/runs/91"]["head_sha"] = (
             self.base
         )
-        self.github[f"repos/{POLICY_REPO}/actions/runs/91"]["head_sha"] = self.base
         for state in ("approved", "paused", "rolling", "complete", "withdrawn"):
             pins["batches"][-1]["status"] = state
             candidates.write_json(self.proposal / "policy/pins.json", pins)
             self.commit(self.proposal)
             self.head = policy.git_revision(self.proposal)
-            self.github[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = self.head
-            self.checks = []
+            self.hosted.responses[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = (
+                self.head
+            )
+            self.hosted.checks = []
             with self.subTest(state=state):
                 code, result, _ = self.call("capture")
                 self.assertEqual(code, 0, result)
@@ -510,7 +421,7 @@ class PinPRTests(ProjectFixture):
                 code, result, _ = self.call("finish", "--check", "1")
                 self.assertEqual(code, 0, result)
                 self.assertFalse(result["eligible"])
-                self.assertEqual(self.checks[0]["conclusion"], "success")
+                self.assertEqual(self.hosted.checks[0]["conclusion"], "success")
                 code, candidate = invoke(
                     "--policy-root",
                     str(self.baseline),
@@ -533,18 +444,18 @@ class PinPRTests(ProjectFixture):
         _, captured, _ = self.call("capture")
         self.evidence()
         self.assertEqual(self.call("finish", "--check", str(captured["check"]))[0], 0)
-        self.github[f"repos/{POLICY_REPO}/pulls"] = [
-            self.github[f"repos/{POLICY_REPO}/pulls/7"]
+        self.hosted.responses[f"repos/{POLICY_REPO}/pulls"] = [
+            self.hosted.responses[f"repos/{POLICY_REPO}/pulls/7"]
         ]
         (self.baseline / "reviewed.txt").write_text("New trusted baseline\n")
         self.commit(self.baseline)
         current = policy.git_revision(self.baseline)
-        self.github[f"repos/{POLICY_REPO}/git/ref/heads/main"]["object"]["sha"] = (
-            current
-        )
+        self.hosted.responses[f"repos/{POLICY_REPO}/git/ref/heads/main"]["object"][
+            "sha"
+        ] = current
         code, result, _ = self.call("invalidate")
         self.assertEqual(code, 0, result)
-        self.assertEqual(self.checks[0]["conclusion"], "failure")
+        self.assertEqual(self.hosted.checks[0]["conclusion"], "failure")
         self.assertEqual(result["invalidated"][0]["number"], 7)
         self.assertIn("base", result["invalidated"][0]["reason"])
 
@@ -560,24 +471,26 @@ class PinPRTests(ProjectFixture):
             policy.git_revision(self.baseline),
             policy.git_revision(self.proposal),
         )
-        self.github[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = self.head
-        self.github[f"repos/{POLICY_REPO}/git/ref/heads/main"]["object"]["sha"] = (
+        self.hosted.responses[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = self.head
+        self.hosted.responses[f"repos/{POLICY_REPO}/git/ref/heads/main"]["object"][
+            "sha"
+        ] = self.base
+        self.hosted.responses[f"repos/{POLICY_REPO}/actions/runs/91"]["head_sha"] = (
             self.base
         )
-        self.github[f"repos/{POLICY_REPO}/actions/runs/91"]["head_sha"] = self.base
         with patch.object(support, "now", return_value=support.timestamp(BEFORE)):
             _, captured, _ = self.call("capture")
             self.evidence()
             self.assertEqual(
                 self.call("finish", "--check", str(captured["check"]))[0], 0
             )
-        self.github[f"repos/{POLICY_REPO}/pulls"] = [
-            self.github[f"repos/{POLICY_REPO}/pulls/7"]
+        self.hosted.responses[f"repos/{POLICY_REPO}/pulls"] = [
+            self.hosted.responses[f"repos/{POLICY_REPO}/pulls/7"]
         ]
         with patch.object(support, "now", return_value=support.timestamp(EFFECTIVE)):
             code, result, _ = self.call("invalidate")
             self.assertEqual(code, 0, result)
-            self.assertEqual(self.checks[0]["conclusion"], "failure")
+            self.assertEqual(self.hosted.checks[0]["conclusion"], "failure")
             code, result, _ = self.call("finish", "--check", str(captured["check"]))
             self.assertNotEqual(code, 0, result)
             self.assertIn("example", str(result["issues"]))
@@ -596,19 +509,9 @@ class PinPRTests(ProjectFixture):
         (workspace / "members").mkdir()
         (workspace / "members/example").symlink_to(self.root, target_is_directory=True)
         (workspace / "member").symlink_to(self.root, target_is_directory=True)
-        binary = workspace / "bin"
-        binary.mkdir()
-        stub = binary / "nix"
-        stub.write_text(
-            f"#!{sys.executable}\nimport sys\nsys.path.insert(0, {str(policy.SOURCE_ROOT)!r})\nfrom tests.test_pin_pr import workflow_adapter\nworkflow_adapter()\n"
-        )
-        stub.chmod(0o755)
         state = workspace / "github.json"
         environment = {
-            **os.environ,
-            "PATH": f"{binary}:{os.environ['PATH']}",
-            "RUNNER_TEMP": str(workspace),
-            "GITHUB_OUTPUT": str(workspace / "github-output"),
+            **workflows.environment(workspace, adapter="pr_adapter"),
             "GH_TOKEN": "fixture",
             "PR_NUMBER": "7",
             "PROPOSAL_HEAD": self.head,
@@ -621,58 +524,11 @@ class PinPRTests(ProjectFixture):
             "PR_FIXTURE_BASE": self.base,
         }
 
-        def save():
-            value = {
-                "github": {
-                    key: {"binary": data.hex()} if isinstance(data, bytes) else data
-                    for key, data in self.github.items()
-                },
-                "checks": self.checks,
-            }
-            candidates.write_json(state, value)
-
         def shell(job, **extra):
-            save()
-            step = next(
-                step
-                for step in workflow["jobs"][job]["steps"]
-                if "nix run" in step.get("run", "")
-            )
-            process = fixture.REAL_RUN(
-                ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-                cwd=workspace,
-                env={**environment, **extra},
-                text=True,
-                capture_output=True,
-            )
-            self.checks = records.read_json(state)["checks"]
+            self.hosted.save(state)
+            process = workflows.run_step(workflow, job, workspace, environment, **extra)
+            self.hosted.checks = GitHub.load(state).checks
             return process
-
-        def artifact(name, directory):
-            import hashlib
-
-            stream = io.BytesIO()
-            with zipfile.ZipFile(stream, "w") as archive:
-                for path in directory.rglob("*"):
-                    if path.is_file():
-                        archive.writestr(
-                            str(path.relative_to(directory)), path.read_bytes()
-                        )
-            data = stream.getvalue()
-            entries = self.github.setdefault(
-                f"repos/{POLICY_REPO}/actions/runs/91/artifacts", {"artifacts": []}
-            )["artifacts"]
-            identity = len(entries) + 1
-            entries.append(
-                {
-                    "id": identity,
-                    "name": name,
-                    "expired": False,
-                    "digest": f"sha256:{hashlib.sha256(data).hexdigest()}",
-                    "workflow_run": {"id": 91, "head_sha": self.base},
-                }
-            )
-            self.github[f"repos/{POLICY_REPO}/actions/artifacts/{identity}/zip"] = data
 
         process = shell("capture")
         self.assertEqual(process.returncode, 0, process.stderr)
@@ -682,7 +538,9 @@ class PinPRTests(ProjectFixture):
         process = shell("plan")
         self.assertEqual(process.returncode, 0, process.stderr)
         plan = records.read_json(workspace / "pin-plan/plan.json")
-        artifact("pin-plan-91-2", workspace / "pin-plan")
+        self.hosted.artifact(
+            POLICY_REPO, self.base, "pin-plan-91-2", workspace / "pin-plan"
+        )
         jobs = [
             {
                 "id": index + 1,
@@ -701,7 +559,12 @@ class PinPRTests(ProjectFixture):
         for index, row in enumerate(plan["matrix"]["include"]):
             process = shell("execute", PROJECT=row["project"], SYSTEM=row["system"])
             self.assertEqual(process.returncode, 0, process.stderr)
-            artifact(f"pin-result-91-2-{row['worker']}", workspace / "pin-result")
+            self.hosted.artifact(
+                POLICY_REPO,
+                self.base,
+                f"pin-result-91-2-{row['worker']}",
+                workspace / "pin-result",
+            )
             (workspace / "pin-result").rename(workspace / row["worker"])
             jobs.append(
                 {
@@ -712,15 +575,17 @@ class PinPRTests(ProjectFixture):
                     "labels": [row["runner"]],
                 }
             )
-        self.github[f"repos/{POLICY_REPO}/actions/runs/91/attempts/2/jobs"] = {
-            "jobs": jobs
-        }
+        self.hosted.responses[
+            f"repos/{POLICY_REPO}/actions/runs/91/attempts/2/jobs"
+        ] = {"jobs": jobs}
         process = shell("aggregate")
         self.assertEqual(process.returncode, 0, process.stderr)
-        artifact("pin-summary-91-2", workspace / "pin-summary")
+        self.hosted.artifact(
+            POLICY_REPO, self.base, "pin-summary-91-2", workspace / "pin-summary"
+        )
         process = shell("finish", CHECK_ID="1")
         self.assertEqual(process.returncode, 0, process.stderr)
-        self.assertEqual(self.checks[0]["conclusion"], "success")
+        self.assertEqual(self.hosted.checks[0]["conclusion"], "success")
         # Existing success files cannot conceal a failed native job or its upload.
         jobs[-1]["conclusion"] = "failure"
         for directory in ("pin-provenance", "pin-summary", "pin-report"):
@@ -733,7 +598,7 @@ class PinPRTests(ProjectFixture):
         jobs[2]["conclusion"] = "failure"
         process = shell("finish", CHECK_ID="1")
         self.assertNotEqual(process.returncode, 0)
-        self.assertEqual(self.checks[0]["conclusion"], "failure")
+        self.assertEqual(self.hosted.checks[0]["conclusion"], "failure")
         self.assertEqual(workflow["permissions"], {"contents": "read"})
         self.assertEqual(set(workflow["on"]), {"pull_request_target"})
         self.assertEqual(workflow["jobs"]["finish"]["if"], "always()")
@@ -754,13 +619,8 @@ class PinPRTests(ProjectFixture):
         )
         workspace = self.root.parent / "maintenance"
         workspace.mkdir()
+        environment = workflows.environment(workspace, adapter="pr_adapter")
         binary = workspace / "bin"
-        binary.mkdir()
-        nix = binary / "nix"
-        nix.write_text(
-            f"#!{sys.executable}\nimport sys\nsys.path.insert(0, {str(policy.SOURCE_ROOT)!r})\nfrom tests.test_pin_pr import workflow_adapter\nworkflow_adapter()\n"
-        )
-        nix.chmod(0o755)
         git = binary / "git"
         queries = workspace / "queries"
         git.write_text(
@@ -768,10 +628,10 @@ class PinPRTests(ProjectFixture):
         )
         git.chmod(0o755)
         state = workspace / "github.json"
-        self.github[f"repos/{POLICY_REPO}/pulls"] = [
-            self.github[f"repos/{POLICY_REPO}/pulls/7"]
+        self.hosted.responses[f"repos/{POLICY_REPO}/pulls"] = [
+            self.hosted.responses[f"repos/{POLICY_REPO}/pulls/7"]
         ]
-        self.checks = [
+        self.hosted.checks = [
             {
                 "id": 1,
                 "name": "Pin batch / Complete candidate",
@@ -782,11 +642,9 @@ class PinPRTests(ProjectFixture):
                 "conclusion": "success",
             }
         ]
-        candidates.write_json(state, {"github": self.github, "checks": self.checks})
+        self.hosted.save(state)
         environment = {
-            **os.environ,
-            "PATH": f"{binary}:{os.environ['PATH']}",
-            "RUNNER_TEMP": str(workspace),
+            **environment,
             "GH_TOKEN": "fixture",
             "PR_FIXTURE_ROOT": str(self.root),
             "PR_FIXTURE_STATE": str(state),
@@ -796,17 +654,8 @@ class PinPRTests(ProjectFixture):
         }
 
         def shell(job, **extra):
-            step = next(
-                step
-                for step in workflow["jobs"][job]["steps"]
-                if "nix run" in step.get("run", "")
-            )
-            return fixture.REAL_RUN(
-                ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-                cwd=self.baseline,
-                env={**environment, **extra},
-                text=True,
-                capture_output=True,
+            return workflows.run_step(
+                workflow, job, self.baseline, environment, **extra
             )
 
         process = shell("candidate")
@@ -832,50 +681,6 @@ class PinPRTests(ProjectFixture):
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertEqual(records.read_json(state)["checks"][0]["conclusion"], "failure")
         self.assertEqual(workflow["on"]["push"]["branches"], ["main"])
-
-
-def workflow_adapter():
-    if sys.argv[1:3] != ["run", "--no-update-lock-file"] or sys.argv[3] not in {
-        "./authority",
-        ".#",
-    }:
-        raise AssertionError("Workflow substituted the trusted coordinator")
-    state = Path(os.environ["PR_FIXTURE_STATE"])
-    saved = records.read_json(state)
-    github = {
-        key: bytes.fromhex(value["binary"])
-        if isinstance(value, dict) and set(value) == {"binary"}
-        else value
-        for key, value in saved["github"].items()
-    }
-    context = SimpleNamespace(github=github, checks=saved["checks"], requests=[])
-    services = fixture.Services(Path(os.environ["PR_FIXTURE_ROOT"]))
-    services.host = os.environ.get("SYSTEM", "x86_64-linux")
-
-    def execute(command, **kwargs):
-        if command[:2] == ["nix", "run"]:
-            with patch.object(policy, "PACKAGED_REVISION", CHECKER, create=True):
-                return services.run(command, **kwargs)
-        return services.run(command, **kwargs)
-
-    with (
-        patch(
-            "urllib.request.urlopen",
-            side_effect=lambda request, **kwargs: PinPRTests.transport(
-                context, request, **kwargs
-            ),
-        ),
-        patch.object(releases, "public_get", side_effect=services.lookup),
-        patch.object(subprocess, "run", side_effect=execute),
-        patch.object(subprocess, "check_output", side_effect=services.output),
-        patch.object(
-            policy, "PACKAGED_REVISION", os.environ["PR_FIXTURE_BASE"], create=True
-        ),
-    ):
-        code = policy.main(sys.argv[sys.argv.index("--") + 1 :])
-    saved["checks"] = context.checks
-    candidates.write_json(state, saved)
-    sys.exit(code)
 
 
 if __name__ == "__main__":

@@ -1,27 +1,39 @@
 # Project policy design
 
-The project family consists of independently usable Nix and NixOS projects. Each member owns its public interfaces, releases, development tools, tests, and lockfiles. The policy repository provides the shared contract and external checks. [POLICY.md](../POLICY.md) is authoritative for requirements; [CONTEXT.md](../CONTEXT.md) defines the shared terms.
+[POLICY.md](../POLICY.md) defines requirements. [CONTEXT.md](../CONTEXT.md) defines shared terms. This page explains the structure and the decisions behind it.
 
 ## Dependency boundaries
 
-Member flakes do not depend on the policy repository. The policy flake does not depend on members: its checker accepts their checkouts as test subjects. This keeps development and builds independent of shared maintenance infrastructure. Member dependencies remain acyclic, with integration tests owned by a consumer or a separate integration project.
+Each member owns its flake, tools, tests, lockfiles, and releases. Member flakes do not import the policy repository. The policy flake accepts member checkouts as test subjects without depending on them.
 
-A member's small GitHub Actions workflow calls an exact policy release tag. That CI reference supplies common enforcement without adding policy code to member development shells or Nix builds. See [ADR 0001](adr/0001-independent-projects.md), [ADR 0002](adr/0002-versioned-policy-repository.md), and [ADR 0005](adr/0005-external-policy-enforcement.md).
+A member's GitHub Actions caller selects a published immutable policy release. This CI reference keeps policy execution separate from member builds. Member dependencies remain acyclic; consumers or integration projects own tests that span members.
 
 ## Development interface
 
-Each root flake declares its supported `systems` and applicable outputs explicitly. The selected root input is `nixpkgs`, regardless of its update branch. Additional shared unstable selections use `nixpkgs-unstable`. Local helpers implement tools and checks, while the root remains the visible public interface. The default shell, root `.envrc`, formatter, and ordinary checks provide consistent development commands across projects.
-
-Projects select tools for the languages and tasks they maintain. A pure library can retain a plain-import interface while exposing development outputs lazily. Separate VM targets let ordinary local checks run on hosts without VM capabilities. Benchmarks serve project-specific performance needs and are optional. See [ADR 0004](adr/0004-root-flake-development.md).
+Each root flake exposes its systems and applicable outputs. Local helpers supply the implementation. This gives projects common development commands without a shared build framework. VM tests stay separate so ordinary checks can run without VM support.
 
 ## Pins and enforcement
 
-Member lockfiles select actual dependencies. Central pin records describe the approved pair and coordinated update batches; changing a record does not change member locks. A batch identifies exact candidate revisions and tested member commits, so approval can follow validation across the affected projects. The policy runner tests both shared revisions through root input overrides while ordinary checks test the committed lock. See [ADR 0006](adr/0006-independent-selection-and-compatibility.md) and the [maintenance procedure](maintenance.md).
+| Source                  | Owns                                                                         |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| Policy release          | Rules, checker code, workflows, and required checks                          |
+| Member caller           | Policy selection, required architectures, VM targets, and additional checks  |
+| Member lockfiles        | Selected dependencies                                                        |
+| Current central records | Shared pins, pin update batches, enrollment, retirements, and legacy records |
 
-CI verifies that the selected policy release is published and immutable, then captures its exact commit, one member source commit, and one current record commit for all jobs. The release supplies rules and checker code; current records supply shared pins, pin update batches, and member enrollment. A shared-pin update changes current records and requires new compatibility runs; migrated members can retain their root locks. Older-policy members and other checked lock scopes may still need lock updates. Neither path changes the selected policy release or caller. Member-owned release selection and settings live in the existing workflow caller; one validated interpretation supplies local checks, matrices, gates, and execution targets. Checks can run before enrollment, which remains a separate central decision. Retained legacy records preserve supported immutable older checker contracts. Passing project tests alone establishes neither enrollment nor pin approval. See [ADR 0007](adr/0007-member-owned-policy-selection.md) and [ADR 0008](adr/0008-validate-pin-updates-before-approval.md).
+Each CI run captures one member commit, checker commit, and record commit. Compatibility checks test shared pins through root input overrides. Separate checks test the committed lock. Candidate validation supplies evidence; human-reviewed merge approves pins.
 
-Mechanical checks cover reliable structural properties, lock graphs, shell tools, callers, and configured merge gates. Human review covers architecture, compatibility, prose, and the meaning of test coverage. Required status names do not establish which workflow implementation ran, so caller review and drift audits remain necessary. The [checker reference](checker.md) defines the implemented boundary.
+Checks before enrollment use the same requirements. Enrollment and policy compliance remain separate. Legacy records preserve the contracts of supported older checkers.
 
-## Documentation and releases
+See [checker coverage](checker.md#implemented-coverage) for automatic checks and [review responsibilities](checker.md#review-responsibilities) for their limits. See [maintenance](maintenance.md) for procedures.
 
-Documentation explains current usage, structure, design, and architectural decisions. Git commits, issues, PRs, and CI retain implementation and validation history. Changelogs summarize release-facing changes and migration steps. Independent release PRs review versions and compatibility; human approval remains required for merges and release publication.
+## Decisions
+
+- [0001: Independent projects and releases](adr/0001-independent-projects.md).
+- [0002: Versioned policy repository](adr/0002-versioned-policy-repository.md).
+- [0003: Shared revisions across project uses](adr/0003-shared-nixpkgs-pins.md); root selection changed in 0006.
+- [0004: Root flake development](adr/0004-root-flake-development.md).
+- [0005: External policy checks](adr/0005-external-policy-enforcement.md).
+- [0006: Separate selected dependencies from compatibility coverage](adr/0006-independent-selection-and-compatibility.md).
+- [0007: Member-owned policy selection](adr/0007-member-owned-policy-selection.md).
+- [0008: Validate pins before approval](adr/0008-validate-pin-updates-before-approval.md).

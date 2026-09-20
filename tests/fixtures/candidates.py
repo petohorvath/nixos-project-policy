@@ -11,6 +11,68 @@ from tests.fixtures.projects import ProjectFixture
 from tools import agreement, candidates, policy, records
 
 
+def invalid_batch_plans(plan):
+    """Alter captured subjects and coverage without relying on stale digests."""
+    mutations = {
+        "schema": lambda value: value.update(schemaVersion=True),
+        "missing member": lambda value: value["members"].pop("example"),
+        "malformed member": lambda value: value["members"].update(example=[]),
+        "substituted member": lambda value: value["members"]["example"]["plan"].update(
+            project="different"
+        ),
+        "substituted source": lambda value: value["members"]["example"]["plan"][
+            "source"
+        ].update(revision="f" * 40),
+        "missing worker": lambda value: value["matrix"]["include"].pop(),
+        "duplicate worker": lambda value: value["matrix"]["include"].append(
+            value["matrix"]["include"][0]
+        ),
+        "forged worker": lambda value: value["matrix"]["include"][0].update(
+            worker="example--different-linux"
+        ),
+        "forged job": lambda value: value["matrix"]["include"][0].update(
+            job="Substituted candidate job"
+        ),
+        "malformed matrix": lambda value: value.update(matrix={"include": None}),
+    }
+
+    def substitute_runner(value):
+        child = value["members"]["example"]["plan"]
+        child["matrix"]["include"][0]["runner"] = "untrusted-runner"
+        system = child["matrix"]["include"][0]["system"]
+        for row in value["matrix"]["include"]:
+            if row["project"] == "example" and row["system"] == system:
+                row["runner"] = "untrusted-runner"
+
+    def duplicate_native_worker(value):
+        child = value["members"]["example"]["plan"]
+        child["matrix"]["include"].append(child["matrix"]["include"][0])
+        row = next(
+            row for row in value["matrix"]["include"] if row["project"] == "example"
+        )
+        value["matrix"]["include"].append(row)
+
+    mutations.update(
+        {
+            "native runner": substitute_runner,
+            "native duplication": duplicate_native_worker,
+        }
+    )
+    for name, mutate in mutations.items():
+        value = copy.deepcopy(plan)
+        mutate(value)
+        for member in value["members"].values():
+            if isinstance(member, dict) and member.get("status") == "planned":
+                child = member["plan"]
+                child["planDigest"] = candidates.digest(
+                    {key: item for key, item in child.items() if key != "planDigest"}
+                )
+        value["planDigest"] = candidates.digest(
+            {key: item for key, item in value.items() if key != "planDigest"}
+        )
+        yield name, value
+
+
 class CandidateFixture(ProjectFixture):
     def prepare(self):
         super().prepare()

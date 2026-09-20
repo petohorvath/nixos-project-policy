@@ -8,7 +8,7 @@ from unittest.mock import patch
 import yaml
 
 from tests.fixtures import workflows
-from tests.fixtures.candidates import BatchFixture
+from tests.fixtures.candidates import BatchFixture, invalid_batch_plans
 from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.cli import invoke
 from tests.fixtures.data import (
@@ -268,6 +268,20 @@ class BatchTests(BatchFixture, ProjectTestCase):
         )
         candidates.write_json(plan / "plan.json", value)
         self.assertNotEqual(self.aggregate(plan, workers)[0], 0)
+
+    def test_execute_and_aggregate_reject_forged_plans_with_recomputed_digests(self):
+        _, captured, plan = self.plan()
+        workers = self.workers(plan)
+        for name, value in invalid_batch_plans(captured):
+            candidates.write_json(plan / "plan.json", value)
+            with self.subTest(change=name, operation="execute"):
+                code, result, _ = self.worker(plan, "example", "x86_64-linux")
+                self.assertNotEqual(code, 0, result)
+                self.assertFalse(result["eligible"])
+            with self.subTest(change=name, operation="aggregate"):
+                code, result, _ = self.aggregate(plan, workers)
+                self.assertNotEqual(code, 0, result)
+                self.assertFalse(result["eligible"])
 
     def test_trusted_attempt_and_native_job_outcomes_cannot_be_spoofed_by_artifacts(
         self,

@@ -21,22 +21,90 @@ def worker_id(project, system):
 
 def matrix(members):
     rows = []
+    seen = set()
     for name, member in sorted(members.items()):
         if member["status"] != "planned":
             continue
         plan = member["plan"]
         for row in plan["matrix"]["include"]:
+            worker = worker_id(name, row["system"])
+            if (
+                row["system"] not in candidates.SYSTEMS
+                or row["runner"] != candidates.SYSTEMS[row["system"]]
+                or worker in seen
+            ):
+                raise ValueError("Unsafe or conflicting whole-batch native workers")
+            seen.add(worker)
             rows.append(
                 {
                     **row,
                     "project": name,
                     "repository": plan["repository"],
                     "revision": plan["source"]["revision"],
-                    "worker": worker_id(name, row["system"]),
+                    "worker": worker,
                     "job": f"Candidate member ({name}, {row['system']})",
                 }
             )
     return {"include": rows}
+
+
+def validate_plan(plan):
+    """Validate captured structure; callers still establish freshness and provenance."""
+    if (
+        not isinstance(plan, dict)
+        or plan.get("scope") != "whole-batch"
+        or type(plan.get("schemaVersion")) is not int
+        or plan["schemaVersion"] != 1
+    ):
+        raise ValueError("Expected a captured whole-batch plan")
+    if plan.get("planDigest") != candidates.digest(
+        {key: value for key, value in plan.items() if key != "planDigest"}
+    ):
+        raise ValueError("Whole-batch plan identity is invalid")
+    if (
+        not isinstance(plan.get("roster"), dict)
+        or not isinstance(plan.get("registrations"), dict)
+        or not isinstance(plan.get("members"), dict)
+        or set(plan["members"]) != set(plan["roster"])
+    ):
+        raise ValueError(
+            "Whole-batch plan omitted or substituted an enrolled participant"
+        )
+    for name, member in plan["members"].items():
+        if not isinstance(member, dict) or member.get("status") not in {
+            "planned",
+            "error",
+        }:
+            raise ValueError("Malformed required member plan")
+        if member["status"] == "planned":
+            child = member["plan"]
+            expected = {
+                "scope": "single-member",
+                "project": name,
+                "repository": plan["roster"][name],
+                **{
+                    key: plan[key]
+                    for key in (
+                        "attempt",
+                        "batch",
+                        "pins",
+                        "baseline",
+                        "proposal",
+                        "orchestratorVersion",
+                        "orchestratorRevision",
+                        "orchestratorDigest",
+                    )
+                },
+            }
+            if any(
+                child.get(key) != value for key, value in expected.items()
+            ) or child.get("source", {}).get("revision") != plan["registrations"].get(
+                name
+            ):
+                raise ValueError("Required member plan substituted its bound subject")
+    if plan.get("matrix") != matrix(plan["members"]):
+        raise ValueError("Whole-batch native workers disagree with member coverage")
+    return plan
 
 
 class Batch:
@@ -191,66 +259,13 @@ class Batch:
         return plan
 
     def expected(self):
-        saved = records.read_json(self.args.plan)
-        if (
-            not isinstance(saved, dict)
-            or saved.get("scope") != "whole-batch"
-            or type(saved.get("schemaVersion")) is not int
-            or saved["schemaVersion"] != 1
-        ):
-            raise ValueError("Expected a captured whole-batch plan")
+        saved = validate_plan(records.read_json(self.args.plan))
         candidates.require_attempt(self.args, saved)
         shared = self.shared(saved["batch"])
         if any(saved.get(key) != value for key, value in shared.items()):
             raise ValueError(
                 "Whole-batch authority, candidate, roster, or source registrations changed"
             )
-        if saved.get("planDigest") != candidates.digest(
-            {key: value for key, value in saved.items() if key != "planDigest"}
-        ):
-            raise ValueError("Whole-batch plan identity is invalid")
-        if not isinstance(saved.get("members"), dict) or set(saved["members"]) != set(
-            shared["roster"]
-        ):
-            raise ValueError(
-                "Whole-batch plan omitted or substituted an enrolled participant"
-            )
-        for name, member in saved["members"].items():
-            if not isinstance(member, dict) or member.get("status") not in {
-                "planned",
-                "error",
-            }:
-                raise ValueError("Malformed required member plan")
-            if member["status"] == "planned":
-                child = member["plan"]
-                expected = {
-                    "scope": "single-member",
-                    "project": name,
-                    "repository": shared["roster"][name],
-                    "attempt": saved["attempt"],
-                    **{
-                        key: shared[key]
-                        for key in (
-                            "batch",
-                            "pins",
-                            "baseline",
-                            "proposal",
-                            "orchestratorVersion",
-                            "orchestratorRevision",
-                            "orchestratorDigest",
-                        )
-                    },
-                }
-                if any(
-                    child.get(key) != value for key, value in expected.items()
-                ) or child.get("source", {}).get("revision") != shared[
-                    "registrations"
-                ].get(name):
-                    raise ValueError(
-                        "Required member plan substituted its bound subject"
-                    )
-        if saved.get("matrix") != matrix(saved["members"]):
-            raise ValueError("Whole-batch native workers disagree with member coverage")
         return saved
 
     def recapture(self, plan, name, *, root=None):

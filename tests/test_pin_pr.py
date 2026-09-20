@@ -1,6 +1,7 @@
 """Trusted proposal-head reporting through the public CLI and GitHub transport."""
 
 import copy
+import hashlib
 import io
 import json
 import shutil
@@ -12,7 +13,7 @@ from unittest.mock import patch
 import yaml
 
 from tests.fixtures import workflows
-from tests.fixtures.candidates import CandidateFixture
+from tests.fixtures.candidates import CandidateFixture, invalid_batch_plans
 from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.cli import invoke
 from tests.fixtures.data import (
@@ -275,6 +276,27 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
         self.assertIn("example", str(report["issues"]))
         self.assertTrue((output / "workers").exists())
 
+    def test_collect_and_finish_reject_forged_plans_with_recomputed_digests(self):
+        _, captured, _ = self.call("capture")
+        plan = self.evidence()
+        for name, value in invalid_batch_plans(plan):
+            stream = io.BytesIO()
+            with zipfile.ZipFile(stream, "w") as archive:
+                archive.writestr("plan.json", json.dumps(value))
+            data = stream.getvalue()
+            self.hosted.responses[f"repos/{POLICY_REPO}/actions/artifacts/1/zip"] = data
+            self.hosted.responses[f"repos/{POLICY_REPO}/actions/runs/91/artifacts"][
+                "artifacts"
+            ][0]["digest"] = f"sha256:{hashlib.sha256(data).hexdigest()}"
+            with self.subTest(change=name, operation="collect"):
+                code, report, _ = self.call("collect")
+                self.assertNotEqual(code, 0, report)
+                self.assertFalse(report["eligible"])
+            with self.subTest(change=name, operation="finish"):
+                code, report, _ = self.call("finish", "--check", str(captured["check"]))
+                self.assertNotEqual(code, 0, report)
+                self.assertEqual(self.hosted.checks[0]["conclusion"], "failure")
+
     def test_finish_reports_only_complete_current_evidence_on_the_proposal_head(self):
         _, captured, _ = self.call("capture")
         self.evidence()
@@ -350,7 +372,6 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
     def test_artifact_archives_cannot_escape_or_redirect_evidence_extraction(self):
         self.call("capture")
         self.evidence()
-        import hashlib
 
         for mode in ("escape", "symlink", "invalid-json", "wrong-digest"):
             stream = io.BytesIO()

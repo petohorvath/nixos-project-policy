@@ -11,8 +11,9 @@ from urllib import parse, request
 import zipfile
 
 if __package__:
-    from . import candidates, proposals, records, support
+    from . import batches, candidates, proposals, records, support
 else:
+    import batches
     import candidates
     import proposals
     import records
@@ -287,37 +288,18 @@ class Review:
         directory = self.artifact(
             f"pin-plan-{self.args.run}-{self.args.attempt}", self.output / "plan"
         )
-        plan = records.read_json(directory / "plan.json")
+        plan = batches.validate_plan(records.read_json(directory / "plan.json"))
         if (
-            plan.get("scope") != "whole-batch"
-            or plan.get("attempt") != self.result["attempt"]
+            plan.get("attempt") != self.result["attempt"]
             or plan.get("baseline") != self.baseline
             or plan.get("proposal") != self.result["proposal"]
             or plan.get("batch") != self.result["batch"]
             or plan.get("roster") != self.config["_members"]
             or plan.get("orchestratorRevision") != self.baseline["revision"]
-            or plan.get("planDigest")
-            != candidates.digest(
-                {key: value for key, value in plan.items() if key != "planDigest"}
-            )
         ):
             raise ValueError(
                 "Hosted plan substituted proposal, authority, attempt, or enrollment"
             )
-        seen = set()
-        for row in plan["matrix"]["include"]:
-            if (
-                row["project"] not in self.config["_members"]
-                or row["system"] not in candidates.SYSTEMS
-                or row["runner"] != candidates.SYSTEMS[row["system"]]
-                or row["worker"] != f"{row['project']}--{row['system']}"
-                or row["worker"] in seen
-                or row["job"] != f"Candidate member ({row['project']}, {row['system']})"
-            ):
-                raise ValueError(
-                    "Hosted plan contains unsafe or conflicting native workers"
-                )
-            seen.add(row["worker"])
         self.result["planDigest"] = plan["planDigest"]
         return plan
 

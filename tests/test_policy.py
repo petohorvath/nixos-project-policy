@@ -288,6 +288,16 @@ class ProjectFixture(unittest.TestCase):
         return code, json.loads(output.getvalue() or errors.getvalue())
 
 
+def enabled_enforcement(repository):
+    return {
+        f"{repository}/actions/permissions": {"enabled": True},
+        f"{repository}/actions/workflows/policy.yml": {
+            "path": ".github/workflows/policy.yml",
+            "state": "active",
+        },
+    }
+
+
 class ProjectTests(ProjectFixture):
     def run_policy(self, *args):
         if args[0] != "audit":
@@ -761,29 +771,32 @@ class ProjectTests(ProjectFixture):
         self.assertEqual(self.audit_with_checks(["Integration"])[0], 1)
 
     def audit_with_checks(self, checks):
+        repository = "repos/owner/example"
+        data = {
+            repository: {
+                "default_branch": "main",
+                "allow_squash_merge": True,
+                "allow_merge_commit": False,
+                "allow_rebase_merge": False,
+            },
+            f"{repository}/rules/branches/main": [
+                {"type": "pull_request"},
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "required_status_checks": [
+                            {"context": check} for check in checks
+                        ]
+                    },
+                },
+            ],
+            f"{repository}/branches/main": {"protected": False},
+            **enabled_enforcement(repository),
+        }
         with patch.object(
             policy,
             "github_get",
-            side_effect=[
-                {
-                    "default_branch": "main",
-                    "allow_squash_merge": True,
-                    "allow_merge_commit": False,
-                    "allow_rebase_merge": False,
-                },
-                [
-                    {"type": "pull_request"},
-                    {
-                        "type": "required_status_checks",
-                        "parameters": {
-                            "required_status_checks": [
-                                {"context": check} for check in checks
-                            ]
-                        },
-                    },
-                ],
-                {"protected": False},
-            ],
+            side_effect=data.__getitem__,
         ):
             return self.run_policy("audit", str(self.root.parent), "--github")
 
@@ -1007,6 +1020,7 @@ class ProjectTests(ProjectFixture):
                         },
                         f"{repository}/rules/branches/main": rules if protected else [],
                         f"{repository}/branches/main": {"protected": protected},
+                        **enabled_enforcement(repository),
                     }
                     if request.full_url == f"{repository}/branches/main/protection":
                         raise HTTPError(request.full_url, 404, "Not Found", {}, None)
@@ -1056,6 +1070,7 @@ class ProjectTests(ProjectFixture):
                     "checks": [{"context": "Classic"}],
                 },
             },
+            **enabled_enforcement(repository),
         }
 
         def response(request, **kwargs):
@@ -1079,6 +1094,7 @@ class ProjectTests(ProjectFixture):
     def audit_merge_settings(self, rest_settings, graphql_result):
         repository = "https://api.github.com/repos/owner/example"
         data = {
+            **enabled_enforcement(repository),
             repository: {"default_branch": "main", **rest_settings},
             f"{repository}/rules/branches/main": [
                 {"type": "pull_request"},
@@ -2426,8 +2442,13 @@ class WorkflowTests(unittest.TestCase):
             },
             [],
             {"protected": False},
+            *enabled_enforcement("repos/owner/example").values(),
         ]
-        issues = policy.check_github({"repository": "owner/example"}, ["Policy"])
+        issues = policy.check_github(
+            {"repository": "owner/example"},
+            ["Policy"],
+            workflow=".github/workflows/policy.yml",
+        )
         self.assertEqual(len(issues), 2)
 
     @patch.object(policy, "github_get")
@@ -2451,9 +2472,14 @@ class WorkflowTests(unittest.TestCase):
                     },
                 },
             ],
+            *enabled_enforcement("repos/owner/example").values(),
         ]
         self.assertEqual(
-            policy.check_github({"repository": "owner/example"}, ["Policy"]),
+            policy.check_github(
+                {"repository": "owner/example"},
+                ["Policy"],
+                workflow=".github/workflows/policy.yml",
+            ),
             [],
         )
 

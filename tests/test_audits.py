@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 import yaml
 
@@ -133,7 +134,8 @@ class AuditTests(ProjectFixture):
         self.config["projects"]["example"].update(policyVersion="v0.3.0", adopted=False)
         inspected = []
 
-        def gates(project, checks):
+        def gates(project, checks, *, workflow):
+            self.assertEqual(workflow, ".github/workflows/policy.yml")
             inspected.append((project["repository"], checks))
             return []
 
@@ -377,6 +379,129 @@ class AuditTests(ProjectFixture):
                     )
                 )
 
+    def hosted_audit(self, permissions, workflow, *, filename="policy.yml"):
+        repository = "https://api.github.com/repos/owner/example"
+        data = {
+            repository: {
+                "default_branch": "main",
+                "allow_squash_merge": True,
+                "allow_merge_commit": False,
+                "allow_rebase_merge": False,
+            },
+            f"{repository}/rules/branches/main": [
+                {"type": "pull_request"},
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "required_status_checks": [
+                            {"context": check} for check in REQUIRED_CHECKS
+                        ]
+                    },
+                },
+            ],
+            f"{repository}/actions/permissions": permissions,
+            f"{repository}/actions/workflows/{filename}": workflow,
+        }
+        requests = []
+
+        def response(request, **kwargs):
+            self.assertEqual(request.get_method(), "GET")
+            requests.append(request.full_url)
+            value = data[request.full_url]
+            if isinstance(value, Exception):
+                raise value
+            return io.StringIO(json.dumps(value))
+
+        with (
+            patch.dict(os.environ, {"GH_TOKEN": "read-only-audit-fixture"}),
+            patch.object(policy, "urlopen", side_effect=response),
+        ):
+            code, report = self.audit("--github")
+        self.assertTrue(all(url.startswith(repository) for url in requests))
+        return code, report, requests
+
+    def test_hosted_audit_requires_actions_and_the_discovered_caller_to_be_active(self):
+        filename = "member-checks.yaml"
+        path = f".github/workflows/{filename}"
+        (self.root / ".github/workflows/policy.yml").rename(self.root / path)
+        for enabled, state, expected, issue in [
+            (True, "active", 0, None),
+            (False, "active", 1, "repository Actions are disabled"),
+            (True, "disabled_manually", 1, "not active (disabled_manually)"),
+            (True, "disabled_inactivity", 1, "not active (disabled_inactivity)"),
+            (True, "disabled_fork", 1, "not active (disabled_fork)"),
+            (True, "deleted", 1, "not active (deleted)"),
+        ]:
+            with self.subTest(enabled=enabled, state=state):
+                code, report, requests = self.hosted_audit(
+                    {"enabled": enabled},
+                    {"path": path, "state": state},
+                    filename=filename,
+                )
+                self.assertEqual(code, expected, report)
+                member = report["projects"][0]
+                self.assertEqual(member["enrollment"], "enrolled")
+                self.assertEqual(member["status"], "pass" if expected == 0 else "fail")
+                self.assertIn(
+                    f"https://api.github.com/repos/owner/example/actions/workflows/{filename}",
+                    requests,
+                )
+                if issue is None:
+                    self.assertEqual(member["issues"], [])
+                else:
+                    self.assertIn(issue, " ".join(member["issues"]))
+
+    def test_hosted_audit_keeps_missing_or_malformed_enablement_metadata_as_errors(
+        self,
+    ):
+        active = {"path": ".github/workflows/policy.yml", "state": "active"}
+        for permissions, workflow in [
+            ({}, active),
+            ({"enabled": "true"}, active),
+            ({"enabled": 1}, active),
+            ({"enabled": True}, None),
+            ({"enabled": True}, {}),
+            ({"enabled": True}, {"path": active["path"]}),
+            ({"enabled": True}, {**active, "state": None}),
+            ({"enabled": True}, {**active, "state": ""}),
+            ({"enabled": True}, {**active, "path": ".github/workflows/other.yml"}),
+        ]:
+            with self.subTest(permissions=permissions, workflow=workflow):
+                code, report, _ = self.hosted_audit(permissions, workflow)
+                self.assertEqual(code, 2, report)
+                member = report["projects"][0]
+                self.assertEqual(member["status"], "error")
+                self.assertIn("enforcement is unknown", " ".join(member["issues"]))
+
+    def test_hosted_audit_cannot_treat_inaccessible_enablement_as_active_or_disabled(
+        self,
+    ):
+        for endpoint in ["permissions", "workflows/policy.yml"]:
+            for status in [401, 403, 404]:
+                with self.subTest(endpoint=endpoint, status=status):
+                    permissions = {"enabled": True}
+                    workflow = {
+                        "path": ".github/workflows/policy.yml",
+                        "state": "active",
+                    }
+                    url = (
+                        f"https://api.github.com/repos/owner/example/actions/{endpoint}"
+                    )
+                    error = HTTPError(url, status, "Unavailable", {}, None)
+                    if endpoint == "permissions":
+                        permissions = error
+                    else:
+                        workflow = error
+                    code, report, _ = self.hosted_audit(permissions, workflow)
+                    self.assertEqual(code, 2, report)
+                    member = report["projects"][0]
+                    self.assertEqual(member["enrollment"], "enrolled")
+                    self.assertEqual(member["status"], "error")
+                    self.assertIn(f"HTTP {status}", " ".join(member["issues"]))
+                    self.assertFalse(
+                        any(issue.startswith("github:") for issue in member["issues"])
+                    )
+
 
 class RosterTests(ProjectFixture):
     def test_changed_records_are_an_error_even_with_no_enrolled_members(self):
@@ -558,11 +683,13 @@ class RosterTests(ProjectFixture):
 def maintenance_adapter():
     """Controlled external services for the actual maintenance shell invocation."""
 
-    def gates(project, checks):
+    def gates(project, checks, *, workflow):
         if os.environ["AUDIT_TEST_MODE"] == "github-error":
             raise ValueError("GitHub inspection unavailable; settings are unknown")
         if project["repository"] not in {"owner/example", "owner/legacy"}:
             raise AssertionError("Member declaration redirected GitHub inspection")
+        if workflow != ".github/workflows/policy.yml":
+            raise AssertionError("GitHub inspection ignored the discovered caller")
         return []
 
     with (

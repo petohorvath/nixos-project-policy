@@ -60,6 +60,22 @@ def discover(root, repository, *, workflow_name="check.yml"):
     return candidates[0]
 
 
+def read_identity(root, repository, name):
+    """Read a literal member selection without imposing one release's settings."""
+    path, workflow, job, version = discover(root, repository)
+    require_policy_version(version)
+    inputs = job.get("with")
+    if (
+        not isinstance(inputs, dict)
+        or inputs.get("project") != name
+        or inputs.get("policy_version") != version
+    ):
+        raise ValueError(
+            "Policy caller identity and policy_version must agree with its selection"
+        )
+    return path, workflow, job, version
+
+
 def inspect(
     root, repository, name, requirements, *, checker_version=None, hosted_inputs=None
 ):

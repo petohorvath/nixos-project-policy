@@ -225,19 +225,9 @@ class Coordinator:
             raise ValueError(
                 "Candidate revision is unavailable from the trusted enrolled repository"
             )
-        _, _, caller, version = declarations.discover(
-            self.root, config["policyRepository"]
+        _, _, _, version = declarations.read_identity(
+            self.root, config["policyRepository"], name
         )
-        declarations.require_policy_version(version)
-        inputs = caller.get("with")
-        if (
-            not isinstance(inputs, dict)
-            or inputs.get("project") != name
-            or inputs.get("policy_version") != version
-        ):
-            raise ValueError(
-                "Member identity and policy_version must agree with its caller"
-            )
         assessment = support.assess(version, config["_support"])
         if assessment["status"] != "supported":
             raise ValueError(support.retirement_issue(assessment))
@@ -523,75 +513,24 @@ class Coordinator:
                 plan["repository"], plan["source"]["revision"], job["gate"]
             )
             return
-        arguments = {
-            "compliance": [
-                "check",
-                self.root,
-                "--project",
-                plan["project"],
-                "--batch",
-                plan["batch"],
-                "--readiness",
-                "--shell",
-            ],
-            "lint": ["lint", self.root],
-            "vm": ["vm", self.root, "--project", plan["project"]],
-            "agreement": ["agreement", self.root, "--project", plan["project"]],
-            "compatibility": [
-                "compatibility",
-                self.root,
-                "--project",
-                plan["project"],
-                "--batch",
-                plan["batch"],
-                "--channel",
-                job.get("channel", "stable"),
-                "--output",
-                output / "compatibility",
-            ],
-        }
-        command = [
-            "nix",
-            "flake",
-            "check",
-            str(self.root),
-            "--no-update-lock-file",
-            "--print-build-logs",
-        ]
+        commands = job_command_plan(
+            plan,
+            job,
+            self.root,
+            record_root,
+            compatibility_output=output / "compatibility",
+        )
         legacy_compatibility = (
             kind == "compatibility" and plan["compatibilityMode"] == "committed-pair"
         )
         if legacy_compatibility:
-            inspection = run_process(
-                releases.checker_command(
-                    release,
-                    record_root,
-                    "check",
-                    self.root,
-                    "--project",
-                    plan["project"],
-                    "--batch",
-                    plan["batch"],
-                    "--readiness",
-                ),
-                output / "pins",
-            )
+            inspection = run_process(commands[0], output / "pins")
             result["commands"].append(inspection)
             report = child_report(inspection, release, plan["executionRecords"])
             validate_member_report(report, plan, "compliance")
             result["pinInspection"] = report
             result["mode"] = "committed-pair"
-            metadata = run_process(
-                [
-                    "nix",
-                    "flake",
-                    "metadata",
-                    str(self.root),
-                    "--json",
-                    "--no-update-lock-file",
-                ],
-                output / "metadata",
-            )
+            metadata = run_process(commands[1], output / "metadata")
             result["commands"].append(metadata)
             graph = self.lock_graph(
                 json.loads(
@@ -609,18 +548,7 @@ class Coordinator:
                 )
             result["resolvedRevision"] = revision
             result["metadata"] = json.loads(metadata["stdout"])
-            checks = run_process(
-                [
-                    "nix",
-                    "eval",
-                    "--json",
-                    f"{self.root}#checks.{job['system']}",
-                    "--apply",
-                    "builtins.attrNames",
-                    "--no-update-lock-file",
-                ],
-                output / "checks",
-            )
+            checks = run_process(commands[2], output / "checks")
             result["commands"].append(checks)
             result["checks"] = json.loads(
                 checks["stdout"], object_pairs_hook=records.unique_mapping
@@ -633,9 +561,7 @@ class Coordinator:
                 raise ValueError(
                     "Historical compatibility requires nonempty native root checks"
                 )
-        elif kind != "tests":
-            command = releases.checker_command(release, record_root, *arguments[kind])
-        process = run_process(command, output / "execution")
+        process = run_process(commands[-1], output / "execution")
         result["commands"].append(process)
         if kind == "tests" or legacy_compatibility:
             if process["returncode"] != 0:
@@ -903,27 +829,9 @@ def validate_committed_execution(process):
         raise ValueError("Missing full committed-lock root execution")
 
 
-def validate_job_commands(item, worker, plan):
-    job = item["job"]
-    if job["kind"] == "additional":
-        return
-    subject = worker["executionSubject"]
-    root, record_root = subject["root"], subject["records"]
-    if (
-        not isinstance(root, str)
-        or not isinstance(record_root, str)
-        or not Path(root).is_absolute()
-        or not Path(record_root).is_absolute()
-    ):
-        raise ValueError("Missing captured execution paths")
-    commands = [process["command"] for process in item["commands"]]
-    if any(
-        type(process.get("returncode")) is not int or process["returncode"] != 0
-        for process in item["commands"]
-    ):
-        raise ValueError(
-            "Required execution did not return a successful process outcome"
-        )
+def job_command_plan(plan, job, root, record_root, *, compatibility_output=None):
+    """Build the exact ordered argv contract shared by execution and replay."""
+    root = str(root)
     committed = [
         "nix",
         "flake",
@@ -948,11 +856,9 @@ def validate_job_commands(item, worker, plan):
         "agreement": ["agreement", root, "--project", plan["project"]],
     }
     if job["kind"] == "tests":
-        expected = [committed]
-    elif (
-        job["kind"] == "compatibility" and plan["compatibilityMode"] == "committed-pair"
-    ):
-        expected = [
+        return [committed]
+    if job["kind"] == "compatibility" and plan["compatibilityMode"] == "committed-pair":
+        return [
             releases.checker_command(
                 plan["release"], Path(record_root), *arguments["compliance"][:-1]
             ),
@@ -968,45 +874,83 @@ def validate_job_commands(item, worker, plan):
             ],
             committed,
         ]
+    if job["kind"] == "compatibility":
+        arguments["compatibility"] = [
+            "compatibility",
+            root,
+            "--project",
+            plan["project"],
+            "--batch",
+            plan["batch"],
+            "--channel",
+            job["channel"],
+            "--output",
+            compatibility_output,
+        ]
+    return [
+        releases.checker_command(
+            plan["release"], Path(record_root), *arguments[job["kind"]]
+        )
+    ]
+
+
+def validate_job_commands(item, worker, plan):
+    job = item["job"]
+    if job["kind"] == "additional":
+        return
+    subject = worker["executionSubject"]
+    root, record_root = subject["root"], subject["records"]
+    if (
+        not isinstance(root, str)
+        or not isinstance(record_root, str)
+        or not Path(root).is_absolute()
+        or not Path(record_root).is_absolute()
+    ):
+        raise ValueError("Missing captured execution paths")
+    commands = [process["command"] for process in item["commands"]]
+    if any(
+        type(process.get("returncode")) is not int or process["returncode"] != 0
+        for process in item["commands"]
+    ):
+        raise ValueError(
+            "Required execution did not return a successful process outcome"
+        )
+    compatibility_output = None
+    if job["kind"] == "compatibility" and plan["compatibilityMode"] == "committed-pair":
         if item.get("checks") != json.loads(
             item["commands"][2]["stdout"], object_pairs_hook=records.unique_mapping
         ):
             raise ValueError(
                 "Historical check coverage disagrees with execution output"
             )
-    else:
-        if job["kind"] == "compatibility":
-            arguments["compatibility"] = [
-                "compatibility",
-                root,
-                "--project",
-                plan["project"],
-                "--batch",
-                plan["batch"],
-                "--channel",
-                job["channel"],
-                "--output",
-                commands[0][-1],
-            ]
-            for process in item.get("report", {}).get("commands", []):
-                command = process.get("command", [])
-                if command[:3] == ["nix", "flake", "check"] and (
-                    command[3] != root
-                    or command[-3:]
-                    != [
-                        "--override-input",
-                        "nixpkgs",
-                        f"github:NixOS/nixpkgs/{plan['pins'][job['channel']]}",
-                    ]
-                ):
-                    raise ValueError(
-                        "Compatibility execution substituted its root or candidate"
-                    )
-        expected = [
-            releases.checker_command(
-                plan["release"], Path(record_root), *arguments[job["kind"]]
-            )
-        ]
+    elif job["kind"] == "compatibility":
+        compatibility_output = commands[0][-1]
+        if (
+            not isinstance(compatibility_output, str)
+            or not Path(compatibility_output).is_absolute()
+        ):
+            raise ValueError("Missing captured compatibility output path")
+        for process in item.get("report", {}).get("commands", []):
+            command = process.get("command", [])
+            if command[:3] == ["nix", "flake", "check"] and (
+                command[3] != root
+                or command[-3:]
+                != [
+                    "--override-input",
+                    "nixpkgs",
+                    f"github:NixOS/nixpkgs/{plan['pins'][job['channel']]}",
+                ]
+            ):
+                raise ValueError(
+                    "Compatibility execution substituted its root or candidate"
+                )
+    expected = job_command_plan(
+        plan,
+        job,
+        root,
+        record_root,
+        compatibility_output=compatibility_output,
+    )
     if commands != expected:
         raise ValueError(
             "Required execution substituted the selected checker, source, or gate"
@@ -1184,19 +1128,6 @@ def verify_support(plan, config, *, at=None):
 
 
 def run(args, **services):
-    whole = getattr(args, "all", False)
-    if args.operation != "plan" and not whole:
-        try:
-            saved = records.read_json(args.plan)
-            whole = isinstance(saved, dict) and saved.get("scope") == "whole-batch"
-        except ERRORS:
-            pass
-    if whole:
-        if __package__:
-            from . import batches
-        else:
-            import batches
-        return batches.run(args, **services)
     coordinator = None
     result = {
         "status": "error",

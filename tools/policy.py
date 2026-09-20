@@ -20,6 +20,7 @@ import yaml
 if __package__:
     from . import (
         agreement,
+        batches,
         candidates,
         declarations,
         locks,
@@ -32,6 +33,7 @@ if __package__:
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import agreement
+    import batches
     import candidates
     import declarations
     import locks
@@ -193,7 +195,17 @@ def main(argv=None):
             print(json.dumps(result, indent=2, sort_keys=True))
             return {"fail": 1, "error": 2}.get(result.get("status"), 0)
         if args.command == "pin-batch":
-            result = candidates.run(
+            whole = args.all
+            if args.operation != "plan" and not whole:
+                try:
+                    saved = records.read_json(args.plan)
+                    whole = (
+                        isinstance(saved, dict) and saved.get("scope") == "whole-batch"
+                    )
+                except candidates.ERRORS:
+                    pass
+            run_batch = batches.run if whole else candidates.run
+            result = run_batch(
                 args,
                 source_root=SOURCE_ROOT,
                 load_policy=load_policy,
@@ -1296,20 +1308,11 @@ def audit_family(
                 if git_dirty(root):
                     raise ValueError("Audit requires a clean exact member commit")
                 try:
-                    _, _, caller, version = declarations.discover(
-                        root, config["policyRepository"]
+                    caller_path, _, caller, version = declarations.read_identity(
+                        root, config["policyRepository"], name
                     )
-                    require_policy_version(version)
                     report["policyVersion"] = version
-                    inputs = caller.get("with")
-                    if (
-                        not isinstance(inputs, dict)
-                        or inputs.get("project") != name
-                        or inputs.get("policy_version") != version
-                    ):
-                        raise ValueError(
-                            "Policy caller identity and policy_version must agree with its selection"
-                        )
+                    inputs = caller["with"]
                 except ValueError as error:
                     report["selectionStatus"] = "invalid"
                     report["issues"].append(f"ci: {error}")
@@ -1367,7 +1370,11 @@ def audit_family(
                                     "Selected legacy release requires trusted complete gate names"
                                 )
                             report["issues"].extend(
-                                check_github({"repository": repository}, checks)
+                                check_github(
+                                    {"repository": repository},
+                                    checks,
+                                    workflow=str(caller_path.relative_to(root)),
+                                )
                             )
                             if report["issues"]:
                                 report["status"] = "fail"
@@ -1429,7 +1436,7 @@ def audit_family(
     }
 
 
-def check_github(project, checks):
+def check_github(project, checks, *, workflow):
     repository = project["repository"]
     info = github_get(f"repos/{repository}")
     if (
@@ -1513,6 +1520,37 @@ def check_github(project, checks):
     for check in checks:
         if check not in contexts:
             issues.append(f"github: missing required check '{check}'")
+    issues.extend(check_github_enforcement(repository, workflow))
+    return issues
+
+
+def check_github_enforcement(repository, workflow):
+    permissions = github_get(f"repos/{repository}/actions/permissions")
+    if not isinstance(permissions, dict) or not isinstance(
+        permissions.get("enabled"), bool
+    ):
+        raise ValueError(
+            "GitHub Actions inspection is incomplete; enforcement is unknown"
+        )
+    details = github_get(
+        f"repos/{repository}/actions/workflows/{quote(Path(workflow).name, safe='')}"
+    )
+    if (
+        not isinstance(details, dict)
+        or details.get("path") != workflow
+        or not isinstance(details.get("state"), str)
+        or not details["state"]
+    ):
+        raise ValueError(
+            "GitHub workflow inspection is incomplete or disagrees with the discovered caller; enforcement is unknown"
+        )
+    issues = []
+    if not permissions["enabled"]:
+        issues.append("github: repository Actions are disabled")
+    if details["state"] != "active":
+        issues.append(
+            f"github: policy caller workflow {workflow} is not active ({details['state']})"
+        )
     return issues
 
 
@@ -1575,7 +1613,7 @@ def github_request(path, payload=None):
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
         raise ValueError(
-            "GitHub inspection requires a token in GH_TOKEN or GITHUB_TOKEN with Administration, Contents, and Metadata read access to enrolled members; configure the MEMBER_AUDIT_TOKEN secret for maintenance"
+            "GitHub inspection requires a token in GH_TOKEN or GITHUB_TOKEN with Actions, Administration, Contents, and Metadata read access to enrolled members; configure the MEMBER_AUDIT_TOKEN secret for maintenance"
         )
     headers["Authorization"] = f"Bearer {token}"
     data = None

@@ -336,19 +336,9 @@ def inspect(
                     Path(temporary) / f"caller-{index}"
                 )
                 try:
-                    _, _, caller, selected = declarations.discover(
-                        caller_root, config["policyRepository"]
+                    _, _, _, selected = declarations.read_identity(
+                        caller_root, config["policyRepository"], member["project"]
                     )
-                    declarations.require_policy_version(selected)
-                    inputs = caller.get("with")
-                    if (
-                        not isinstance(inputs, dict)
-                        or inputs.get("project") != member["project"]
-                        or inputs.get("policy_version") != selected
-                    ):
-                        raise ValueError(
-                            "Locked member caller identity and release input must match its selection"
-                        )
                     member["policyVersion"] = selected
                     member["support"] = support.assess(selected, config["_support"])
                     member["selectionStatus"] = member["support"]["status"]

@@ -15,7 +15,7 @@ import zipfile
 import yaml
 
 from tests import test_batches, test_candidates
-from tests.test_policy import NEW_PAIR, PAIR, POLICY_REPO, RELEASE
+from tests.test_policy import NEW_PAIR, PAIR, POLICY_REPO, RELEASE, enabled_enforcement
 from tools import candidates, policy, records
 
 
@@ -275,6 +275,7 @@ class PackagedTransitionTests(unittest.TestCase):
             {project["policyVersion"] for project in audited["projects"]},
             {"v0.3.0", RELEASE},
         )
+        self.hosted_audit(audited)
         integration = self.call("agreement", fixture.root, "--project", "example")
         self.assertEqual(
             {
@@ -327,6 +328,64 @@ class PackagedTransitionTests(unittest.TestCase):
             self.assertEqual(report["status"], "valid", version)
         self.assertEqual(policy.fingerprints(fixture.baseline), baseline)
         self.routine_pr()
+
+    def hosted_audit(self, audited):
+        state = records.read_json(self.state)
+        for member in audited["projects"]:
+            repository = f"repos/{member['repository']}"
+            state["github"].update(
+                {
+                    repository: {
+                        "default_branch": "main",
+                        "allow_squash_merge": True,
+                        "allow_merge_commit": False,
+                        "allow_rebase_merge": False,
+                    },
+                    f"{repository}/rules/branches/main": [
+                        {"type": "pull_request"},
+                        {
+                            "type": "required_status_checks",
+                            "parameters": {
+                                "required_status_checks": [
+                                    {"context": check}
+                                    for check in member["requiredChecks"]
+                                ]
+                            },
+                        },
+                    ],
+                    **enabled_enforcement(repository),
+                }
+            )
+        self.save(state)
+        passing = self.call("audit", self.fixture.workspace, "--github")
+        self.assertTrue(
+            all(member["status"] == "pass" for member in passing["projects"])
+        )
+        state = records.read_json(self.state)
+        path = (
+            f"repos/{audited['projects'][0]['repository']}/actions/workflows/policy.yml"
+        )
+        state["github"][path]["state"] = "disabled_manually"
+        self.save(state)
+        failed = json.loads(
+            self.command(
+                [
+                    self.program,
+                    "--policy-root",
+                    str(self.fixture.baseline),
+                    "audit",
+                    str(self.fixture.workspace),
+                    "--github",
+                ],
+                environment=self.environment,
+                expected=1,
+            )
+        )
+        self.assertEqual(failed["projects"][0]["status"], "fail")
+        self.assertIn("disabled_manually", " ".join(failed["projects"][0]["issues"]))
+        state = records.read_json(self.state)
+        state["github"][path]["state"] = "active"
+        self.save(state)
 
     def artifact(self, name, directory):
         stream = io.BytesIO()

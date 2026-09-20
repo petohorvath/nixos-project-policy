@@ -86,17 +86,10 @@ def validate_legacy_removal(
             raise ValueError(
                 f"Legacy cleanup cannot inspect the exact clean member commit: {name}"
             )
-        _, _, caller, version = declarations.discover(root, config["policyRepository"])
-        declarations.require_policy_version(version)
-        inputs = caller.get("with")
-        if (
-            not isinstance(inputs, dict)
-            or inputs.get("project") != name
-            or inputs.get("policy_version") != version
-        ):
-            raise ValueError(
-                f"Legacy cleanup found an invalid member declaration: {name}"
-            )
+        _, _, caller, version = declarations.read_identity(
+            root, config["policyRepository"], name
+        )
+        inputs = caller["with"]
         assessment = support.assess(version, decisions)
         if (
             not releases.version_at_least(version, (0, 4, 0))

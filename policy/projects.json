@@ -47,7 +47,7 @@
     "nixos-registry": {
       "repository": "petohorvath/nixos-registry",
       "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
-      "adopted": false,
+      "adopted": true,
       "vmTargets": [],
       "policyVersion": "v0.3.0"
     },

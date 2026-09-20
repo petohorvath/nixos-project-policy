@@ -44,6 +44,42 @@ A normal `check` can report `pass` before enrollment. Its `enrollment` field is 
 
 CI and runtime probes use `--no-update-lock-file` by itself to reject a required lock update. Do not combine it with `--no-write-lock-file`: the Nix 2.34.6 source and a controlled local fixture show that disabling writes also bypasses the update rejection, allowing an in-memory replacement lock. See the [locking implementation](https://github.com/NixOS/nix/blob/2.34.6/src/libflake/flake.cc#L749-L825). This rejection rule applies to the default check and shell/tool probes. Compatibility runs deliberately use a different effective graph: `--override-input` implies `--no-write-lock-file`, and adding `--no-update-lock-file` does not make an override test the committed selection.
 
+## Unmerged candidate coordination
+
+`pin-batch plan`, `pin-batch execute`, and `pin-batch aggregate` validate one enrolled member against an explicitly selected unmerged proposal. These commands require separate `--policy-root BASELINE` and `--proposal-root PROPOSAL` checkouts. The baseline supplies enrollment, repository identities, legacy settings, and support decisions; the exact clean member commit supplies modern declarations. The proposal's selected `--batch` supplies an exact stable/unstable pair and registers that member commit. The coordinator verifies the commit in the trusted enrolled repository, resolves the selected published immutable release, and uses that release's requirements and checker by exact commit.
+
+The proposal may contain the future approval change, but candidate execution copies the baseline records into a new evidence directory, keeps the baseline's approved pair, and normalizes the selected batch to `candidate`. Proposed enrollment, support, legacy settings, policy identity, and unrelated rollout-record changes are rejected. Proposed checker code and requirements are never executed. The original record and member checkouts are preserved. Record revisions and digests distinguish the trusted baseline, proposed snapshot, and temporary execution records.
+
+Run planning from trusted coordinator code, with the member checkout at the exact commit in the proposal. Each output directory must be new and outside all input checkouts:
+
+```bash
+nix run --no-update-lock-file ./coordinator -- \
+  --policy-root ./baseline pin-batch plan ./member \
+  --proposal-root ./proposal --project MEMBER --batch BATCH \
+  --attempt review-1 --output ./plan
+nix run --no-update-lock-file ./coordinator -- \
+  --policy-root ./baseline pin-batch execute ./member \
+  --proposal-root ./proposal --plan ./plan/plan.json \
+  --system x86_64-linux --output ./results/x86_64-linux
+```
+
+Repeat execution on each native system listed in the plan's matrix, preserving the same exact member, checker, baseline, proposal, and plan. ARM jobs require an ARM host. Applicable VM targets require an x86_64 KVM-capable host even when ordinary coverage is ARM-only. Each worker runs independent compliance/shell, lint, committed-lock root checks, and both candidate compatibility channels; a category failure does not suppress other runnable categories. Additional gate names are inspected through GitHub check runs or commit statuses at the exact member revision. They do not become shell commands or create missing member jobs. An unavailable, incomplete, skipped, neutral, or failed required gate cannot complete the member result.
+
+For v0.2.0 and later, the selected compatibility runner verifies effective root overrides, nonempty native checks, and lock preservation. For v0.1.x, the adapter retains whole-project committed-pin requirements and never grants a root override exception. Both candidate revisions must appear in the effective committed root graph, and nonempty native root checks must execute against it. Missing historical channel coverage or pin-bound additional/transitive/example locks require explicit member source or lock changes. Successful checks do not manufacture those changes.
+
+Collect the native evidence directories and aggregate against the original plan:
+
+```bash
+nix run --no-update-lock-file ./coordinator -- \
+  --policy-root ./baseline pin-batch aggregate ./member \
+  --proposal-root ./proposal --plan ./plan/plan.json \
+  --results ./results --output ./summary
+```
+
+Planning and replay re-inspect trusted inputs and the selected release. Changed pins, sources, settings, records, checker code, or an effective retirement invalidate the prior plan. Aggregation requires every planned job and rejects substituted, missing, conflicting, failed, or unprocessable evidence. Reports and logs remain in the evidence directories on failure. `candidate-pass` means the requested candidate coverage succeeded; every single-member result remains `eligible: false` for the enrolled batch and grants no approval. Nix may satisfy executed builds from its cache; reports do not claim each derivation rebuilt.
+
+Plan/result digests bind content and freshness; they do not authenticate execution. Local aggregation requires trusted worker evidence. The central manual workflow uses artifacts from its own run with attempt-specific names, pinned coordinator/record/source snapshots, and read-only repository permissions. This workflow must run from trusted `main`; its single-member completion job is not a whole-batch PR approval gate. New workflow definitions need publication before a real hosted run, and local workflow fixtures do not establish live GitHub merge protection.
+
 ## Compatibility execution and evidence
 
 `compatibility` uses the same runner locally and in reusable CI. It requires a member caller selecting the executing checker release, a Git checkout whose root lock matches its committed copy, a supported native Linux host, and an approved pair or an exact registered candidate. It resolves the root input through `LockGraph`, including renamed nodes and `follows`, then verifies the locked repository and commit returned by `nix flake metadata --json`. A missing input, ignored override, wrong source, or wrong revision fails before the check command.

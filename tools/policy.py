@@ -18,9 +18,10 @@ from urllib.request import Request, urlopen
 import yaml
 
 if __package__:
-    from . import declarations, records, releases, support, transitions
+    from . import candidates, declarations, records, releases, support, transitions
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import candidates
     import declarations
     import records
     import releases
@@ -141,11 +142,12 @@ def main(argv=None):
     )
     candidate.add_argument("--stable", required=True)
     candidate.add_argument("--unstable", required=True)
+    candidates.add_commands(commands)
     args = parser.parse_args(argv)
     try:
         require_policy_version(f"v{version}")
         if (
-            args.command in {"check", "audit", "vm", "compatibility", "ci"}
+            args.command in {"check", "audit", "vm", "compatibility", "ci", "pin-batch"}
             and args.policy_root is None
         ):
             raise ValueError(
@@ -153,6 +155,21 @@ def main(argv=None):
                 "a policy release's bundled pins do not establish current approval"
             )
         records_root = args.policy_root or SOURCE_ROOT
+        if args.command == "pin-batch":
+            result = candidates.run(
+                args,
+                source_root=SOURCE_ROOT,
+                load_policy=load_policy,
+                git_revision=git_revision,
+                git_dirty=git_dirty,
+                fingerprints=fingerprints,
+                lock_graph=LockGraph,
+                repository_identity=repository_identity,
+                orchestrator_revision=globals().get("PACKAGED_REVISION")
+                or git_revision(SOURCE_ROOT),
+            )
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return {"fail": 1, "error": 2}.get(result.get("status"), 0)
         config, pins = load_policy(records_root)
         project = None
         assessment = None
@@ -901,16 +918,11 @@ def check_compatibility(
         or git_revision(SOURCE_ROOT),
         "checkerSourceDigest": hashlib.sha256(
             b"".join(
-                (SOURCE_ROOT / path).read_bytes()
+                path.read_bytes()
                 for path in (
-                    "tools/policy.py",
-                    "tools/declarations.py",
-                    "tools/records.py",
-                    "tools/releases.py",
-                    "tools/support.py",
-                    "tools/transitions.py",
-                    "policy/requirements.json",
-                    "VERSION",
+                    *sorted((SOURCE_ROOT / "tools").glob("*.py")),
+                    SOURCE_ROOT / "policy/requirements.json",
+                    SOURCE_ROOT / "VERSION",
                 )
             )
         ).hexdigest(),

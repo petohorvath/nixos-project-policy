@@ -440,7 +440,7 @@ class PackagedTransitionTests(unittest.TestCase):
 
     def artifact(self, name, directory):
         github = GitHub.load(self.state)
-        github.artifact(POLICY_REPO, self.base, name, directory)
+        github.artifact(POLICY_REPO, self.head, name, directory)
         github.save(self.state)
 
     def routine_pr(self):
@@ -468,6 +468,7 @@ class PackagedTransitionTests(unittest.TestCase):
         candidates.write_json(fixture.proposal / "policy/pins.json", pins)
         fixture.commit(fixture.proposal)
         head = policy.git_revision(fixture.proposal)
+        self.head = head
         github = GitHub.load(self.state)
         github.pin_pr(POLICY_REPO, self.base, head)
         github.save(self.state)
@@ -489,6 +490,7 @@ class PackagedTransitionTests(unittest.TestCase):
             ),
             "PR_NUMBER": "7",
             "PROPOSAL_HEAD": head,
+            "GITHUB_WORKFLOW_SHA": self.base,
             "RUN_ID": "91",
             "RUN_ATTEMPT": "2",
             "ATTEMPT": "91:2",

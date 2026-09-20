@@ -36,6 +36,7 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
         self.commit(self.proposal)
         self.head = policy.git_revision(self.proposal)
         self.base = policy.git_revision(self.baseline)
+        self.workflow_revision = self.base
         self.hosted = GitHub()
         self.hosted.pin_pr(POLICY_REPO, self.base, self.head)
         self.number = 0
@@ -133,7 +134,7 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
                 for row in plan["matrix"]["include"]
             ],
         ]:
-            self.hosted.artifact(POLICY_REPO, self.base, name, directory)
+            self.hosted.artifact(POLICY_REPO, self.head, name, directory)
         jobs = [
             {
                 "id": 1,
@@ -195,7 +196,13 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
             ]
         with (
             patch("urllib.request.urlopen", side_effect=self.hosted.transport),
-            patch.dict("os.environ", {"GH_TOKEN": "fixture-read-or-report-token"}),
+            patch.dict(
+                "os.environ",
+                {
+                    "GH_TOKEN": "fixture-read-or-report-token",
+                    "GITHUB_WORKFLOW_SHA": self.workflow_revision,
+                },
+            ),
         ):
             code, report = invoke(*arguments, *options)
         return code, report, output
@@ -207,9 +214,11 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
         )
         self.commit(self.proposal)
         self.head = policy.git_revision(self.proposal)
-        self.hosted.responses[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = self.head
+        self.hosted.pin_pr(POLICY_REPO, self.base, self.head)
         code, report, _ = self.call("capture")
         self.assertEqual(code, 0, report)
+        self.assertEqual(report["workflowHead"], self.base)
+        self.assertNotEqual(report["workflowHead"], report["head"])
         self.assertEqual(report["classification"], "candidate")
         self.assertEqual(report["batch"], "next")
         self.assertFalse(report["eligible"])
@@ -248,9 +257,7 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
                 candidates.write_json(path, data)
                 self.commit(self.proposal)
                 self.head = policy.git_revision(self.proposal)
-                self.hosted.responses[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = (
-                    self.head
-                )
+                self.hosted.pin_pr(POLICY_REPO, self.base, self.head)
                 code, result, _ = self.call("capture")
                 self.assertEqual(code, 2, result)
                 self.assertFalse(result["eligible"])
@@ -312,12 +319,54 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
         self.assertIn("head", str(report["issues"]))
 
     def test_old_target_workflow_cannot_attest_newer_baseline_on_rerun(self):
-        self.hosted.responses[f"repos/{POLICY_REPO}/actions/runs/91"]["head_sha"] = (
-            "f" * 40
-        )
+        (self.baseline / "reviewed.txt").write_text("New trusted baseline\n")
+        self.commit(self.baseline)
+        self.base = policy.git_revision(self.baseline)
+        self.hosted.pin_pr(POLICY_REPO, self.base, self.head)
         code, report, _ = self.call("capture")
         self.assertNotEqual(code, 0, report)
+        self.assertIn("workflow revision", str(report["issues"]))
         self.assertFalse(self.hosted.checks)
+
+    def test_missing_workflow_revision_cannot_establish_trusted_authority(self):
+        self.workflow_revision = ""
+        code, report, _ = self.call("capture")
+        self.assertNotEqual(code, 0, report)
+        self.assertIn("workflow revision", str(report["issues"]))
+        self.assertFalse(self.hosted.checks)
+
+    def test_documentation_pr_accepts_distinct_proposal_and_workflow_commits(self):
+        shutil.copyfile(
+            self.baseline / "policy/pins.json", self.proposal / "policy/pins.json"
+        )
+        (self.proposal / "README.md").write_text("# Shorter documentation\n")
+        self.commit(self.proposal)
+        self.head = policy.git_revision(self.proposal)
+        self.hosted.pin_pr(POLICY_REPO, self.base, self.head)
+        code, captured, _ = self.call("capture")
+        self.assertEqual(code, 0, captured)
+        self.assertEqual(captured["classification"], "not-applicable")
+        self.assertEqual(captured["workflowHead"], self.base)
+        self.hosted.responses[
+            f"repos/{POLICY_REPO}/actions/runs/91/attempts/2/jobs"
+        ] = {
+            "jobs": [
+                {
+                    "id": 1,
+                    "name": "Capture pin proposal",
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+            ]
+        }
+        self.hosted.responses[f"repos/{POLICY_REPO}/actions/runs/91/artifacts"] = {
+            "artifacts": []
+        }
+        code, report, _ = self.call("finish", "--check", str(captured["check"]))
+        self.assertEqual(code, 0, report)
+        self.assertFalse(report["eligible"])
+        self.assertEqual(self.hosted.checks[0]["head_sha"], self.head)
+        self.assertEqual(self.hosted.checks[0]["conclusion"], "success")
 
     def test_hosted_failures_and_unavailable_artifacts_never_publish_success(self):
         _, captured, _ = self.call("capture")
@@ -335,6 +384,12 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
             "wrong run": lambda: self.hosted.responses[artifact_path]["artifacts"][-1][
                 "workflow_run"
             ].update(id=92),
+            "wrong artifact head": lambda: self.hosted.responses[artifact_path][
+                "artifacts"
+            ][-1]["workflow_run"].update(head_sha=self.base),
+            "wrong proposal head": lambda: self.hosted.responses[
+                f"repos/{POLICY_REPO}/actions/runs/91"
+            ].update(head_sha="f" * 40),
             "wrong attempt": lambda: self.hosted.responses[
                 f"repos/{POLICY_REPO}/actions/runs/91"
             ].update(run_attempt=3),
@@ -418,20 +473,13 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
         candidates.write_json(self.baseline / "policy/pins.json", pins)
         self.commit(self.baseline)
         self.base = policy.git_revision(self.baseline)
-        self.hosted.responses[f"repos/{POLICY_REPO}/git/ref/heads/main"]["object"][
-            "sha"
-        ] = self.base
-        self.hosted.responses[f"repos/{POLICY_REPO}/actions/runs/91"]["head_sha"] = (
-            self.base
-        )
+        self.workflow_revision = self.base
         for state in ("approved", "paused", "rolling", "complete", "withdrawn"):
             pins["batches"][-1]["status"] = state
             candidates.write_json(self.proposal / "policy/pins.json", pins)
             self.commit(self.proposal)
             self.head = policy.git_revision(self.proposal)
-            self.hosted.responses[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = (
-                self.head
-            )
+            self.hosted.pin_pr(POLICY_REPO, self.base, self.head)
             self.hosted.checks = []
             with self.subTest(state=state):
                 code, result, _ = self.call("capture")
@@ -492,13 +540,8 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
             policy.git_revision(self.baseline),
             policy.git_revision(self.proposal),
         )
-        self.hosted.responses[f"repos/{POLICY_REPO}/pulls/7"]["head"]["sha"] = self.head
-        self.hosted.responses[f"repos/{POLICY_REPO}/git/ref/heads/main"]["object"][
-            "sha"
-        ] = self.base
-        self.hosted.responses[f"repos/{POLICY_REPO}/actions/runs/91"]["head_sha"] = (
-            self.base
-        )
+        self.workflow_revision = self.base
+        self.hosted.pin_pr(POLICY_REPO, self.base, self.head)
         with patch.object(support, "now", return_value=support.timestamp(BEFORE)):
             _, captured, _ = self.call("capture")
             self.evidence()
@@ -534,6 +577,7 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
         environment = {
             **workflows.environment(workspace, adapter="pr_adapter"),
             "GH_TOKEN": "fixture",
+            "GITHUB_WORKFLOW_SHA": self.workflow_revision,
             "PR_NUMBER": "7",
             "PROPOSAL_HEAD": self.head,
             "RUN_ID": "91",
@@ -560,7 +604,7 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
         self.assertEqual(process.returncode, 0, process.stderr)
         plan = records.read_json(workspace / "pin-plan/plan.json")
         self.hosted.artifact(
-            POLICY_REPO, self.base, "pin-plan-91-2", workspace / "pin-plan"
+            POLICY_REPO, self.head, "pin-plan-91-2", workspace / "pin-plan"
         )
         jobs = [
             {
@@ -582,7 +626,7 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
             self.assertEqual(process.returncode, 0, process.stderr)
             self.hosted.artifact(
                 POLICY_REPO,
-                self.base,
+                self.head,
                 f"pin-result-91-2-{row['worker']}",
                 workspace / "pin-result",
             )
@@ -602,7 +646,7 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
         process = shell("aggregate")
         self.assertEqual(process.returncode, 0, process.stderr)
         self.hosted.artifact(
-            POLICY_REPO, self.base, "pin-summary-91-2", workspace / "pin-summary"
+            POLICY_REPO, self.head, "pin-summary-91-2", workspace / "pin-summary"
         )
         process = shell("finish", CHECK_ID="1")
         self.assertEqual(process.returncode, 0, process.stderr)

@@ -18,12 +18,14 @@ from urllib.request import Request, urlopen
 import yaml
 
 if __package__:
-    from . import declarations, records, releases
+    from . import declarations, records, releases, support, transitions
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import declarations
     import records
     import releases
+    import support
+    import transitions
 
 ci_plan = declarations.ci_plan
 
@@ -59,7 +61,17 @@ def main(argv=None):
         "--policy-root", type=Path, help="Trusted checkout of current central records"
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("validate", help="Validate the central records")
+    validate = commands.add_parser("validate", help="Validate the central records")
+    validate.add_argument(
+        "--previous-policy-root",
+        type=Path,
+        help="Trusted prior snapshot for reviewing legacy-record removals",
+    )
+    validate.add_argument(
+        "--workspace",
+        type=Path,
+        help="Exact member checkouts needed to prove migration before legacy cleanup",
+    )
     ci = commands.add_parser(
         "ci", help="Report a member's CI matrix and required gates"
     )
@@ -143,6 +155,7 @@ def main(argv=None):
         records_root = args.policy_root or SOURCE_ROOT
         config, pins = load_policy(records_root)
         project = None
+        assessment = None
         if args.command in {"check", "ci", "compatibility", "vm"}:
             project = member_project(
                 args.project_dir,
@@ -152,8 +165,36 @@ def main(argv=None):
                 if args.command == "ci" and args.inputs_json is not None
                 else None,
             )
-        if args.command == "validate":
-            result = {"status": "valid", "approvedPins": pins["approved"] is not None}
+            assessment = support.assess(project["policyVersion"], config["_support"])
+        if assessment is not None and assessment["status"] == "retired":
+            records_revision = git_revision(records_root)
+            result = {
+                "status": "fail",
+                "project": args.project,
+                "policyVersion": project["policyVersion"],
+                "revision": git_revision(args.project_dir),
+                "memberSettings": member_settings(project),
+                "enrollment": enrollment(config, args.project),
+                "issues": [support.retirement_issue(assessment)],
+            }
+        elif args.command == "validate":
+            result = {
+                "status": "valid",
+                "approvedPins": pins["approved"] is not None,
+                "legacyCleanup": "not-assessed",
+            }
+            if args.previous_policy_root is not None:
+                result.update(
+                    transitions.validate_legacy_removal(
+                        args.previous_policy_root,
+                        records_root,
+                        args.workspace,
+                        config,
+                        pins,
+                        git_revision=git_revision,
+                        git_dirty=git_dirty,
+                    )
+                )
         elif args.command == "ci":
             result = {
                 "status": "planned",
@@ -234,6 +275,22 @@ def main(argv=None):
                 args.github,
                 records_root=records_root,
             )
+        if assessment is not None:
+            current_support = support.assess(
+                project["policyVersion"], config["_support"]
+            )
+            if (
+                current_support["status"] == "retired"
+                and assessment["status"] != "retired"
+            ):
+                result["status"] = "fail"
+                result.setdefault("issues", []).append(
+                    support.retirement_issue(current_support)
+                )
+                result.pop("matrix", None)
+                result.pop("compatibilityMatrix", None)
+            result["support"] = current_support
+            result["selectionStatus"] = current_support["status"]
         result["checkerVersion"] = f"v{version}"
         result["policyRecordsRevision"] = (
             records_revision
@@ -241,7 +298,7 @@ def main(argv=None):
             else git_revision(records_root)
         )
         result["policyRecordsDigest"] = records.digest(config, pins)
-        if args.command == "compatibility":
+        if args.command == "compatibility" and "artifacts" in result:
             (Path(result["artifacts"]) / "result.json").write_text(
                 json.dumps(result, indent=2, sort_keys=True) + "\n"
             )
@@ -255,7 +312,15 @@ def main(argv=None):
         subprocess.SubprocessError,
     ) as error:
         print(
-            json.dumps({"status": "error", "error": str(error)}),
+            json.dumps(
+                {
+                    "status": "error",
+                    "selectionStatus": "invalid"
+                    if isinstance(error, (InvalidDeclaration, releases.InvalidRelease))
+                    else "unknown",
+                    "error": str(error),
+                }
+            ),
             file=sys.stdout if args.command == "audit" else sys.stderr,
         )
         return 2
@@ -268,9 +333,12 @@ def load_policy(root):
         raise ValueError("Policy records must be JSON objects")
     if config.get("schemaVersion") != 2 or pins.get("schemaVersion") != 1:
         raise ValueError("Unsupported policy record schema")
-    if "_members" in config:
-        raise ValueError("Enrollment belongs in policy/members.json")
+    if "_members" in config or "_support" in config:
+        raise ValueError(
+            "Enrollment and support belong in their own policy record files"
+        )
     config["_members"] = records.load_members(root, config["projects"])
+    config["_support"] = support.load(root)
     requirements = read_json(SOURCE_ROOT / "policy/requirements.json")
     if requirements.get("schemaVersion") != 1:
         raise ValueError("Unsupported policy requirements schema")
@@ -353,18 +421,12 @@ def load_policy(root):
                 raise ValueError(
                     f"Adopted project {name} needs verified required check names"
                 )
-    # Older selected checkers validate every adopted record, including other releases.
-    if any(
-        project["policyVersion"] is not None
-        and not uses_derived_checks(project["policyVersion"])
-        for project in config["projects"].values()
-    ):
-        for name, project in config["projects"].items():
-            if project["adopted"] and not project.get("requiredChecks"):
-                raise ValueError(
-                    f"Adopted project {name} needs legacy requiredChecks while any "
-                    "member selects a policy release before v0.3.0"
-                )
+    # Retirement alone is not migration proof; retained adopted legacy entries stay readable.
+    for name, project in config["projects"].items():
+        if project["adopted"] and not project.get("requiredChecks"):
+            raise ValueError(
+                f"Adopted project {name} needs legacy requiredChecks until reviewed legacy cleanup"
+            )
     if pins["approved"] is not None:
         validate_pair(pins["approved"])
     ids = set()
@@ -413,15 +475,22 @@ def uses_derived_checks(version):
     ) >= (0, 3, 0)
 
 
+class InvalidDeclaration(ValueError):
+    """The inspected caller cannot select a valid policy contract."""
+
+
 def member_project(root, name, config, *, hosted_inputs=None):
-    return declarations.inspect(
-        root.resolve(),
-        config["policyRepository"],
-        name,
-        config,
-        checker_version=f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}",
-        hosted_inputs=hosted_inputs,
-    )
+    try:
+        return declarations.inspect(
+            root.resolve(),
+            config["policyRepository"],
+            name,
+            config,
+            checker_version=f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}",
+            hosted_inputs=hosted_inputs,
+        )
+    except ValueError as error:
+        raise InvalidDeclaration(str(error)) from error
 
 
 def member_settings(project):
@@ -838,6 +907,8 @@ def check_compatibility(
                     "tools/declarations.py",
                     "tools/records.py",
                     "tools/releases.py",
+                    "tools/support.py",
+                    "tools/transitions.py",
                     "policy/requirements.json",
                     "VERSION",
                 )
@@ -1124,6 +1195,7 @@ def audit_family(
             "enrollment": "enrolled",
             "revision": None,
             "policyVersion": None,
+            "selectionStatus": "unknown",
             "checkerVersion": None,
             "checkerRepository": config["policyRepository"],
             "checkerRevision": None,
@@ -1172,55 +1244,66 @@ def audit_family(
                             "Policy caller identity and policy_version must agree with its selection"
                         )
                 except ValueError as error:
+                    report["selectionStatus"] = "invalid"
                     report["issues"].append(f"ci: {error}")
                 else:
-                    release = releases.inspect_release(
-                        config["policyRepository"], version
-                    )
-                    report["checkerRevision"] = release["revision"]
-                    settings = None
-                    if uses_member_declarations(version):
-                        settings = {
-                            field: json.loads(inputs.get(key, "[]"))
-                            for key, field in declarations.INPUT_FIELDS.items()
-                        }
-                    assessed = releases.check_member(
-                        release,
-                        root,
-                        name,
-                        repository,
-                        revision,
-                        records_root,
-                        snapshot,
-                        settings=settings,
-                    )
-                    report.update(assessed)
-                    # Historical reports cannot redefine trusted enrollment or identity.
-                    report.update(
-                        repository=repository, enrollment="enrolled", records=snapshot
-                    )
-                    report["assessment"] = assessed["status"]
-                    if report["status"] == "candidate-ready":
-                        report["status"] = "fail"
-                        report["issues"].append(
-                            "Candidate validation does not establish approved-pin compliance"
+                    assessment = support.assess(version, config["_support"])
+                    report["support"] = assessment
+                    report["selectionStatus"] = assessment["status"]
+                    if assessment["status"] == "retired":
+                        report["assessment"] = "retired"
+                        report["issues"].append(support.retirement_issue(assessment))
+                    else:
+                        release = releases.inspect_release(
+                            config["policyRepository"], version
                         )
-                    graph[name] = report["dependencies"]
-                    if github:
-                        checks = (
-                            report["requiredChecks"]
-                            if uses_derived_checks(version)
-                            else config["projects"][name]["requiredChecks"]
+                        report["checkerRevision"] = release["revision"]
+                        settings = None
+                        if uses_member_declarations(version):
+                            settings = {
+                                field: json.loads(inputs.get(key, "[]"))
+                                for key, field in declarations.INPUT_FIELDS.items()
+                            }
+                        assessed = releases.check_member(
+                            release,
+                            root,
+                            name,
+                            repository,
+                            revision,
+                            records_root,
+                            snapshot,
+                            settings=settings,
+                            support_assessment=assessment,
                         )
-                        if not checks or not declarations.valid_check_names(checks):
-                            raise ValueError(
-                                "Selected legacy release requires trusted complete gate names"
-                            )
-                        report["issues"].extend(
-                            check_github({"repository": repository}, checks)
+                        report.update(assessed)
+                        # Historical reports cannot redefine trusted enrollment or identity.
+                        report.update(
+                            repository=repository,
+                            enrollment="enrolled",
+                            records=snapshot,
                         )
-                        if report["issues"]:
+                        report["assessment"] = assessed["status"]
+                        if report["status"] == "candidate-ready":
                             report["status"] = "fail"
+                            report["issues"].append(
+                                "Candidate validation does not establish approved-pin compliance"
+                            )
+                        graph[name] = report["dependencies"]
+                        if github:
+                            checks = (
+                                report["requiredChecks"]
+                                if uses_derived_checks(version)
+                                else config["projects"][name]["requiredChecks"]
+                            )
+                            if not checks or not declarations.valid_check_names(checks):
+                                raise ValueError(
+                                    "Selected legacy release requires trusted complete gate names"
+                                )
+                            report["issues"].extend(
+                                check_github({"repository": repository}, checks)
+                            )
+                            if report["issues"]:
+                                report["status"] = "fail"
                 if git_revision(root) != revision or git_dirty(root):
                     raise ValueError("Member checkout changed during audit")
         except (
@@ -1231,6 +1314,9 @@ def audit_family(
             subprocess.SubprocessError,
         ) as error:
             report["status"] = "error"
+            report["selectionStatus"] = (
+                "invalid" if isinstance(error, releases.InvalidRelease) else "unknown"
+            )
             report["issues"].append(f"inspection: {error}")
         reports.append(report)
     # A released checker reads the same directory; reject a concurrently changed snapshot.
@@ -1246,6 +1332,21 @@ def audit_family(
         for report in reports:
             report["status"] = "error"
             report["issues"].append("Central records changed during audit")
+    # Later members can run past an earlier member's retirement deadline.
+    assessment_time = support.now()
+    for report in reports:
+        if "support" in report:
+            current_support = support.assess(
+                report["policyVersion"], config["_support"], at=assessment_time
+            )
+            if current_support != report["support"]:
+                report["support"] = current_support
+                report["selectionStatus"] = current_support["status"]
+                if current_support["status"] == "retired":
+                    report["status"] = (
+                        "error" if report["status"] == "error" else "fail"
+                    )
+                    report["issues"].append(support.retirement_issue(current_support))
     cycles = dependency_cycles(graph)
     return {
         "status": "error"

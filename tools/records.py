@@ -7,7 +7,14 @@ import re
 
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 PROJECT = re.compile(r"[a-z0-9-]+\Z")
-RUNTIME_FIELDS = {"systems", "requiredTools", "readmeSections", "ci", "_members"}
+RUNTIME_FIELDS = {
+    "systems",
+    "requiredTools",
+    "readmeSections",
+    "ci",
+    "_members",
+    "_support",
+}
 
 
 def unique_mapping(pairs):
@@ -64,6 +71,7 @@ def digest(config, pins, *, legacy=False):
     }
     if not legacy:
         data["members"] = {"schemaVersion": 1, "members": config["_members"]}
+        data["support"] = config["_support"]
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 

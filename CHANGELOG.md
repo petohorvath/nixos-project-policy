@@ -10,6 +10,9 @@
 
 - Keep active enrollment in an identity-only roster, independently of complete legacy records. Audit exact member revisions with their discovered published immutable checkers and validated report identities; retain missing enforcement and inaccessible metadata as visible failures.
 
+- Add explicit retirement decisions with migration periods, shared enforcement in local commands, CI, and audits, and stable support assessments for evidence. Preserve support when newer releases publish.
+- Guard legacy cleanup against trusted prior records, supported immutable patch releases, and exact member migration evidence; keep all real retirement decisions empty.
+
 ### Migration
 
 After separately authorized publication, update member policy links, the caller reference, and `policy_version` in one reviewed member PR. Put the intended architectures, VM targets, and additional gates into caller inputs. Use `ci PATH --project NAME` to review the generated names; verify actual statuses and merge settings, and justify any coverage reduction explicitly. Keep central legacy copies unchanged. This prepared release does not publish a tag, migrate members, change live settings, approve pins, or retire older releases. See [migration guidance](docs/maintenance.md#migration-to-v040-prepared).

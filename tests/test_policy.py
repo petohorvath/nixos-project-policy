@@ -199,12 +199,15 @@ class ProjectFixture(unittest.TestCase):
                     "policyVersion": RELEASE,
                     "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
                     "vmTargets": [],
+                    "requiredChecks": list(REQUIRED_CHECKS),
                 }
             },
         }
         self.pins = {"schemaVersion": 1, "approved": PAIR, "batches": []}
         self.members = {"example": "owner/example"}
         self.config["_members"] = self.members
+        self.support = {"schemaVersion": 1, "retirements": {}}
+        self.config["_support"] = self.support
         self.write("flake.nix", "{}")
         self.write(".envrc", "use flake\n")
         self.write("LICENSE", "MIT")
@@ -258,13 +261,21 @@ class ProjectFixture(unittest.TestCase):
             key: value
             for key, value in self.config.items()
             if key
-            not in {"systems", "requiredTools", "readmeSections", "ci", "_members"}
+            not in {
+                "systems",
+                "requiredTools",
+                "readmeSections",
+                "ci",
+                "_members",
+                "_support",
+            }
         }
         (records / "policy/projects.json").write_text(json.dumps(records_config))
         (records / "policy/pins.json").write_text(json.dumps(self.pins))
         (records / "policy/members.json").write_text(
             json.dumps({"schemaVersion": 1, "members": self.members})
         )
+        (records / "policy/support.json").write_text(json.dumps(self.support))
         return records
 
     def run_policy(self, *args):
@@ -700,13 +711,14 @@ class ProjectTests(ProjectFixture):
         project["requiredChecks"] = checks
         self.assertEqual(self.run_policy("validate")[0], 0)
         del project["requiredChecks"]
-        self.assertEqual(self.run_policy("validate")[0], 0)
+        self.assertEqual(self.run_policy("validate")[0], 2)
 
     def test_older_selected_checkers_need_lists_for_every_adopted_member(self):
         project = self.config["projects"]["example"]
         legacy = copy.deepcopy(project)
         legacy.update(repository="owner/legacy", adopted=False)
         self.config["projects"]["legacy"] = legacy
+        del project["requiredChecks"]
         for version in ["v0.1.1", "v0.2.0"]:
             with self.subTest(version=version):
                 legacy["policyVersion"] = version
@@ -717,12 +729,13 @@ class ProjectTests(ProjectFixture):
                 self.assertEqual(self.run_policy("validate")[0], 0)
                 del project["requiredChecks"]
         legacy["policyVersion"] = RELEASE
-        self.assertEqual(self.run_policy("validate")[0], 0)
+        self.assertEqual(self.run_policy("validate")[0], 2)
 
     def test_legacy_members_still_require_recorded_names_and_cannot_use_additional_checks(
         self,
     ):
         project = self.config["projects"]["example"]
+        del project["requiredChecks"]
         for version in ["v0.1.1", "v0.2.0"]:
             with self.subTest(version=version):
                 project["policyVersion"] = version
@@ -1881,6 +1894,9 @@ class RecordTests(unittest.TestCase):
             (root / "policy/members.json").write_text(
                 (source / "policy/members.json").read_text()
             )
+            (root / "policy/support.json").write_text(
+                (source / "policy/support.json").read_text()
+            )
             pins = {"schemaVersion": 1, "approved": PAIR, "batches": []}
             (root / "policy/pins.json").write_text(json.dumps(pins))
             output = io.StringIO()
@@ -1901,6 +1917,9 @@ class RecordTests(unittest.TestCase):
             )
             (root / "policy/members.json").write_text(
                 (source / "policy/members.json").read_text()
+            )
+            (root / "policy/support.json").write_text(
+                (source / "policy/support.json").read_text()
             )
             pins = {
                 "schemaVersion": 1,
@@ -2016,6 +2035,9 @@ class WorkflowTests(unittest.TestCase):
             )
             (records / "members.json").write_text(
                 json.dumps({"schemaVersion": 1, "members": {}})
+            )
+            (records / "support.json").write_text(
+                json.dumps({"schemaVersion": 1, "retirements": {}})
             )
             stub = root / "nix"
             stub.write_text(

@@ -8,7 +8,8 @@ The checker runs from a selected policy release or its packaged `nixos-project-p
 
 | Command after `nix run .# -- --policy-root .`                   | Behavior                                                                                                                                          |
 | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `validate`                                                      | Validate the policy records; report whether approved pins exist. This is not an adoption check.                                                   |
+| `validate`                                                      | Validate record structure; report whether approved pins exist. This does not assess legacy cleanup.                                               |
+| `validate --previous-policy-root OLD --workspace WORKSPACE`     | Review proposed legacy removals against a trusted prior snapshot, release retirement, and exact migrated member checkouts.                        |
 | `ci PATH --project NAME`                                        | Report the member's CI matrices and required status names, including additional project checks. This does not run checks or establish compliance. |
 | `check PATH --project NAME`                                     | Inspect a member checkout and fail on missing requirements or an unapproved baseline.                                                             |
 | `check PATH --project NAME --readiness`                         | Accepted for legacy command compatibility; new callers run the same checks before and after enrollment.                                           |
@@ -104,13 +105,43 @@ Structural checks cover the root development entrypoint, required documentation 
 
 The reusable workflow verifies through GitHub that the selected release is published, immutable, and not a prerelease. It checks out the exact tag, checks that `VERSION` matches, and captures its commit alongside the current `main` record commit and member source commit. All policy, compatibility, and VM jobs use those three captured commits. A missing release, mutable release, unavailable API response, or version mismatch stops the workflow. Local structural checks do not attest remote publication or immutability.
 
+## Release support and retirement
+
+`policy/support.json` uses schema version 1 with a `retirements` object keyed by exact release tags. The real record starts empty. A release without an explicit retirement decision remains supported; publishing later releases, the number of newer releases, and release age do not retire it. Support does not replace caller validation or attest remote publication.
+
+Each decision contains an HTTPS review reference in `decision`, a nonempty `reason`, and UTC `migrationStartsAt` and `retiresAt` timestamps using `YYYY-MM-DDTHH:MM:SSZ`. The end must follow the start. The decision below illustrates the schema; it is not an actual retirement:
+
+```json
+{
+  "schemaVersion": 1,
+  "retirements": {
+    "v9.9.0": {
+      "decision": "https://github.com/example/policy/pull/123",
+      "reason": "Example reviewed retirement",
+      "migrationStartsAt": "2030-01-01T00:00:00Z",
+      "retiresAt": "2030-02-01T00:00:00Z"
+    }
+  }
+}
+```
+
+Before `retiresAt`, the assessment stays `supported` and includes the pending decision and full migration period. At or after that time it becomes `retired`. New-contract `check`, `ci`, `compatibility`, `vm`, and central audits use the same assessment. Retired member commands return exit 1 with `selectionStatus: "retired"`, the `support` decision, and a failure reason; they produce no usable CI matrix and begin no shell, compatibility, or VM execution. Commands reassess support before returning, and hosted ordinary check jobs repeat planning after execution so a deadline crossed during a run cannot leave a successful required gate. Missing or malformed support records return an inspection error with `selectionStatus: "unknown"`; invalid member declarations return `selectionStatus: "invalid"`.
+
+The `support` object contains `policyVersion`, effective `status`, and the decision in `retirement` (or null). Its identity remains stable while the decision and effective status are unchanged; it contains no observation timestamp. Record digests include decision content, and retain the exact historical project/pin digest separately. A retirement becoming effective changes the support assessment without changing record content. Evidence consumers must reassess support when using a plan or result; a matching record digest alone does not establish continuing support.
+
+Retired selections remain visible in the enrolled audit with their member revision, failed assessment, and retirement decision. The central audit can establish this failure without executing the retired checker. Historical immutable checkers do not interpret the new support file; their local behavior is unchanged. Keep their compatibility records until both retirement and member migration permit reviewed cleanup.
+
+`validate` alone checks structure and returns `legacyCleanup: "not-assessed"`. Retained adopted legacy entries require full `requiredChecks`, including after retirement, because retirement alone does not prove migration. To review actual removals, select a trusted prior snapshot with `--previous-policy-root OLD`. The checker detects removed legacy entries or fields, removed batches or participants, and edits to completed/withdrawn historical batches. Any supported legacy release blocks cleanup, including immutable patch releases that are no longer selected by current members.
+
+Once all known legacy releases have effectively retired, cleanup review inspects the complete published release inventory for other still-supported legacy patches. Inaccessible or incomplete information cannot authorize cleanup. It then requires exact clean checkouts for the union of prior and current enrolled identities through `--workspace`: removing an identity from the proposed roster does not waive its migration evidence. Each must select a supported new-contract release and pass its published immutable checker against the proposed snapshot. Missing callers, retained legacy selections, dirty or changed sources, and failing checks prevent cleanup. A successful review returns `legacyCleanup: "eligible"` with exact migration evidence; it deletes nothing and grants no merge authority. Ordinary pin/record updates without removals report `not-needed` through this comparison. Existing schemas and every retained historical batch reference must still validate.
+
 ## Enrollment audits
 
 `audit WORKSPACE` iterates every identity in the trusted roster and inspects `WORKSPACE/NAME` at a clean exact Git commit. Missing checkouts remain failed enrolled entries; missing, ambiguous, invalid, or disabled callers cannot remove coverage or create pending status. `--fetch` clones missing public repositories from roster identities; it leaves existing checkouts at their selected local revision. Source changes during inspection are errors.
 
 Discover the selected tag from the unique caller and require matching literal `project` and `policy_version` inputs. The audit verifies that the release in the trusted policy repository is published, immutable, and not a prerelease, resolves its tag to an exact commit (including annotated tags), and runs that commit's Nix package with the same trusted records checkout. A local development checker cannot stand in for an unpublished selected release. Each selected checker enforces its own caller, settings, and policy rules. Historical checkers still require their retained central contract; new-contract members can upgrade independently of those frozen copies.
 
-Every member report identifies its roster `repository`, inspected `revision`, discovered `policyVersion`, verified `checkerRevision` and `checkerRepository`, and central `records` identity. `records.revision` identifies the Git commit when available; `records.digest` covers the complete project, pin, and roster records. `records.legacyDigest` covers only projects and pins, matching historical checkers. The dispatcher validates returned project, release, member revision, record revision/digest, report types, outcome, and new-contract member settings. Substituted or malformed reports produce inspection errors. New-contract `policyRecordsDigest` includes the roster; an older checker's digest retains its historical scope. A changed central snapshot fails the audit, including an initially empty roster.
+Every member report identifies its roster `repository`, inspected `revision`, discovered `policyVersion`, verified `checkerRevision` and `checkerRepository`, and central `records` identity. `records.revision` identifies the Git commit when available; `records.digest` covers the complete project, pin, roster, and support records. `records.legacyDigest` covers only projects and pins, matching historical checkers. The dispatcher validates returned project, release, member revision, record revision/digest, report types, outcome, and new-contract member settings. Substituted or malformed reports produce inspection errors. New-contract `policyRecordsDigest` includes the roster and support decisions; an older checker's digest retains its historical scope. A changed central snapshot fails the audit, including an initially empty roster.
 
 A static passing assessment retains `compatibility: "not-run"`; audits do not claim to rerun member CI. Candidate-only results remain visible as noncompliant with their original `assessment`; they do not establish approved-pin compliance. Member failures remain separate from inspection errors, and an aggregate inspection error takes precedence. Audit errors print JSON on standard output so the scheduled/manual workflow retains a report even when initial records cannot be processed. Artifact upload cannot turn the failed audit command into success.
 

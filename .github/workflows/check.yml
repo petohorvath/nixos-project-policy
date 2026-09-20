@@ -138,6 +138,10 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state title "$PR_TITLE"
+      - name: Recheck policy support after execution
+        env:
+          PROJECT: ${{ inputs.project }}
+        run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state ci ./project --project "$PROJECT" > support.json
   compatibility:
     name: ${{ matrix.check }}
     needs: records

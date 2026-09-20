@@ -17,6 +17,10 @@ else:
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
 
 
+class InvalidRelease(ValueError):
+    """Available metadata proves the selected release is not an allowed release."""
+
+
 def version_at_least(version, minimum):
     declarations.require_policy_version(version)
     return tuple(map(int, version[1:].split("."))) >= minimum
@@ -46,6 +50,18 @@ def inspect_release(repository, version):
     if not isinstance(repository, str) or not records.REPOSITORY.fullmatch(repository):
         raise ValueError("Invalid trusted policy repository")
     release = public_get(f"repos/{repository}/releases/tags/{version}")
+    if (
+        isinstance(release, dict)
+        and release.get("tag_name") == version
+        and (
+            release.get("immutable") is False
+            or release.get("draft") is True
+            or release.get("prerelease") is True
+        )
+    ):
+        raise InvalidRelease(
+            "Selected policy must be a published immutable non-prerelease"
+        )
     if (
         not isinstance(release, dict)
         or release.get("tag_name") != version
@@ -91,8 +107,43 @@ def checker_command(release, records_root, *arguments):
     ]
 
 
+def published_versions(repository):
+    versions = set()
+    for page in range(1, 101):
+        data = public_get(f"repos/{repository}/releases?per_page=100&page={page}")
+        if not isinstance(data, list):
+            raise ValueError("Published policy release inventory is unavailable")
+        for release in data:
+            if not isinstance(release, dict):
+                raise ValueError("Published policy release inventory is malformed")
+            if release.get("draft") is True or release.get("prerelease") is True:
+                continue
+            if (
+                release.get("draft") is not False
+                or release.get("prerelease") is not False
+                or release.get("immutable") is not True
+            ):
+                raise ValueError(
+                    "Published policy release inventory is incomplete or mutable"
+                )
+            declarations.require_policy_version(release.get("tag_name"))
+            versions.add(release["tag_name"])
+        if len(data) < 100:
+            return sorted(versions)
+    raise ValueError("Published policy release inventory could not be completed")
+
+
 def check_member(
-    release, root, name, repository, revision, records_root, snapshot, *, settings=None
+    release,
+    root,
+    name,
+    repository,
+    revision,
+    records_root,
+    snapshot,
+    *,
+    settings=None,
+    support_assessment,
 ):
     process = subprocess.run(
         checker_command(
@@ -141,6 +192,7 @@ def check_member(
             )
         )
         or (modern and report.get("memberSettings") != settings)
+        or (modern and report.get("support") != support_assessment)
     ):
         raise ValueError(
             "Released checker returned an incompatible report or substituted identity"

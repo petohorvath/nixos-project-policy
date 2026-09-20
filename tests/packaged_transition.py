@@ -326,8 +326,57 @@ class PackagedTransitionTests(unittest.TestCase):
                 )
             )
             self.assertEqual(report["status"], "valid", version)
+            self.historical_checks(version, release)
         self.assertEqual(policy.fingerprints(fixture.baseline), baseline)
         self.routine_pr()
+
+    def historical_checks(self, version, release):
+        root = self.workspace / f"member-{version}"
+        record_root = self.workspace / f"records-{version}"
+        shutil.copytree(
+            self.fixture.roots["legacy"], root, ignore=shutil.ignore_patterns(".git")
+        )
+        shutil.copytree(self.fixture.baseline / "policy", record_root / "policy")
+        config = records.read_json(record_root / "policy/projects.json")
+        config["projects"]["legacy"]["policyVersion"] = version
+        candidates.write_json(record_root / "policy/projects.json", config)
+        caller = records.read_json(root / ".github/workflows/policy.yml")
+        caller["jobs"]["policy"]["uses"] = (
+            f"{POLICY_REPO}/.github/workflows/check.yml@{version}"
+        )
+        caller["jobs"]["policy"]["with"]["policy_version"] = version
+        candidates.write_json(root / ".github/workflows/policy.yml", caller)
+        for name in ("AGENTS.md", "CONTRIBUTING.md"):
+            path = root / name
+            path.write_text(path.read_text().replace("v0.3.0", version))
+        command = [
+            sys.executable,
+            release["source"],
+            "--policy-root",
+            str(record_root),
+            "check",
+            str(root),
+            "--project",
+            "legacy",
+        ]
+        approved = json.loads(self.command(command))
+        self.assertEqual(approved["status"], "pass", version)
+
+        lock = records.read_json(root / "flake.lock")
+        lock["nodes"]["arbitrary-node"]["locked"]["rev"] = NEW_PAIR["stable"]
+        candidates.write_json(root / "flake.lock", lock)
+        pin_bound = version in {"v0.1.0", "v0.1.1"}
+        independent = json.loads(self.command(command, expected=1 if pin_bound else 0))
+        self.assertEqual(
+            independent["status"], "fail" if pin_bound else "pass", version
+        )
+        if pin_bound:
+            self.assertIn("allowed pin pair", str(independent["issues"]))
+
+        (root / "examples").mkdir()
+        candidates.write_json(root / "examples/flake.lock", lock)
+        shared = json.loads(self.command(command, expected=1))
+        self.assertIn("examples/flake.lock", str(shared["issues"]), version)
 
     def hosted_audit(self, audited):
         state = records.read_json(self.state)

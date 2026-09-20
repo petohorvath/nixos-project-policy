@@ -15,8 +15,6 @@ from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-import yaml
-
 if __package__:
     from . import (
         agreement,
@@ -56,7 +54,6 @@ POLICY_VERSION = re.compile(
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 REQUIREMENT_FIELDS = ("systems", "requiredTools", "readmeSections", "ci")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
-PR_ACTIVITIES = {"opened", "synchronize", "reopened", "edited"}
 ACTIVE_BATCH_STATES = {"approved", "rolling", "paused"}
 TITLE = re.compile(
     r"(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)"
@@ -338,7 +335,6 @@ def main(argv=None):
                 config,
                 pins,
                 args.batch,
-                readiness=args.readiness,
                 project=project,
             )
             if args.shell:
@@ -585,24 +581,8 @@ def enrollment(config, name):
     return "enrolled" if name in config["_members"] else "not-enrolled"
 
 
-def inspect_project(
-    root, name, config, pins, batch_id=None, *, readiness=False, project=None
-):
+def inspect_project(root, name, config, pins, batch_id=None, *, project):
     root = root.resolve()
-    if project is None:
-        legacy = config["projects"].get(name)
-        if legacy and not uses_member_declarations(legacy["policyVersion"]):
-            project = legacy
-        else:
-            try:
-                project = member_project(root, name, config)
-            except ValueError as error:
-                return {
-                    "project": name,
-                    "status": "fail",
-                    "issues": [f"ci: {error}"],
-                    "dependencies": [],
-                }
     issues = check_structure(root, config, project["policyVersion"])
     revision = git_revision(root)
     candidate = candidate_for(pins, name, revision, batch_id)
@@ -630,9 +610,7 @@ def inspect_project(
     for path in locks:
         lock = LockGraph(read_json(path))
         independent_node = None
-        if path == root / "flake.lock" and uses_input_overrides(
-            project["policyVersion"]
-        ):
+        if path == root / "flake.lock":
             try:
                 independent_node = selected_nixpkgs(lock)
             except ValueError as error:
@@ -708,29 +686,13 @@ def inspect_project(
         and not any(pins_match(shared_observations, pair) for pair in pairs)
     ):
         issues.append("pins: project lockfiles do not share one allowed pair")
-    if "declaration" not in project:
-        issues.extend(
-            check_caller(
-                root,
-                config["policyRepository"],
-                project["policyVersion"],
-                name,
-                caller_name=config["ci"]["callerJobName"],
-            )
-        )
-        if not project["adopted"] and not readiness:
-            issues.append(
-                "adoption: project is pending; use --readiness to validate enrollment"
-            )
     if issues:
         status = "fail"
     elif candidate:
         status = "candidate-ready"
-    elif "declaration" not in project and not project["adopted"]:
-        status = "ready"
     else:
         status = "pass"
-    report = {
+    return {
         "project": name,
         "policyVersion": project["policyVersion"],
         "revision": revision,
@@ -741,25 +703,15 @@ def inspect_project(
         "issues": issues,
         "pins": observations,
         "dependencies": sorted(dependencies),
+        "requiredChecks": ci_plan(project, config["ci"])["requiredChecks"],
+        "memberSettings": member_settings(project),
     }
-    if project["policyVersion"] == f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}":
-        report["requiredChecks"] = ci_plan(project, config["ci"])["requiredChecks"]
-        report["memberSettings"] = member_settings(project)
-    return report
 
 
 def uses_member_declarations(version):
     return version is not None and tuple(
         map(int, version.removeprefix("v").split("."))
     ) >= (0, 4, 0)
-
-
-def uses_input_overrides(version):
-    return version is None or tuple(map(int, version.removeprefix("v").split("."))) >= (
-        0,
-        2,
-        0,
-    )
 
 
 def selected_nixpkgs(lock):
@@ -841,84 +793,6 @@ def check_structure(root, config, version=None):
             issues.append(
                 f"documentation: {file} needs only the selected policy release's POLICY.md links"
             )
-    return issues
-
-
-def check_caller(root, repository, version, project_name, *, caller_name):
-    issues = []
-    if version is None:
-        issues.append("ci: no policy release version is recorded")
-    expected = f"{repository}/.github/workflows/check.yml@{version}"
-    for path in sorted((root / ".github/workflows").glob("*")):
-        if path.suffix not in {".yml", ".yaml"}:
-            continue
-        try:
-            workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
-        except yaml.YAMLError as error:
-            issues.append(f"ci: invalid YAML in {path.name}: {error}")
-            continue
-        if not isinstance(workflow, dict):
-            continue
-        events = workflow.get("on", {})
-        has_pr = events == "pull_request" or (
-            isinstance(events, (dict, list)) and "pull_request" in events
-        )
-        for job in workflow.get("jobs", {}).values():
-            if (
-                has_pr
-                and isinstance(job, dict)
-                and version
-                and job.get("uses") == expected
-            ):
-                if job.get("name") != caller_name:
-                    issues.append(
-                        f"ci: policy caller job must be named '{caller_name}'"
-                    )
-                if "strategy" in job:
-                    issues.append(
-                        "ci: policy caller matrices are not supported; keep fixed status names"
-                    )
-                if job.get("if"):
-                    issues.append(
-                        "ci: the required policy caller must run for every PR"
-                    )
-                if "needs" in job:
-                    issues.append(
-                        "ci: policy caller dependencies are not supported; run it independently for every PR"
-                    )
-                if "continue-on-error" in job:
-                    issues.append("ci: policy caller must not suppress failures")
-                if uses_input_overrides(version) and set(job.get("with", {})) != {
-                    "project",
-                    "policy_version",
-                }:
-                    issues.append(
-                        "ci: policy caller accepts only project and policy_version; compatibility selection belongs to the policy runner"
-                    )
-                trigger = (
-                    events.get("pull_request") if isinstance(events, dict) else None
-                )
-                supported_activities = (
-                    isinstance(trigger, dict)
-                    and set(trigger) == {"types"}
-                    and isinstance(trigger["types"], list)
-                    and all(isinstance(activity, str) for activity in trigger["types"])
-                    and set(trigger["types"]) == PR_ACTIVITIES
-                )
-                if not supported_activities:
-                    issues.append(
-                        "ci: policy PR trigger must declare exactly opened, synchronize, reopened, edited activities without other filters"
-                    )
-                if job.get("with", {}).get("policy_version") != version:
-                    issues.append(
-                        "ci: policy_version must equal the registered release tag"
-                    )
-                if job.get("with", {}).get("project") != project_name:
-                    issues.append("ci: caller must select its own registered project")
-                return issues
-    issues.append(
-        "ci: missing unconditional PR caller at the registered policy release"
-    )
     return issues
 
 

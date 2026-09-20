@@ -252,7 +252,7 @@ class ProjectFixture(unittest.TestCase):
         self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
 
     def inspect(self):
-        return policy.inspect_project(self.root, "example", self.config, self.pins)
+        return self.run_policy("check", str(self.root), "--project", "example")[1]
 
     def write_records(self):
         records = Path(self.temp.name) / "records"
@@ -453,7 +453,7 @@ class ProjectTests(ProjectFixture):
             with self.subTest(version=version):
                 self.workflow["jobs"]["policy"]["with"]["policy_version"] = version
                 self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-                self.assertEqual(self.inspect()["status"], "fail")
+                self.assertEqual(self.inspect()["status"], "error")
 
     def test_caller_cannot_select_a_different_release_or_commit(self):
         for version in ["v9.0.0", CHECKER]:
@@ -462,7 +462,7 @@ class ProjectTests(ProjectFixture):
                     f"{POLICY_REPO}/.github/workflows/check.yml@{version}"
                 )
                 self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-                self.assertEqual(self.inspect()["status"], "fail")
+                self.assertEqual(self.inspect()["status"], "error")
 
     def test_shared_rule_links_require_the_selected_release_and_policy_document(self):
         for target in [
@@ -929,6 +929,27 @@ class ProjectTests(ProjectFixture):
                     self.assertEqual(report["status"], "candidate-ready")
                     self.assertEqual(report["candidateBatch"], "initial-candidate")
 
+    def test_candidate_worktree_must_match_registered_commit(self):
+        self.pins["batches"] = [
+            {
+                "id": "candidate",
+                "status": "candidate",
+                "pins": NEW_PAIR,
+                "projects": {"example": SOURCE},
+            }
+        ]
+        with (
+            patch.object(policy, "git_revision", return_value=SOURCE),
+            patch.object(
+                policy.subprocess, "check_output", return_value=" M flake.lock\n"
+            ),
+        ):
+            code, report = self.run_policy(
+                "check", str(self.root), "--project", "example"
+            )
+        self.assertEqual(code, 2, report)
+        self.assertIn("clean registered", report["error"])
+
     def test_audit_reports_inaccessible_protection_without_claiming_it_is_absent(self):
         repository = "https://api.github.com/repos/owner/example"
         info = {
@@ -1309,8 +1330,10 @@ class ProjectTests(ProjectFixture):
         self.assertEqual(self.inspect()["status"], "pass")
 
     def test_mixed_old_new_channels_cannot_pass_rollout(self):
+        self.pins["approved"] = NEW_PAIR
         self.pins["batches"] = [
             {
+                "id": "rollout",
                 "status": "rolling",
                 "pins": NEW_PAIR,
                 "previous": PAIR,
@@ -1323,8 +1346,10 @@ class ProjectTests(ProjectFixture):
         self.assertEqual(self.inspect()["status"], "fail")
 
     def test_separate_locks_cannot_select_different_pairs(self):
+        self.pins["approved"] = NEW_PAIR
         self.pins["batches"] = [
             {
+                "id": "rollout",
                 "status": "paused",
                 "pins": NEW_PAIR,
                 "previous": PAIR,
@@ -1406,12 +1431,12 @@ class ProjectTests(ProjectFixture):
     def test_conditional_or_unpinned_callers_fail(self):
         self.workflow["jobs"]["policy"]["if"] = "false"
         self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-        self.assertEqual(self.inspect()["status"], "fail")
+        self.assertEqual(self.inspect()["status"], "error")
         self.workflow["jobs"]["policy"]["uses"] = (
             f"{POLICY_REPO}/.github/workflows/check.yml@main"
         )
         self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-        self.assertEqual(self.inspect()["status"], "fail")
+        self.assertEqual(self.inspect()["status"], "error")
 
     def test_caller_name_must_produce_the_standard_status_prefix(self):
         for name in [None, "policy", "Project validation", "Policy (${{ matrix.os }})"]:
@@ -1423,8 +1448,8 @@ class ProjectTests(ProjectFixture):
                     job["name"] = name
                 self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
                 self.assertIn(
-                    "ci: Policy caller job must be named 'Policy'",
-                    self.inspect()["issues"],
+                    "Policy caller job must be named 'Policy'",
+                    self.inspect()["error"],
                 )
 
     def test_caller_matrix_cannot_change_or_duplicate_required_status_names(self):
@@ -1432,7 +1457,7 @@ class ProjectTests(ProjectFixture):
             "matrix": {"system": ["x86_64-linux", "aarch64-linux"]}
         }
         self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-        self.assertTrue(any("strategy" in issue for issue in self.inspect()["issues"]))
+        self.assertIn("strategy", self.inspect()["error"])
 
     def test_policy_caller_cannot_depend_on_a_skipped_job(self):
         self.workflow["jobs"]["optional"] = {
@@ -1445,8 +1470,8 @@ class ProjectTests(ProjectFixture):
                 self.workflow["jobs"]["policy"]["needs"] = needs
                 self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
                 result = self.inspect()
-                self.assertEqual(result["status"], "fail")
-                self.assertTrue(any("needs" in issue for issue in result["issues"]))
+                self.assertEqual(result["status"], "error")
+                self.assertIn("needs", result["error"])
 
     def test_caller_cannot_disable_or_supply_compatibility_selection(self):
         for setting in [
@@ -1491,7 +1516,7 @@ class ProjectTests(ProjectFixture):
             with self.subTest(trigger=trigger):
                 self.workflow["on"] = trigger
                 self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-                self.assertEqual(self.inspect()["status"], "fail")
+                self.assertEqual(self.inspect()["status"], "error")
 
     def test_policy_caller_rejects_path_and_branch_filters(self):
         for restriction in ["paths", "paths-ignore", "branches", "branches-ignore"]:
@@ -1501,7 +1526,7 @@ class ProjectTests(ProjectFixture):
                     restriction: ["main"],
                 }
                 self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-                self.assertEqual(self.inspect()["status"], "fail")
+                self.assertEqual(self.inspect()["status"], "error")
 
     def test_missing_readme_section_is_reported(self):
         self.write("README.md", "# Example\n\nPurpose.\n")
@@ -1516,9 +1541,7 @@ class ProjectTests(ProjectFixture):
     def test_wrong_project_cannot_select_other_vm_requirements(self):
         self.workflow["jobs"]["policy"]["with"]["project"] = "another-project"
         self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-        self.assertTrue(
-            any("own project identity" in issue for issue in self.inspect()["issues"])
-        )
+        self.assertIn("own project identity", self.inspect()["error"])
 
 
 class CompatibilityTests(ProjectFixture):
@@ -2356,34 +2379,6 @@ class WorkflowTests(unittest.TestCase):
                     workflow["on"]["pull_request"],
                     {"types": ["opened", "synchronize", "reopened", "edited"]},
                 )
-
-    def test_candidate_worktree_must_match_registered_commit(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            config = {
-                "policyRepository": POLICY_REPO,
-                "readmeSections": [],
-                "projects": {"example": {"policyVersion": "v0.3.0"}},
-            }
-            pins = {
-                "approved": PAIR,
-                "batches": [
-                    {
-                        "id": "candidate",
-                        "status": "candidate",
-                        "pins": NEW_PAIR,
-                        "projects": {"example": SOURCE},
-                    }
-                ],
-            }
-            with (
-                patch.object(policy, "git_revision", return_value=SOURCE),
-                patch.object(
-                    policy.subprocess, "check_output", return_value=" M flake.lock\n"
-                ),
-            ):
-                with self.assertRaisesRegex(ValueError, "clean registered"):
-                    policy.inspect_project(root, "example", config, pins)
 
     def test_fingerprints_notice_added_and_changed_files(self):
         with tempfile.TemporaryDirectory() as temporary:

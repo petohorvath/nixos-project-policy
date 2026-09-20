@@ -82,7 +82,7 @@ class Services:
             if declarations_version(self.root) == RELEASE:
                 code, report = invoke(*arguments)
             else:
-                code, report = self.legacy(arguments)
+                code, report = self.released_report(arguments)
             if self.report_mutation:
                 self.report_mutation(operation, report)
             return subprocess.CompletedProcess(command, code, json.dumps(report), "")
@@ -113,7 +113,8 @@ class Services:
             command, status, output, "controlled failure" if status else ""
         )
 
-    def legacy(self, arguments):
+    def released_report(self, arguments):
+        """Supply process reports; packaged_transition executes the older checkers."""
         record_root = Path(arguments[1])
         config, pins = policy.load_policy(record_root)
         version = declarations_version(self.root)
@@ -124,48 +125,61 @@ class Services:
             else self.root.name
         )
         member = config["projects"][name]
+        report = {
+            "status": "pass",
+            "issues": [],
+            "project": name,
+            "policyVersion": version,
+            "revision": policy.git_revision(self.root),
+            "checkerVersion": version,
+            "policyRecordsRevision": policy.git_revision(record_root),
+            "policyRecordsDigest": records.digest(config, pins, legacy=True),
+        }
         if operation == "ci":
-            report = {
-                "status": "planned",
-                "project": name,
-                "policyVersion": version,
-                **policy.ci_plan(member, config["ci"]),
-            }
-        elif operation == "check":
-            report = policy.inspect_project(
-                self.root,
-                name,
-                config,
-                pins,
-                arguments[arguments.index("--batch") + 1],
-                project=member,
-            )
-        elif operation == "compatibility":
-            report = policy.check_compatibility(
-                self.root,
-                name,
-                config,
-                pins,
-                arguments[arguments.index("--channel") + 1],
-                arguments[arguments.index("--batch") + 1],
-                Path(arguments[arguments.index("--output") + 1]),
-                project={
-                    **member,
-                    "additionalRequiredChecks": member.get(
-                        "additionalRequiredChecks", []
-                    ),
-                },
+            report.update(status="planned", **policy.ci_plan(member, config["ci"]))
+        elif operation in {"check", "compatibility"}:
+            report.update(
+                status="candidate-ready",
+                candidateBatch=arguments[arguments.index("--batch") + 1],
             )
         elif operation == "vm":
-            report = {"status": "pass", "targets": member["vmTargets"]}
-        else:
-            report = {"status": "pass", "issues": []}
-        report.update(
-            checkerVersion=version,
-            policyRecordsRevision=policy.git_revision(record_root),
-            policyRecordsDigest=records.digest(config, pins, legacy=True),
-        )
-        return (1 if report["status"] == "fail" else 0), report
+            report["targets"] = member["vmTargets"]
+        if operation == "compatibility":
+            channel = arguments[arguments.index("--channel") + 1]
+            batch = next(
+                batch
+                for batch in pins["batches"]
+                if batch["id"] == report["candidateBatch"]
+            )
+            revision = batch["pins"][channel]
+            report.update(
+                status="candidate-pass",
+                system=self.host,
+                channel=channel,
+                pinStatus="candidate",
+                expectedRevision=revision,
+                resolvedRevision=revision,
+                checkerRevision=CHECKER,
+                sourceDirty=False,
+                sourceDigest=candidates.digest(policy.fingerprints(self.root)),
+                checks=["behavior"],
+                commands=[
+                    {
+                        "command": [
+                            "nix",
+                            "flake",
+                            "check",
+                            str(self.root),
+                            "--print-build-logs",
+                            "--override-input",
+                            "nixpkgs",
+                            f"github:NixOS/nixpkgs/{revision}",
+                        ],
+                        "returncode": 0,
+                    }
+                ],
+            )
+        return 0, report
 
 
 def declarations_version(root):
@@ -654,7 +668,9 @@ class CandidateTests(ProjectFixture):
         self.services.additional = "neutral"
         self.assertEqual(self.aggregate(plan, [arm, x86])[0], 1)
 
-    def test_legacy_contracts_use_the_selected_checker_and_keep_pin_bound_scopes(self):
+    def test_historical_workers_use_selected_checkers_and_require_committed_channels(
+        self,
+    ):
         for version in ["v0.1.1", "v0.2.0", "v0.3.0"]:
             with self.subTest(version=version):
                 caller = self.workflow["jobs"]["policy"]
@@ -690,12 +706,7 @@ class CandidateTests(ProjectFixture):
                 code, result, _ = self.worker(plan, "x86_64-linux")
                 if version == "v0.1.1":
                     self.assertEqual(code, 1, result)
-                    self.assertTrue(
-                        any(
-                            "allowed pin pair" in str(item)
-                            for item in result["results"]
-                        )
-                    )
+                    self.assertIn("Historical stable coverage", str(result))
                     lock = records.read_json(self.root / "flake.lock")
                     lock["nodes"]["arbitrary-node"]["locked"]["rev"] = NEW_PAIR[
                         "stable"

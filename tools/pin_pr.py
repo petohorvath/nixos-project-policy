@@ -137,6 +137,12 @@ class Review:
             or pull["base"]["repo"]["full_name"].lower() != self.repository.lower()
         ):
             raise ValueError("Proposal head or base changed; renew PR validation")
+        # REST run and artifact heads identify the proposal, not the workflow source.
+        workflow_revision = os.environ.get("GITHUB_WORKFLOW_SHA")
+        if workflow_revision != self.baseline["revision"]:
+            raise ValueError(
+                "Executing workflow revision does not match the current trusted base"
+            )
         run = api(f"{self.prefix}/actions/runs/{args.run}")
         if (
             run.get("id") != args.run
@@ -144,7 +150,7 @@ class Review:
             or run.get("event") != "pull_request_target"
             or run.get("path", "").split("@")[0] != WORKFLOW
             or run["repository"]["full_name"].lower() != self.repository.lower()
-            or run.get("head_sha") != self.baseline["revision"]
+            or run.get("head_sha") != args.head
         ):
             raise ValueError(
                 "Evidence belongs to a different trusted workflow run or attempt"
@@ -157,7 +163,7 @@ class Review:
             run=args.run,
             attempt=f"{args.run}:{args.attempt}",
             workflow=WORKFLOW,
-            workflowHead=run["head_sha"],
+            workflowHead=workflow_revision,
         )
         return self.result
 
@@ -239,7 +245,7 @@ class Review:
             type(artifact.get("id")) is not int
             or artifact.get("expired") is not False
             or artifact.get("workflow_run", {}).get("id") != self.args.run
-            or artifact["workflow_run"].get("head_sha") != self.result["workflowHead"]
+            or artifact["workflow_run"].get("head_sha") != self.args.head
         ):
             raise ValueError(
                 f"Artifact {name} is unavailable or belongs to another workflow context"

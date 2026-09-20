@@ -98,13 +98,13 @@ class GitHub:
                     "run_attempt": 2,
                     "event": "pull_request_target",
                     "path": ".github/workflows/pin-pr.yml",
-                    "head_sha": base,
+                    "head_sha": head,
                     "repository": {"full_name": repository},
                 },
             }
         )
 
-    def artifact(self, repository, base, name, directory):
+    def artifact(self, repository, head, name, directory):
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, "w") as archive:
             for path in directory.rglob("*"):
@@ -123,7 +123,7 @@ class GitHub:
                 "name": name,
                 "expired": False,
                 "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
-                "workflow_run": {"id": 91, "head_sha": base},
+                "workflow_run": {"id": 91, "head_sha": head},
             }
         )
         self.responses[f"repos/{repository}/actions/artifacts/{identity}/zip"] = data

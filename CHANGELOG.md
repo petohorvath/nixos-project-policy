@@ -17,6 +17,7 @@
 - Provide the separate `Integration / Policy agreement` gate and caller template with primary Policy source/record snapshot outputs. Keep member upgrades independent of the integration project's locked set.
 - Extend candidate coordination to the complete trusted roster, with exact locked integration evidence, required native worker accounting, strict attempt and execution bindings, and retained replay artifacts. Add a manual whole-batch workflow and distinguish complete candidate eligibility from human approval.
 - Validate routine root-only shared-pin updates in one central PR. Attach `Pin batch / Complete candidate` to the exact proposal head after trusted native worker and artifact verification; renew evidence when its authority or subjects change. Keep candidate execution separate from human-reviewed approval and separately activate the live merge gate. See the [pin routine](docs/maintenance.md#pin-candidates-and-approval).
+- Match central PR runs and artifacts to the proposal commit. Verify the trusted workflow revision separately through `GITHUB_WORKFLOW_SHA`.
 
 ### Migration
 

@@ -109,6 +109,12 @@ class Services:
             output = json.dumps({"locks": graph})
         elif command[1] == "eval":
             output = self.host if "--impure" in command else '["behavior"]'
+            if (
+                self.failure == "empty-host-checks"
+                and "--apply" in command
+                and "--override-input" not in command
+            ):
+                output = "[]"
         elif command[1:3] == ["flake", "check"]:
             if self.mutation:
                 self.mutation(command)

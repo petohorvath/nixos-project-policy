@@ -12,6 +12,120 @@ from tools import policy, records
 
 
 class NixCompatibilityTests(unittest.TestCase):
+    def test_committed_lock_requires_nonempty_host_checks(self):
+        system = self.run_command(
+            ["nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem"]
+        ).strip()
+        with tempfile.TemporaryDirectory(prefix="policy-checks-fixture-") as temporary:
+            root = Path(temporary)
+            flake = root / "flake.nix"
+            for output, passes in [
+                ("", False),
+                (f'checks."{system}" = {{}};', False),
+                ('checks."another-system" = { behavior = null; };', False),
+                (f'checks."{system}" = {{ behavior = null; }};', True),
+            ]:
+                with self.subTest(output=output):
+                    flake.write_text("{ outputs = { self }: { " + output + " }; }")
+                    self.run_command(["nix", "flake", "lock", str(root)])
+                    before = policy.fingerprints(root)
+                    if output == "":
+                        # A bare flake check accepts a flake without tests.
+                        self.run_command(
+                            [
+                                "nix",
+                                "flake",
+                                "check",
+                                str(root),
+                                "--no-update-lock-file",
+                            ]
+                        )
+                    process = subprocess.run(
+                        [
+                            sys.executable,
+                            str(policy.SOURCE_ROOT / "tools/policy.py"),
+                            "host-checks",
+                            str(root),
+                        ],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    report = json.loads(process.stdout)
+                    self.assertEqual(process.returncode, 0 if passes else 1, report)
+                    self.assertEqual(report["system"], system)
+                    self.assertEqual(policy.fingerprints(root), before)
+                    if passes:
+                        self.assertEqual(report["checks"], ["behavior"])
+                        # The guard only requires names; flake check still validates values.
+                        build = subprocess.run(
+                            [
+                                "nix",
+                                "flake",
+                                "check",
+                                str(root),
+                                "--no-update-lock-file",
+                            ],
+                            text=True,
+                            capture_output=True,
+                            check=False,
+                        )
+                        self.assertNotEqual(build.returncode, 0)
+
+    def test_shell_probe_requires_default_dev_shell_despite_package_fallback(self):
+        graph = policy.LockGraph(records.read_json(policy.SOURCE_ROOT / "flake.lock"))
+        revision = graph.nodes[graph.resolve(["nixpkgs"])]["locked"]["rev"]
+        with tempfile.TemporaryDirectory(prefix="policy-shell-fixture-") as temporary:
+            root = Path(temporary)
+            flake = root / "flake.nix"
+            source = """{
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/REVISION";
+  outputs = { nixpkgs, ... }: let
+    systems = [ "x86_64-linux" "aarch64-linux" ];
+    forSystems = nixpkgs.lib.genAttrs systems;
+    shell = system: nixpkgs.legacyPackages.${system}.mkShellNoCC {};
+  in {
+    packages = forSystems (system: { default = shell system; });
+    formatter = forSystems (system: nixpkgs.legacyPackages.${system}.hello);
+    SHELL_OUTPUT
+  };
+}
+""".replace("REVISION", revision)
+            flake.write_text(source.replace("SHELL_OUTPUT", ""))
+            self.run_command(["nix", "flake", "lock", str(root)])
+            lock_before = (root / "flake.lock").read_bytes()
+            self.run_command(
+                [
+                    "nix",
+                    "develop",
+                    "--no-update-lock-file",
+                    "--ignore-environment",
+                    f"path:{root}",
+                    "--command",
+                    "bash",
+                    "--help",
+                ]
+            )
+            for name in [None, "other", "default"]:
+                with self.subTest(shell=name):
+                    output = (
+                        "devShells = forSystems (system: { "
+                        + name
+                        + " = shell system; });"
+                        if name
+                        else ""
+                    )
+                    flake.write_text(source.replace("SHELL_OUTPUT", output))
+                    issues = policy.check_shell(root, ["bash"])
+                    if name == "default":
+                        self.assertEqual(issues, [])
+                    else:
+                        self.assertTrue(
+                            issues,
+                            "Package fallback must not satisfy the shell requirement",
+                        )
+                    self.assertEqual((root / "flake.lock").read_bytes(), lock_before)
+
     def run_command(self, command, **kwargs):
         result = subprocess.run(
             command, check=False, text=True, capture_output=True, **kwargs
@@ -224,6 +338,8 @@ class NixCompatibilityTests(unittest.TestCase):
             )
             self.assertNotEqual(default.returncode, 0)
             self.assertIn("lock file", default.stderr)
+            self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
+            self.assertEqual(policy.check_host_checks(project)["status"], "fail")
             self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
 
 

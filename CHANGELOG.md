@@ -2,6 +2,8 @@
 
 ## 0.4.0 (prepared)
 
+- Require nonempty host checks under the committed lock before project tests in member CI and candidate execution, including replay validation.
+- Require an explicit host `devShells.<system>.default` in shell probes; a default package or non-default shell cannot satisfy the development-shell requirement.
 - Read policy selection and member settings from one literal reusable-workflow caller, independently of central legacy selections or adoption state.
 - Require `required_architectures` as a JSON list encoded as a string; default `vm_targets` and `additional_required_checks` to empty lists. Reject ambiguous callers, dynamic inputs, malformed settings, and mismatched release references.
 - Use the same validated declarations for local checking, hosted planning, compatibility execution, and VM targets. Preserve separate compliance, formatting/lint, committed-lock, both compatibility channels, and applicable x86_64 VM gates.

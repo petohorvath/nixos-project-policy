@@ -14,16 +14,16 @@ Each root flake exposes its systems and applicable outputs. Local helpers supply
 
 ## Pins and enforcement
 
-| Source                  | Owns                                                                         |
-| ----------------------- | ---------------------------------------------------------------------------- |
-| Policy release          | Rules, checker code, workflows, and required checks                          |
-| Member caller           | Policy selection, required architectures, VM targets, and additional checks  |
-| Member lockfiles        | Selected dependencies                                                        |
-| Current central records | Shared pins, pin update batches, enrollment, retirements, and legacy records |
+| Source                  | Owns                                                                                |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| Policy release          | Rules, checker code, workflows, and required checks                                 |
+| Member caller           | Policy selection, required architectures, VM targets, and additional checks         |
+| Member lockfiles        | Selected dependencies                                                               |
+| Current central records | Shared pins, pin update batches, enrollment, retirements, and central configuration |
 
 Each CI run captures one member commit, checker commit, and record commit. Compatibility checks test shared pins through root input overrides. Separate checks test the committed lock. Candidate validation supplies evidence; human-reviewed merge approves pins.
 
-Checks before enrollment use the same requirements. Enrollment and policy compliance remain separate. Legacy records preserve the contracts of supported older checkers.
+Checks before enrollment use the same requirements. Enrollment and policy compliance remain separate. Supported selections start at v0.4.0.
 
 See [checker coverage](checker.md#implemented-coverage) for automatic checks and [review responsibilities](checker.md#review-responsibilities) for their limits. See [maintenance](maintenance.md) for procedures.
 

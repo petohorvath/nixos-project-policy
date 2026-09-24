@@ -27,11 +27,6 @@ REQUIRED_CHECKS = [
     "Policy / Project tests (x86_64-linux)",
     "Policy / Project tests (aarch64-linux)",
 ]
-LEGACY_REQUIRED_CHECKS = [
-    *REQUIRED_CHECKS,
-    "Policy / Formatting and lint (x86_64-linux)",
-    "Policy / Formatting and lint (aarch64-linux)",
-]
 VM_CHECK = "Policy / VM tests (x86_64-linux)"
 
 

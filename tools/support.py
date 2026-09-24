@@ -10,8 +10,6 @@ else:
     import declarations
 
 
-# Every published legacy patch matters because immutable checkers read global records.
-KNOWN_LEGACY_RELEASES = ("v0.1.0", "v0.1.1", "v0.2.0", "v0.3.0")
 TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
 
 
@@ -77,30 +75,3 @@ def assess(version, decisions, *, at=None):
 
 def retirement_issue(assessment):
     return f"Policy {assessment['policyVersion']} retired at {assessment['retirement']['retiresAt']}; its migration period has ended"
-
-
-def legacy_removals(previous, previous_pins, current, pins):
-    changes = []
-    for field in previous.keys() - current.keys():
-        changes.append(f"legacy record field {field}")
-    for name, project in previous["projects"].items():
-        if name not in current["projects"]:
-            changes.append(f"legacy project {name}")
-            continue
-        for field in project.keys() - current["projects"][name].keys():
-            changes.append(f"legacy project {name} field {field}")
-    batches = {batch["id"]: batch for batch in pins["batches"]}
-    for batch in previous_pins["batches"]:
-        if batch["id"] not in batches:
-            changes.append(f"pin batch {batch['id']}")
-        else:
-            if (
-                batch["status"] in {"complete", "withdrawn"}
-                and batch != batches[batch["id"]]
-            ):
-                changes.append(f"historical pin batch {batch['id']}")
-            for name in (
-                batch["projects"].keys() - batches[batch["id"]]["projects"].keys()
-            ):
-                changes.append(f"pin batch {batch['id']} project {name}")
-    return sorted(changes)

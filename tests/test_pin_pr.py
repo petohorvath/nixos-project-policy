@@ -17,6 +17,7 @@ from tests.fixtures.candidates import CandidateFixture, invalid_batch_plans
 from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.cli import invoke
 from tests.fixtures.data import (
+    RELEASE,
     BEFORE,
     EFFECTIVE,
     NEW_PAIR,
@@ -236,13 +237,13 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
     ):
         for file, keys, value in (
             ("members.json", ("members",), {}),
-            ("projects.json", ("policyRepository",), "attacker/policy"),
+            ("config.json", ("policyRepository",), "attacker/policy"),
             (
-                "projects.json",
-                ("projects", "example", "requiredArchitectures"),
-                ["aarch64-linux", "x86_64-linux"],
+                "config.json",
+                ("stableBranch",),
+                "nixos-unstable",
             ),
-            ("support.json", ("retirements",), {"v0.3.0": retirement()}),
+            ("support.json", ("retirements",), {RELEASE: retirement()}),
             ("pins.json", ("batches", -1, "id"), "../next"),
             ("pins.json", ("batches", -1, "status"), "withdrawn"),
         ):

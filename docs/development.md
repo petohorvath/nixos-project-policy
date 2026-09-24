@@ -36,12 +36,12 @@ These tests run outside Nix build sandboxes because they invoke Nix themselves. 
 
 ```bash
 nix develop --command python -m unittest tests.nix_compatibility -v
-nix develop --command python -m unittest tests.packaged_transition -v
+nix develop --command python -m unittest tests.packaged_policy -v
 ```
 
 `tests.nix_compatibility` runs real metadata queries and root checks with both exact nixpkgs overrides. It checks lock preservation, rejection of required default-lock updates, nonempty host checks under the committed lock, and the explicit default development-shell requirement.
 
-Fetch the repository's release tags before running `tests.packaged_transition`. This test builds the checker from a controlled clean repository. It exercises member upgrades, checks before enrollment, audits across releases, integration agreement, and the central PR workflow shell. It also checks retained records with the actual older release sources.
+`tests.packaged_policy` builds the checker from a controlled clean repository. It exercises member checks, checks before enrollment, audits, integration agreement, and the central PR workflow shell using the current release contract.
 
 Test adapters supply unpublished release metadata, GitHub responses, and Nix process results. Git operations, record processing, checker code, and packaged commands execute normally. Use the real-Nix test to verify native override behavior. Neither host test verifies live GitHub merge protection.
 

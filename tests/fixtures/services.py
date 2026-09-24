@@ -8,9 +8,9 @@ import subprocess
 from unittest.mock import patch
 
 from tests.fixtures.cli import invoke
-from tests.fixtures.data import CHECKER, POLICY_REPO, RELEASE
+from tests.fixtures.data import CHECKER
 from tests.fixtures.process import REAL_OUTPUT, REAL_RUN
-from tools import candidates, policy, records, releases
+from tools import policy, records, releases
 
 
 def published(path):
@@ -57,14 +57,6 @@ class Services:
             requirements = records.read_json(
                 policy.SOURCE_ROOT / "policy/requirements.json"
             )
-            if declarations_version(self.root) != RELEASE:
-                requirements["ci"]["architectureChecks"] = [
-                    "Compliance",
-                    "Formatting and lint",
-                    "Project tests",
-                ]
-            if declarations_version(self.root) == "v0.1.1":
-                requirements.pop("ci")
             return {
                 "encoding": "base64",
                 "content": base64.b64encode(json.dumps(requirements).encode()).decode(),
@@ -96,10 +88,7 @@ class Services:
         if command[1] == "run":
             arguments = command[command.index("--") + 1 :]
             operation = arguments[2]
-            if declarations_version(self.root) == RELEASE:
-                code, report = invoke(*arguments)
-            else:
-                code, report = self.released_report(arguments)
+            code, report = invoke(*arguments)
             if self.report_mutation:
                 self.report_mutation(operation, report)
             return subprocess.CompletedProcess(command, code, json.dumps(report), "")
@@ -134,86 +123,6 @@ class Services:
             command, status, output, "controlled failure" if status else ""
         )
 
-    def released_report(self, arguments):
-        """Supply process reports; packaged_transition executes the older checkers."""
-        record_root = Path(arguments[1])
-        config, pins = records.load(record_root)
-        version = declarations_version(self.root)
-        operation = arguments[2]
-        name = (
-            arguments[arguments.index("--project") + 1]
-            if "--project" in arguments
-            else self.root.name
-        )
-        member = config["projects"][name]
-        report = {
-            "status": "pass",
-            "issues": [],
-            "project": name,
-            "policyVersion": version,
-            "revision": policy.git_revision(self.root),
-            "checkerVersion": version,
-            "policyRecordsRevision": policy.git_revision(record_root),
-            "policyRecordsDigest": records.digest(config, pins, legacy=True),
-        }
-        if operation == "ci":
-            legacy_ci = {
-                **config["ci"],
-                "architectureChecks": [
-                    "Compliance",
-                    "Formatting and lint",
-                    "Project tests",
-                ],
-            }
-            report.update(status="planned", **policy.ci_plan(member, legacy_ci))
-        elif operation in {"check", "compatibility"}:
-            report.update(
-                status="candidate-ready",
-                candidateBatch=arguments[arguments.index("--batch") + 1],
-            )
-        elif operation == "vm":
-            report["targets"] = member["vmTargets"]
-        if operation == "compatibility":
-            channel = arguments[arguments.index("--channel") + 1]
-            batch = next(
-                batch
-                for batch in pins["batches"]
-                if batch["id"] == report["candidateBatch"]
-            )
-            revision = batch["pins"][channel]
-            report.update(
-                status="candidate-pass",
-                system=self.host,
-                channel=channel,
-                pinStatus="candidate",
-                expectedRevision=revision,
-                resolvedRevision=revision,
-                checkerRevision=CHECKER,
-                sourceDirty=False,
-                sourceDigest=candidates.digest(policy.fingerprints(self.root)),
-                checks=["behavior"],
-                commands=[
-                    {
-                        "command": [
-                            "nix",
-                            "flake",
-                            "check",
-                            str(self.root),
-                            "--print-build-logs",
-                            "--override-input",
-                            "nixpkgs",
-                            f"github:NixOS/nixpkgs/{revision}",
-                        ],
-                        "returncode": 0,
-                    }
-                ],
-            )
-        return 0, report
-
-
-def declarations_version(root):
-    return policy.declarations.discover(root, POLICY_REPO)[3]
-
 
 class BatchServices(Services):
     def __init__(self, roots):
@@ -233,10 +142,7 @@ class BatchServices(Services):
         if command[0] == "nix":
             if command[1] == "run":
                 arguments = command[command.index("--") + 1 :]
-                if not arguments[3].startswith("--"):
-                    self.root = Path(arguments[3])
-                elif "--project" in arguments:
-                    self.root = self.roots[arguments[arguments.index("--project") + 1]]
+                self.root = Path(arguments[3])
             elif command[1:3] in (["flake", "metadata"], ["flake", "check"]):
                 self.root = Path(command[3])
         failure = self.failure

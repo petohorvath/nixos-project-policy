@@ -48,7 +48,7 @@ _Avoid_: Policy repository
 A particular revision of a member project used by another project. Its policy selection is the one recorded at that revision.
 
 **Shared pins**:
-The approved pair of exact nixpkgs revisions, one stable and one unstable, required for member compatibility coverage. A member's selected root dependency can differ; earlier policy releases also require the shared pins in member locks.
+The approved pair of exact nixpkgs revisions, one stable and one unstable, required for member compatibility coverage. A member's selected root dependency can differ..
 _Avoid_: Same channels, latest versions
 
 **Selected dependency**:

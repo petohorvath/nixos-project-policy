@@ -123,9 +123,6 @@ def member_repositories(config):
     members = {
         repository.lower(): name for name, repository in config["_members"].items()
     }
-    canonical = "petohorvath/nixos-nftzones"
-    if canonical in members:
-        members["petohorvath/nix-nftzones"] = members[canonical]
     return members
 
 

@@ -236,24 +236,12 @@ class NixCompatibilityTests(unittest.TestCase):
             )
             record_directory = workspace / "records/policy"
             record_directory.mkdir(parents=True)
-            (record_directory / "projects.json").write_text(
+            (record_directory / "config.json").write_text(
                 json.dumps(
                     {
-                        "schemaVersion": 2,
+                        "schemaVersion": 1,
                         "policyRepository": "petohorvath/nixos-project-policy",
-                        "projects": {
-                            "fixture": {
-                                "repository": "example/fixture",
-                                "adopted": False,
-                                "policyVersion": "v"
-                                + (policy.SOURCE_ROOT / "VERSION").read_text().strip(),
-                                "vmTargets": [],
-                                "requiredArchitectures": [
-                                    "x86_64-linux",
-                                    "aarch64-linux",
-                                ],
-                            }
-                        },
+                        "stableBranch": "nixos-26.05",
                     }
                 )
             )

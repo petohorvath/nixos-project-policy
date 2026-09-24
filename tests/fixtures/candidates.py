@@ -6,7 +6,6 @@ from pathlib import Path
 import shutil
 
 from tests.fixtures.data import (
-    LEGACY_REQUIRED_CHECKS,
     NEW_PAIR,
     PAIR,
     POLICY_REPO,
@@ -131,15 +130,11 @@ class BatchFixture(CandidateFixture):
         self.roots = {"example": self.root}
         self.locked = {}
         self.resources.enter_context(isolated_git(self.workspace.parent))
-        for name in ("alpha", "legacy"):
+        for name in ("alpha", "beta"):
             root = self.workspace / name
             shutil.copytree(self.root, root)
             self.roots[name] = root
             self.members[name] = f"owner/{name}"
-            self.config["projects"][name] = {
-                **copy.deepcopy(self.config["projects"]["example"]),
-                "repository": f"owner/{name}",
-            }
             self.declaration(name, RELEASE)
             self.commit(root)
             self.locked[name] = policy.git_revision(root)
@@ -151,12 +146,8 @@ class BatchFixture(CandidateFixture):
                 f"url.{root.as_uri()}.insteadOf",
                 f"https://github.com/owner/{name}.git",
             )
-        self.declaration("legacy", "v0.3.0")
-        self.config["projects"]["legacy"]["policyVersion"] = "v0.3.0"
-        self.config["projects"]["legacy"]["requiredChecks"] = list(
-            LEGACY_REQUIRED_CHECKS
-        )
-        self.commit(self.roots["legacy"])
+        (self.roots["beta"] / "README.md").write_text("# Updated member\n")
+        self.commit(self.roots["beta"])
         self.declaration(
             "alpha",
             RELEASE,
@@ -197,13 +188,12 @@ class BatchFixture(CandidateFixture):
         job = workflow["jobs"]["policy"]
         job["uses"] = f"{POLICY_REPO}/.github/workflows/check.yml@{version}"
         job["with"] = {"project": name, "policy_version": version}
-        if version == RELEASE:
-            job["with"].update(
-                {
-                    "required_architectures": '["x86_64-linux", "aarch64-linux"]',
-                    **settings,
-                }
-            )
+        job["with"].update(
+            {
+                "required_architectures": '["x86_64-linux", "aarch64-linux"]',
+                **settings,
+            }
+        )
         candidates.write_json(root / ".github/workflows/policy.yml", workflow)
         for name in ("AGENTS.md", "CONTRIBUTING.md"):
             (root / name).write_text(

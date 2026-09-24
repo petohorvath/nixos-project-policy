@@ -15,7 +15,6 @@ from tests.fixtures.candidates import CandidateFixture
 from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.cli import invoke
 from tests.fixtures.data import (
-    LEGACY_REQUIRED_CHECKS,
     CHECKER,
     NEW_PAIR,
     PAIR,
@@ -27,6 +26,17 @@ from tools import batches, candidates, policy, records, releases, support
 
 
 class CandidateTests(CandidateFixture, ProjectTestCase):
+    def test_candidate_rejects_selection_below_release_floor(self):
+        self.workflow["jobs"]["policy"]["uses"] = (
+            f"{POLICY_REPO}/.github/workflows/check.yml@v0.3.99"
+        )
+        self.declare(policy_version="v0.3.99")
+        self.commit(self.root)
+        self.propose()
+        code, report, _ = self.plan()
+        self.assertNotEqual(code, 0, report)
+        self.assertIn("v0.4.0 or later", str(report))
+
     def setUp(self):
         super().setUp()
         self.services = self.enterContext(Services(self.root).installed())
@@ -226,20 +236,18 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
         for file, change in [
             ("members.json", lambda data: data.update(members={})),
             (
-                "projects.json",
+                "config.json",
                 lambda data: data.update(policyRepository="attacker/policy"),
             ),
             (
-                "projects.json",
-                lambda data: data["projects"]["example"].update(
-                    requiredArchitectures=["x86_64-linux"]
-                ),
+                "config.json",
+                lambda data: data.update(stableBranch="nixos-unstable"),
             ),
             (
                 "support.json",
                 lambda data: data.update(
                     retirements={
-                        "v0.3.0": {
+                        RELEASE: {
                             "decision": "https://example.invalid/decision",
                             "reason": "changed",
                             "migrationStartsAt": "2030-01-01T00:00:00Z",
@@ -522,69 +530,6 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
         self.assertEqual(self.aggregate(plan, [arm, x86])[0], 0)
         self.services.additional = "neutral"
         self.assertEqual(self.aggregate(plan, [arm, x86])[0], 1)
-
-    def test_historical_workers_use_selected_checkers_and_require_committed_channels(
-        self,
-    ):
-        for version in ["v0.1.1", "v0.2.0", "v0.3.0"]:
-            with self.subTest(version=version):
-                caller = self.workflow["jobs"]["policy"]
-                caller["uses"] = f"{POLICY_REPO}/.github/workflows/check.yml@{version}"
-                caller["with"] = {"project": "example", "policy_version": version}
-                self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-                for file in ["CONTRIBUTING.md", "AGENTS.md"]:
-                    self.write(
-                        file,
-                        f"[Rules](https://github.com/{POLICY_REPO}/blob/{version}/POLICY.md)\n",
-                    )
-                member = self.config["projects"]["example"]
-                member["policyVersion"] = version
-                if version == "v0.1.1":
-                    member["requiredChecks"] = [
-                        "Policy / Policy records",
-                        "Policy / Policy (x86_64-linux)",
-                        "Policy / Policy (aarch64-linux)",
-                    ]
-                else:
-                    member["requiredChecks"] = list(LEGACY_REQUIRED_CHECKS)
-                self.write_records()
-                candidates.write_json(
-                    self.proposal / "policy/projects.json",
-                    records.read_json(self.baseline / "policy/projects.json"),
-                )
-                self.commit(self.root)
-                self.propose()
-                code, report, plan = self.plan()
-                self.assertEqual(code, 0, report)
-                code, result, _ = self.worker(plan, "x86_64-linux")
-                if version == "v0.1.1":
-                    self.assertEqual(code, 1, result)
-                    self.assertIn("Historical stable coverage", str(result))
-                    lock = records.read_json(self.root / "flake.lock")
-                    lock["nodes"]["arbitrary-node"]["locked"]["rev"] = NEW_PAIR[
-                        "stable"
-                    ]
-                    candidates.write_json(self.root / "flake.lock", lock)
-                    self.commit(self.root)
-                    self.propose()
-                    _, _, plan = self.plan()
-                    code, missing, _ = self.worker(plan, "x86_64-linux")
-                    self.assertEqual(code, 1, missing)
-                    self.assertIn("Historical unstable coverage", str(missing))
-                    lock["nodes"]["rolling"] = copy.deepcopy(
-                        lock["nodes"]["arbitrary-node"]
-                    )
-                    lock["nodes"]["rolling"]["locked"]["rev"] = NEW_PAIR["unstable"]
-                    lock["nodes"]["rolling"]["original"]["ref"] = "nixos-unstable"
-                    lock["nodes"]["entry"]["inputs"]["nixpkgs-unstable"] = "rolling"
-                    candidates.write_json(self.root / "flake.lock", lock)
-                    self.commit(self.root)
-                    self.propose()
-                    _, _, plan = self.plan()
-                    code, result, _ = self.worker(plan, "x86_64-linux")
-                    self.assertEqual(code, 0, result)
-                else:
-                    self.assertEqual(code, 0, result)
 
     def test_manual_workflow_invokes_the_same_plan_and_worker_interface(self):
         workflow = yaml.load(

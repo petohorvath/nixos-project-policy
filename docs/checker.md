@@ -1,6 +1,6 @@
 # Checker reference
 
-This reference describes the prepared v0.4.0 contract. Publication and member migrations require separate decisions.
+The checker supports v0.4.0 and later. Member callers and consumed member revisions must select a release in that range.
 
 Run the checker from its selected policy release or packaged `nixos-project-policy` executable. Use `--version` to identify it.
 
@@ -17,7 +17,6 @@ nix run .# -- --policy-root . COMMAND
 | Command                                                         | Behavior                                                                                                         |
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `validate`                                                      | Check record structure and report whether pins are approved.                                                     |
-| `validate --previous-policy-root OLD --workspace WORKSPACE`     | Review legacy removals against prior records, release retirement, and exact migrated checkouts.                  |
 | `ci PATH --project NAME`                                        | Report CI matrices and required status names. Do not execute checks.                                             |
 | `check PATH --project NAME`                                     | Inspect a member checkout against its selected policy and approved pins.                                         |
 | `check PATH --project NAME --shell`                             | Also smoke-test the member shell and evaluate its root formatter.                                                |
@@ -33,11 +32,9 @@ nix run .# -- --policy-root . COMMAND
 | `pin-batch plan\|execute\|aggregate`                            | [Plan, execute, and replay](#unmerged-candidate-coordination) a candidate for one member or the enrolled roster. |
 | `pin-pr capture\|collect\|finish\|invalidate`                   | [Check central PR evidence](#central-pin-prs) and report eligibility on the proposal head.                       |
 
-`check --readiness` remains accepted for older callers. It does not weaken v0.4.0 checks before enrollment.
-
 For a shell-only probe, run `nix run .# -- shell PATH`. This first evaluates `devShells.<host-system>.default.drvPath`, enters the development shell with the inherited environment cleared, and executes `bash -c ':'`. It also evaluates the root formatter without asserting compliance. A default package or non-default shell cannot satisfy the development-shell requirement. Policy CI uses it as a host smoke test. The probe checks startup and command execution, not a fixed tool list or project-specific development tasks.
 
-After publication, use a selected release with current records:
+Use a selected release with current records:
 
 ```bash
 nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
@@ -47,7 +44,7 @@ nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
 
 Update the trusted records checkout from `main` before a current check. Use captured snapshots for replay. Local commands neither fetch records nor prove that a checkout is current.
 
-`check`, `ci`, `compatibility`, and `vm` require one member caller selecting the executing checker release. The caller's `policy_version` must match its immutable workflow reference. Enrollment and stale legacy selections do not change this requirement.
+`check`, `ci`, `compatibility`, and `vm` require one member caller selecting the executing checker release. The caller's `policy_version` must match its immutable workflow reference. Enrollment does not change this requirement.
 
 ### Results
 
@@ -59,7 +56,7 @@ Record and member commands print JSON. Reports include `checkerVersion`, `policy
 | 1    | Enforced checks failed.                                                                                     |
 | 2    | The request, records, or inspection could not be processed.                                                 |
 
-A normal `check` can return `pass` before enrollment. Its separate `enrollment` field is `enrolled` or `not-enrolled`. Static checks report `compatibility: "not-run"`. Candidate static checks return `candidate-ready`; successful candidate execution returns `candidate-pass`. No result changes enrollment or approves pins. Older released checkers retain their original readiness and adoption contracts.
+A normal `check` can return `pass` before enrollment. Its separate `enrollment` field is `enrolled` or `not-enrolled`. Static checks report `compatibility: "not-run"`. Candidate static checks return `candidate-ready`; successful candidate execution returns `candidate-pass`. No result changes enrollment or approves pins.
 
 `ci` returns `planned`, `matrix`, `compatibilityMatrix`, `vmTargets`, and the complete `requiredChecks`. Omit `PATH` only when the current directory is the member. Hosted `--inputs-json JSON` must normalize to the checked-out caller's inputs; it cannot replace member settings.
 
@@ -75,18 +72,18 @@ Compatibility checks deliberately use an overridden graph. `--override-input` im
 
 `pin-batch plan`, `execute`, and `aggregate` check enrolled members against an unmerged proposal. Select one member with `--project` or the full roster with `--all`.
 
-| Input                                 | Authority                                                                      |
-| ------------------------------------- | ------------------------------------------------------------------------------ |
-| `--policy-root BASELINE`              | Trusted enrollment, identities, legacy settings, support, and current approval |
-| Exact clean member commit             | Member declarations                                                            |
-| `--proposal-root PROPOSAL --batch ID` | Candidate pair and registered member commits                                   |
-| Selected published immutable release  | Member requirements and checker code                                           |
+| Input                                 | Authority                                                     |
+| ------------------------------------- | ------------------------------------------------------------- |
+| `--policy-root BASELINE`              | Trusted enrollment, identities, support, and current approval |
+| Exact clean member commit             | Member declarations                                           |
+| `--proposal-root PROPOSAL --batch ID` | Candidate pair and registered member commits                  |
+| Selected published immutable release  | Member requirements and checker code                          |
 
 The coordinator verifies each registered commit in its trusted repository. It resolves the selected release and executes its checker at the exact release commit.
 
 The proposal can include future approval and a routine batch's future `complete` state. Execution copies baseline records to a new evidence directory. It retains current approval and changes the selected batch to `candidate` in that copy. Approved and historical baseline batches cannot be reused.
 
-Proposals cannot change enrollment, support, legacy settings, policy identity, or unrelated rollout records. Proposed checker code and requirements never execute. All four proposed record files must be regular committed Git blobs that match working-tree bytes. The loader rejects symlinks and parses only verified blobs. Reports distinguish baseline, proposal, and execution-record identities.
+Proposals cannot change enrollment, support, policy identity, or unrelated rollout records. Proposed checker code and requirements never execute. All four proposed record files must be regular committed Git blobs that match working-tree bytes. The loader rejects symlinks and parses only verified blobs. Reports distinguish baseline, proposal, and execution-record identities.
 
 Run trusted coordinator code against the registered member commit. Use new output directories outside all input checkouts:
 
@@ -103,9 +100,9 @@ nix run --no-update-lock-file ./coordinator -- \
 
 Repeat execution on every native system in the plan. Keep the same member, checker, baseline, proposal, and plan. ARM jobs require an ARM host. VM targets require an x86_64 KVM host, even with ARM-only ordinary coverage.
 
-Each worker independently runs compliance/shell, committed-lock checks, and both candidate compatibility revisions. Workers selecting older releases also run those releases’ required lint gates. A failed category does not suppress other runnable categories. Additional gates use GitHub check runs or commit statuses at the exact member commit. Gate names neither create jobs nor become commands. Every required gate must complete successfully.
+Each worker independently runs compliance/shell, committed-lock checks, and both candidate compatibility revisions. A failed category does not suppress other runnable categories. Additional gates use GitHub check runs or commit statuses at the exact member commit. Gate names neither create jobs nor become commands. Every required gate must complete successfully.
 
-For v0.2.0 and later, compatibility verifies root overrides, nonempty native checks, and lock preservation. The v0.1.x adapter retains whole-project committed-pin requirements. Both candidate revisions must occur in its effective committed root graph, with nonempty native root checks. Missing coverage and pin-bound locks require actual member changes.
+Compatibility verifies root overrides, nonempty native checks, and lock preservation.
 
 Collect complete native evidence directories, then aggregate against the original plan:
 
@@ -150,7 +147,7 @@ nix run --no-update-lock-file ./coordinator -- \
   --output ./batch-results/MEMBER--x86_64-linux
 ```
 
-Workers recheck their inputs and run the same checks as single-member execution. Reports bind `batchPlanDigest`, child `planDigest`, attempt, worker, system, source, checker, settings, and execution records. Older members retain their committed-pin requirements.
+Workers recheck their inputs and run the same checks as single-member execution. Reports bind `batchPlanDigest`, child `planDigest`, attempt, worker, system, source, checker, settings, and execution records.
 
 `Integration / Policy agreement` invokes the integration project's selected immutable checker. Replay checks its report, actual locked members, and `dependencySetDigest`. Committed-lock and candidate root checks still run. Separate member-head results and static agreement cannot replace integration tests.
 
@@ -290,25 +287,17 @@ The policy flake exposes its executable for every system in its pinned nixpkgs p
 
 ### Record ownership
 
-| File                       | Schema | Contents                                                                                                  |
-| -------------------------- | ------ | --------------------------------------------------------------------------------------------------------- |
-| `policy/members.json`      | 1      | `members` maps enrolled names to GitHub `owner/repository` identities                                     |
-| `policy/projects.json`     | 2      | Legacy identities, stable update branch, adoption, selections, architectures, VM targets, and check lists |
-| `policy/pins.json`         | 1      | `approved` is null or an exact stable/unstable pair; `batches` records updates                            |
-| `policy/support.json`      | 1      | Explicit release [retirements](#release-support-and-retirement)                                           |
-| `policy/requirements.json` | 1      | Default runner systems and release-owned CI requirements                                                  |
+| File                       | Schema | Contents                                                                       |
+| -------------------------- | ------ | ------------------------------------------------------------------------------ |
+| `policy/members.json`      | 1      | `members` maps enrolled names to GitHub `owner/repository` identities          |
+| `policy/config.json`       | 1      | Policy repository identity and stable update branch                            |
+| `policy/pins.json`         | 1      | `approved` is null or an exact stable/unstable pair; `batches` records updates |
+| `policy/support.json`      | 1      | Explicit release [retirements](#release-support-and-retirement)                |
+| `policy/requirements.json` | 1      | Default runner systems and release-owned CI requirements                       |
 
-The member roster contains no copied selections, settings, or adoption flags. Names and repository identities must be unique; repository comparison ignores case. Identities must agree with existing legacy records. Missing, malformed, or duplicate-key records fail inspection. An empty roster is valid and distinct from missing data.
+The member roster contains no copied selections, settings, or adoption flags. Names and repository identities must be unique; repository comparison ignores case. Missing, malformed, or duplicate-key records fail inspection. An empty roster is valid and distinct from missing data.
 
 Reviewed central changes control enrollment and removal. Ordinary upgrades and checks before enrollment leave the roster unchanged.
-
-### Legacy records
-
-Supported older checkers read the whole snapshot, so legacy records still undergo global validation. A migrated member's caller supplies its selection and settings; stale legacy copies do not control it.
-
-Retain legacy entries after migration or roster removal, including identities used by historical batches. Before a new member participates in batches, add a compatibility entry with `repository`, `adopted: false`, `policyVersion: null`, and `vmTargets: []`. This entry does not copy current settings or change on upgrades.
-
-Adopted legacy entries must retain complete `requiredChecks`. Retained v0.3.0 lists must match that legacy selection's generated requirements, including `additionalRequiredChecks`. They do not track a migrated member's caller. Remove data only through [retirement and cleanup review](#release-support-and-retirement).
 
 ### Release requirements
 
@@ -320,17 +309,19 @@ The `ci` fields define the caller name, common `requiredChecks`, per-architectur
 
 The root bootstrap lock does not approve shared pins. Approval comes from current `pins.json`. Pin updates use new records with the same selected checker release.
 
+Completed and withdrawn batches retain member names and tested commits independently of current enrollment. Candidate coordination requires current enrolled identities.
+
 Each batch contains an ID, state, `pins`, optional `previous` pair, and `projects` mapping member names to tested commits. Pair values contain only exact stable and unstable commits. States are `candidate`, `approved`, `rolling`, `paused`, `complete`, and `withdrawn`.
 
 The checker reports an automatically selected candidate as `candidateBatch`; `--batch` requests one explicitly. Callers cannot supply arbitrary approved pins. Active rollouts must remain tied to central approval.
 
-During `approved`, `rolling`, or `paused` batches, affected lock scopes can use the old or new pair. All shared-pin observations in one project must select one allowed pair. Policy v0.2.0 and later exclude the selected root lock node from this comparison. Compatibility execution still targets the central approved pair. Completed and withdrawn batches grant no extra allowance.
+During `approved`, `rolling`, or `paused` batches, affected lock scopes can use the old or new pair. All shared-pin observations in one project must select one allowed pair. Checks exclude the selected root lock node from this comparison. Compatibility execution still targets the central approved pair. Completed and withdrawn batches grant no extra allowance.
 
 ## Implemented coverage
 
 The checker resolves version-7 lock graphs, including root-relative `follows`, across first-party lockfiles. It ignores unreachable nodes and vendor/cache directories. It identifies GitHub sources from GitHub inputs and Git URLs, checks immutable selections, flags ambiguous nixpkgs sources, and builds member dependency graphs. Policy repository flake dependencies fail.
 
-For v0.2.0 and later, root `nixpkgs` must resolve to an immutable `NixOS/nixpkgs` flake. Its revision and update branch can differ from shared pins. The exemption includes references that follow the resolved root node.
+Root `nixpkgs` must resolve to an immutable `NixOS/nixpkgs` flake. Its revision and update branch can differ from shared pins. The exemption includes references that follow the resolved root node.
 
 Additional root inputs, distinct transitive nodes, and independently locked examples require one allowed pair across the project. In these scopes, first-party stable inputs use `nixpkgs`; unstable inputs use `nixpkgs-unstable`. An absent input need not be added. Transitive input names and lock node identifiers are unrestricted. Branch declarations identify stable/unstable selections; exact revisions can identify them when they match one allowed value uniquely.
 
@@ -350,7 +341,7 @@ Hosted release verification requires a published immutable release that is not a
 
 ## Release support and retirement
 
-`policy/support.json` uses schema version 1. Its `retirements` object maps exact release tags to decisions. A release without a decision remains supported, regardless of age or newer releases. Support does not establish valid declarations or remote publication.
+`policy/support.json` uses schema version 1. Its `retirements` object maps exact release tags to decisions. Within the v0.4.0+ range, a release without a decision remains supported, regardless of age or newer releases. Releases below that floor are always rejected. Support does not establish valid declarations or remote publication.
 
 Each decision requires an HTTPS review reference, nonempty reason, and UTC timestamps in `YYYY-MM-DDTHH:MM:SSZ` format. Retirement must follow migration start. This example is not an actual decision:
 
@@ -374,21 +365,9 @@ Retired member commands return exit 1, `selectionStatus: "retired"`, the `suppor
 
 Malformed or missing support records cause inspection errors with `selectionStatus: "unknown"`. Invalid declarations return `selectionStatus: "invalid"`.
 
-The `support` object contains `policyVersion`, effective `status`, and `retirement` or null. It has no observation timestamp. Its identity stays stable until the decision or effective status changes. Record digests include decision content, with the historical project/pin digest retained separately. A retirement can take effect without a record edit. Evidence consumers must reassess support even when digests match.
+The `support` object contains `policyVersion`, effective `status`, and `retirement` or null. It has no observation timestamp. Its identity stays stable until the decision or effective status changes. Record digests include decision content. A retirement can take effect without a record edit. Evidence consumers must reassess support even when digests match.
 
-Audits retain retired enrolled selections as failures with the member revision and decision. They can reject a retired selection without executing its checker. Immutable older checkers do not read the support file; their local behavior stays unchanged.
-
-### Legacy cleanup
-
-Plain `validate` checks structure and returns `legacyCleanup: "not-assessed"`. Retained adopted entries still need full `requiredChecks` after retirement, because retirement does not prove migration.
-
-`--previous-policy-root OLD` compares proposed records with a trusted prior snapshot. It detects removed entries, fields, batches, participants, and edits to completed or withdrawn batches. Any supported legacy release blocks cleanup, including unselected immutable patch releases.
-
-After known legacy releases retire, cleanup review checks the complete published release inventory for other supported legacy patches. Incomplete or inaccessible information blocks cleanup.
-
-`--workspace` must contain exact clean checkouts for the union of prior and current enrolled identities. Each must select a supported new-contract release and pass its published immutable checker against the proposal. Roster removal does not waive migration evidence. Invalid callers, legacy selections, changed sources, and failed checks block cleanup.
-
-Success returns `legacyCleanup: "eligible"` with exact migration evidence. It deletes nothing and authorizes no merge. Comparisons without removals return `not-needed`. All retained schemas and historical batch references must remain valid. See the [cleanup procedure](maintenance.md#retirement-and-legacy-cleanup).
+Audits retain retired enrolled selections as failures with the member revision and decision. They can reject a retired selection without executing its checker.
 
 ## Integration policy agreement
 
@@ -398,7 +377,7 @@ Success proves policy agreement only. The report states `behavioralIntegration: 
 
 Inspection covers each committed first-party `flake.lock`, including independently locked examples. Vendor, generated-result, and cache exclusions apply. Reachable nodes define the consumed set, including transitive members, aliases, and root-relative `follows`. Unreachable nodes add no dependencies. The consumed graph takes precedence over a dependency's standalone lockfile. See [Nix's lock contract](https://nix.dev/manual/nix/2.29/command-ref/new-cli/nix3-flake#lock-files).
 
-Trusted roster identities define membership. Legacy-only entries do not enroll dependencies. The historical `petohorvath/nix-nftzones` identity maps to `petohorvath/nixos-nftzones` only when the latter is enrolled. Inspection still fetches the actual locked URL and revision. An original input cannot give an enrolled identity to a contradictory locked source. A graph without enrolled dependencies cannot establish agreement.
+Trusted roster identities define membership. Inspection fetches the actual locked URL and revision. An original input cannot give an enrolled identity to a contradictory locked source. A graph without enrolled dependencies cannot establish agreement.
 
 Supported sources are GitHub inputs and Git inputs with GitHub HTTPS or `ssh://` URLs and exact 40-character revisions. A locked `dir` selects the flake subdirectory. Inspection fetches committed workflow blobs into temporary Git storage without checking out files, running hooks, evaluating flakes, or executing member code.
 
@@ -426,29 +405,24 @@ The agreement workflow verifies the release and captured commits, invokes the co
 
 The audit discovers the selected tag from the unique caller and checks literal `project` and `policy_version`. It verifies publication, immutability, and non-prerelease status in the trusted policy repository. It resolves lightweight or annotated tags to exact commits and invokes that commit's Nix package with the captured records.
 
-A local development checker cannot replace an unpublished selected release. Each checker enforces its own rules. Historical checkers require their legacy records; migrated members select releases independently of those copies.
+A local development checker cannot replace an unpublished selected release. Each checker enforces its own rules. Members select supported releases independently.
 
 ### Audit reports
 
 Each report identifies roster `repository`, member `revision`, `policyVersion`, verified `checkerRevision`, `checkerRepository`, and central `records`:
 
-| Field                  | Meaning                                         |
-| ---------------------- | ----------------------------------------------- |
-| `records.revision`     | Git commit, when available                      |
-| `records.digest`       | Project, pin, roster, and support records       |
-| `records.legacyDigest` | Projects and pins only, matching older checkers |
+| Field              | Meaning                                         |
+| ------------------ | ----------------------------------------------- |
+| `records.revision` | Git commit, when available                      |
+| `records.digest`   | Configuration, pin, roster, and support records |
 
-The dispatcher verifies returned identities, revisions, digests, report types, outcomes, and new-contract settings. Substituted or malformed reports cause inspection errors. Older `policyRecordsDigest` values retain their historical scope. Changed central records fail the audit, even for an initially empty roster.
+The dispatcher verifies returned identities, revisions, digests, report types, outcomes, and member settings. Substituted or malformed reports cause inspection errors. Changed central records fail the audit, even for an initially empty roster.
 
 Static success retains `compatibility: "not-run"`; audits do not rerun member CI. Candidate-only assessments remain visible but cannot establish approved-pin compliance. Member failures and inspection errors remain distinct; aggregate inspection errors take precedence. Errors retain JSON on standard output, including initial record failures. Artifact upload cannot mask command failure.
 
 ### GitHub enforcement
 
-`--github` checks squash-only merging, a PR requirement, and required statuses through rulesets or branch protection. It obtains required names from:
-
-- Generated requirements for members selecting this release.
-- The selected checker's validated `requiredChecks` report for v0.3.0 and later.
-- Retained records after checker inspection for older releases.
+`--github` checks squash-only merging, a PR requirement, and required statuses through rulesets or branch protection. It obtains required names from the selected checker's validated `requiredChecks` report.
 
 Failed release inspection cannot supply a trusted gate set. GitHub requests always use the roster identity. Member declarations and reports cannot redirect them.
 
@@ -492,7 +466,7 @@ The first job captures the checker, member, and current record commits. All late
 
 The first job verifies the release and generates matrices once on x86_64. This metadata job does not add x86_64 to the member's required architectures or publish a release.
 
-Compliance runs structural, pin, caller, and shell checks. Members own formatting and lint enforcement. Project tests first run `host-checks` to require nonempty host checks with `--no-update-lock-file`, then run full committed-lock root checks. Candidate execution and replay enforce the same sequence for v0.4.0 and later; older selected releases retain their existing behavior. Compatibility runs both shared revisions.
+Compliance runs structural, pin, caller, and shell checks. Members own formatting and lint enforcement. Project tests first run `host-checks` to require nonempty host checks with `--no-update-lock-file`, then run full committed-lock root checks. Candidate execution and replay enforce the same sequence. Compatibility runs both shared revisions.
 
 Each category runs independently on every required architecture with `fail-fast: false`. They and the VM job depend only on the first job. A failure does not suppress other categories. Declared VM targets require the x86_64 gate even with ARM-only ordinary coverage. Without targets, VM reports `not-applicable` and its status need not be required.
 

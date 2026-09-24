@@ -107,8 +107,6 @@ class Coordinator:
         git_revision,
         git_dirty,
         fingerprints,
-        lock_graph,
-        repository_identity,
         orchestrator_revision,
     ):
         self.args = args
@@ -116,8 +114,6 @@ class Coordinator:
         self.git_revision = git_revision
         self.git_dirty = git_dirty
         self.fingerprints = fingerprints
-        self.lock_graph = lock_graph
-        self.repository_identity = repository_identity
         self.orchestrator_revision = orchestrator_revision
         self.root = args.project_dir.resolve()
         self.baseline = args.policy_root.resolve()
@@ -190,117 +186,61 @@ class Coordinator:
             or len(set(requirements["systems"])) != len(requirements["systems"])
         ):
             raise ValueError("Unsupported selected release requirements")
-        modern = releases.version_at_least(version, (0, 4, 0))
-        overrides = releases.version_at_least(version, (0, 2, 0))
-        if modern:
-            member = declarations.inspect(
-                self.root,
-                config["policyRepository"],
-                name,
-                requirements,
-                checker_version=version,
-            )
-            settings = {
-                field: member[field] for field in declarations.INPUT_FIELDS.values()
-            }
-        else:
-            member = config["projects"].get(name)
-            if member is None or member["policyVersion"] != version:
-                raise ValueError(
-                    "Historical member selection needs its matching trusted legacy record"
-                )
-            settings = {
-                "requiredArchitectures": member.get(
-                    "requiredArchitectures", requirements["systems"]
-                )
-                if overrides
-                else requirements["systems"],
-                "vmTargets": member["vmTargets"],
-                "additionalRequiredChecks": member.get("additionalRequiredChecks", []),
-            }
+        member = declarations.inspect(
+            self.root,
+            config["policyRepository"],
+            name,
+            requirements,
+            checker_version=version,
+        )
+        settings = {
+            field: member[field] for field in declarations.INPUT_FIELDS.values()
+        }
         record_root, execution = self.execution_records(config, pins)
-        if overrides:
-            expected_ci = declarations.ci_plan(settings, requirements["ci"])
-            arguments = ["ci", *([str(self.root)] if modern else []), "--project", name]
-            process = run_process(
-                releases.checker_command(release, record_root, *arguments),
-                self.output / "planning",
+        expected_ci = declarations.ci_plan(settings, requirements["ci"])
+        arguments = ["ci", str(self.root), "--project", name]
+        process = run_process(
+            releases.checker_command(release, record_root, *arguments),
+            self.output / "planning",
+        )
+        report = child_report(process, release, execution)
+        if (
+            process["returncode"] != 0
+            or report.get("status") != "planned"
+            or report.get("project") != name
+            or report.get("policyVersion") != version
+        ):
+            raise ValueError(
+                "Selected checker could not produce a valid candidate plan"
             )
-            report = child_report(process, release, execution)
-            if (
-                process["returncode"] != 0
-                or report.get("status") != "planned"
-                or report.get("project") != name
-                or report.get("policyVersion") != version
-            ):
-                raise ValueError(
-                    "Selected checker could not produce a valid candidate plan"
-                )
-            for field in ("matrix", "compatibilityMatrix", "requiredChecks"):
-                if report.get(field) != expected_ci[field]:
-                    raise ValueError(
-                        "Selected checker returned an incompatible CI plan"
-                    )
-            if modern and (
-                report.get("memberSettings") != settings
-                or report.get("revision") != before["revision"]
-                or report.get("support") != assessment
-            ):
-                raise ValueError(
-                    "Selected checker plan substituted member settings or support"
-                )
-            required = list(expected_ci["requiredChecks"])
-            mandatory = declarations.ci_plan(
-                {**settings, "additionalRequiredChecks": []}, requirements["ci"]
-            )["requiredChecks"]
-            extras = [gate for gate in required if gate not in mandatory]
-            if not modern and not releases.version_at_least(version, (0, 3, 0)):
-                extras = [
-                    gate for gate in member["requiredChecks"] if gate not in required
-                ]
-                required.extend(extras)
-            jobs = [
-                {
-                    "id": f"{job['system']}:{job['check']}",
-                    "kind": {
-                        "Compliance": "compliance",
-                        "Formatting and lint": "lint",
-                        "Project tests": "tests",
-                    }[job["check"]],
-                    "system": job["system"],
-                    "gate": f"Policy / {job['check']} ({job['system']})",
-                }
-                for job in expected_ci["matrix"]["include"]
-            ]
-        else:
-            required = list(member["requiredChecks"])
-            ordinary = {
-                f"Shared policy / Policy ({system})"
-                for system in settings["requiredArchitectures"]
+        for field in ("matrix", "compatibilityMatrix", "requiredChecks"):
+            if report.get(field) != expected_ci[field]:
+                raise ValueError("Selected checker returned an incompatible CI plan")
+        if (
+            report.get("memberSettings") != settings
+            or report.get("revision") != before["revision"]
+            or report.get("support") != assessment
+        ):
+            raise ValueError(
+                "Selected checker plan substituted member settings or support"
+            )
+        required = list(expected_ci["requiredChecks"])
+        mandatory = declarations.ci_plan(
+            {**settings, "additionalRequiredChecks": []}, requirements["ci"]
+        )["requiredChecks"]
+        extras = [gate for gate in required if gate not in mandatory]
+        jobs = [
+            {
+                "id": f"{job['system']}:{job['check']}",
+                "kind": {
+                    "Compliance": "compliance",
+                    "Project tests": "tests",
+                }[job["check"]],
+                "system": job["system"],
+                "gate": f"Policy / {job['check']} ({job['system']})",
             }
-            extras = [
-                gate
-                for gate in required
-                if gate not in ordinary
-                and gate
-                not in {
-                    "Shared policy / Policy records",
-                    "Shared policy / VM tests (x86_64-linux)",
-                    "Policy / Policy records",
-                    "Policy / VM tests (x86_64-linux)",
-                    *(f"Policy / Policy ({system})" for system in SYSTEMS),
-                }
-            ]
-            jobs = [
-                {
-                    "id": f"{system}:{kind}",
-                    "kind": kind,
-                    "system": system,
-                    "gate": f"Policy ({system})",
-                }
-                for system in settings["requiredArchitectures"]
-                for kind in ("compliance", "lint", "tests")
-            ]
+            for job in expected_ci["matrix"]["include"]
+        ]
         for system in settings["requiredArchitectures"]:
             for channel in ("stable", "unstable"):
                 jobs.append(
@@ -349,7 +289,6 @@ class Coordinator:
             "executionRecords": execution,
             "batch": batch_id,
             "pins": batch["pins"],
-            "compatibilityMode": "root-overrides" if overrides else "committed-pair",
             "requiredChecks": required,
             "jobs": jobs,
             "matrix": {
@@ -476,56 +415,15 @@ class Coordinator:
             record_root,
             compatibility_output=output / "compatibility",
         )
-        legacy_compatibility = (
-            kind == "compatibility" and plan["compatibilityMode"] == "committed-pair"
-        )
-        if kind == "tests" and len(commands) > 1:
+        if kind == "tests":
             probe = run_process(commands[0], output / "host-checks")
             result["commands"].append(probe)
             validate_host_checks_report(
                 child_report(probe, release, plan["executionRecords"]), job
             )
-        if legacy_compatibility:
-            inspection = run_process(commands[0], output / "pins")
-            result["commands"].append(inspection)
-            report = child_report(inspection, release, plan["executionRecords"])
-            validate_member_report(report, plan, "compliance")
-            result["pinInspection"] = report
-            result["mode"] = "committed-pair"
-            metadata = run_process(commands[1], output / "metadata")
-            result["commands"].append(metadata)
-            graph = self.lock_graph(
-                json.loads(
-                    metadata["stdout"], object_pairs_hook=records.unique_mapping
-                )["locks"]
-            )
-            revision = plan["pins"][job["channel"]]
-            if metadata["returncode"] or not any(
-                self.repository_identity(node) == "nixos/nixpkgs"
-                and node.get("locked", {}).get("rev") == revision
-                for node in graph.reachable().values()
-            ):
-                raise ValueError(
-                    f"Historical {job['channel']} coverage requires its candidate input in the committed root graph; prepare the required member source/lock change"
-                )
-            result["resolvedRevision"] = revision
-            result["metadata"] = json.loads(metadata["stdout"])
-            checks = run_process(commands[2], output / "checks")
-            result["commands"].append(checks)
-            result["checks"] = json.loads(
-                checks["stdout"], object_pairs_hook=records.unique_mapping
-            )
-            if (
-                checks["returncode"]
-                or not result["checks"]
-                or not declarations.valid_check_names(result["checks"])
-            ):
-                raise ValueError(
-                    "Historical compatibility requires nonempty native root checks"
-                )
         process = run_process(commands[-1], output / "execution")
         result["commands"].append(process)
-        if kind == "tests" or legacy_compatibility:
+        if kind == "tests":
             if process["returncode"] != 0:
                 raise ValueError(
                     "Committed-lock root checks failed; inspect execution logs"
@@ -627,51 +525,15 @@ class Coordinator:
                         validate_member_report(
                             item["report"], plan, job["kind"], job=job
                         )
-                    elif (
-                        job["kind"] == "compatibility"
-                        and plan["compatibilityMode"] == "committed-pair"
-                    ):
-                        inspection = child_report(
-                            item["commands"][0],
-                            plan["release"],
-                            plan["executionRecords"],
-                        )
-                        if inspection != item.get("pinInspection"):
-                            raise ValueError(
-                                "Historical pin inspection disagrees with execution output"
-                            )
-                        validate_member_report(inspection, plan, "compliance")
-                        metadata = json.loads(
-                            item["commands"][1]["stdout"],
-                            object_pairs_hook=records.unique_mapping,
-                        )
-                        graph = self.lock_graph(metadata["locks"])
-                        revision = plan["pins"][job["channel"]]
-                        if item.get("resolvedRevision") != revision or not any(
-                            self.repository_identity(node) == "nixos/nixpkgs"
-                            and node.get("locked", {}).get("rev") == revision
-                            for node in graph.reachable().values()
-                        ):
-                            raise ValueError(
-                                "Historical channel evidence does not resolve the candidate revision"
-                            )
-                        if not item.get("checks") or not declarations.valid_check_names(
-                            item["checks"]
-                        ):
-                            raise ValueError(
-                                "Historical compatibility has no nonempty root checks"
-                            )
-                        validate_committed_execution(item["commands"][-1])
                     elif job["kind"] == "tests":
-                        if len(item["commands"]) > 1:
-                            validate_host_checks_report(
-                                child_report(
-                                    item["commands"][0],
-                                    plan["release"],
-                                    plan["executionRecords"],
-                                ),
-                                job,
-                            )
+                        validate_host_checks_report(
+                            child_report(
+                                item["commands"][0],
+                                plan["release"],
+                                plan["executionRecords"],
+                            ),
+                            job,
+                        )
                         validate_committed_execution(item["commands"][-1])
                     else:
                         raise ValueError(f"Missing selected checker report: {key}")
@@ -769,11 +631,10 @@ def child_report(process, release, snapshot):
             process["stderr"].strip() or "Selected checker could not execute"
         )
     report = json.loads(process["stdout"], object_pairs_hook=records.unique_mapping)
-    modern = releases.version_at_least(release["version"], (0, 4, 0))
     expected = {
         "checkerVersion": release["version"],
         "policyRecordsRevision": snapshot["revision"],
-        "policyRecordsDigest": snapshot["digest" if modern else "legacyDigest"],
+        "policyRecordsDigest": snapshot["digest"],
     }
     if (
         not isinstance(report, dict)
@@ -831,37 +692,16 @@ def job_command_plan(plan, job, root, record_root, *, compatibility_output=None)
             plan["project"],
             "--batch",
             plan["batch"],
-            "--readiness",
             "--shell",
         ],
-        "lint": ["lint", root],
         "vm": ["vm", root, "--project", plan["project"]],
         "agreement": ["agreement", root, "--project", plan["project"]],
     }
     if job["kind"] == "tests":
-        if releases.version_at_least(plan["release"]["version"], (0, 4, 0)):
-            return [
-                releases.checker_command(
-                    plan["release"], Path(record_root), "host-checks", root
-                ),
-                committed,
-            ]
-        return [committed]
-    if job["kind"] == "compatibility" and plan["compatibilityMode"] == "committed-pair":
         return [
             releases.checker_command(
-                plan["release"], Path(record_root), *arguments["compliance"][:-1]
+                plan["release"], Path(record_root), "host-checks", root
             ),
-            ["nix", "flake", "metadata", root, "--json", "--no-update-lock-file"],
-            [
-                "nix",
-                "eval",
-                "--json",
-                f"{root}#checks.{job['system']}",
-                "--apply",
-                "builtins.attrNames",
-                "--no-update-lock-file",
-            ],
             committed,
         ]
     if job["kind"] == "compatibility":
@@ -906,14 +746,7 @@ def validate_job_commands(item, worker, plan):
             "Required execution did not return a successful process outcome"
         )
     compatibility_output = None
-    if job["kind"] == "compatibility" and plan["compatibilityMode"] == "committed-pair":
-        if item.get("checks") != json.loads(
-            item["commands"][2]["stdout"], object_pairs_hook=records.unique_mapping
-        ):
-            raise ValueError(
-                "Historical check coverage disagrees with execution output"
-            )
-    elif job["kind"] == "compatibility":
+    if job["kind"] == "compatibility":
         compatibility_output = commands[0][-1]
         if (
             not isinstance(compatibility_output, str)
@@ -1028,7 +861,7 @@ def validate_member_report(report, plan, kind, *, job=None):
             for member in report["members"]
         ):
             raise ValueError("Integration agreement changed or did not pass")
-    if releases.version_at_least(plan["release"]["version"], (0, 4, 0)) and kind in {
+    if kind in {
         "compliance",
         "compatibility",
         "vm",

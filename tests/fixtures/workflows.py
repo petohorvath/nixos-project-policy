@@ -100,7 +100,7 @@ def audit_adapter():
     def gates(project, checks, *, workflow):
         if os.environ["AUDIT_TEST_MODE"] == "github-error":
             raise ValueError("GitHub inspection unavailable; settings are unknown")
-        if project["repository"] not in {"owner/example", "owner/legacy"}:
+        if project["repository"] != "owner/example":
             raise AssertionError("Member declaration redirected GitHub inspection")
         if workflow != ".github/workflows/policy.yml":
             raise AssertionError("GitHub inspection ignored the discovered caller")

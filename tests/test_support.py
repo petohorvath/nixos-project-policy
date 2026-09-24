@@ -1,15 +1,14 @@
-"""Public support decisions, retirement boundaries, and legacy cleanup review."""
+"""Public support decisions, retirement boundaries."""
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 from unittest.mock import patch
 
 import yaml
 
-from tests.fixtures.audits import AuditFixture, checked_process
+from tests.fixtures.audits import AuditFixture
 from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.cli import invoke
 from tests.fixtures.compatibility import CompatibilityFixture
@@ -17,14 +16,12 @@ from tests.fixtures.data import (
     AFTER,
     BEFORE,
     EFFECTIVE,
-    POLICY_REPO,
     RELEASE,
     SOURCE,
     START,
     retirement,
 )
-from tests.fixtures.services import published
-from tools import policy, records, releases, support
+from tools import policy, records, support
 
 
 class SupportTests(ProjectTestCase):
@@ -119,7 +116,7 @@ class SupportTests(ProjectTestCase):
         self.assertEqual(code, 2, unknown)
         self.assertEqual(unknown["selectionStatus"], "unknown")
 
-    def test_support_decisions_change_full_identity_but_preserve_the_legacy_digest(
+    def test_support_decisions_change_record_identity(
         self,
     ):
         self.write_records()
@@ -127,7 +124,6 @@ class SupportTests(ProjectTestCase):
         self.support["retirements"][RELEASE] = retirement()
         after = records.identity(self.config, self.pins, SOURCE)
         self.assertNotEqual(before["digest"], after["digest"])
-        self.assertEqual(before["legacyDigest"], after["legacyDigest"])
 
     def test_malformed_decisions_cannot_supply_support(self):
         root = self.write_records()
@@ -175,49 +171,9 @@ class SupportTests(ProjectTestCase):
         path.write_text('{"schemaVersion":1,"retirements":{},"retirements":{}}')
         self.assertEqual(invoke("--policy-root", str(root), "validate")[0], 2)
 
-    def test_new_publication_preserves_older_support_and_retired_members_stay_visible(
-        self,
-    ):
-        with AuditFixture().prepared() as fixture:
-            fixture.add_member("legacy", "v0.1.1")
-            for instant in [BEFORE, EFFECTIVE]:
-                with patch.object(
-                    support, "now", return_value=support.timestamp(instant)
-                ):
-                    code, report = fixture.audit()
-                self.assertEqual(code, 0, report)
-                self.assertEqual(
-                    {item["policyVersion"] for item in report["projects"]},
-                    {RELEASE, "v0.1.1"},
-                )
-                self.assertTrue(
-                    all(
-                        item["support"]["status"] == "supported"
-                        for item in report["projects"]
-                    )
-                )
-            fixture.support["retirements"]["v0.1.1"] = retirement()
-            for instant, expected in [(BEFORE, 0), (EFFECTIVE, 1), (AFTER, 1)]:
-                with patch.object(
-                    support, "now", return_value=support.timestamp(instant)
-                ):
-                    code, report = fixture.audit()
-                self.assertEqual(code, expected, report)
-                self.assertEqual(len(report["projects"]), 2)
-                legacy = next(
-                    member
-                    for member in report["projects"]
-                    if member["project"] == "legacy"
-                )
-                self.assertEqual(
-                    legacy["selectionStatus"], "retired" if expected else "supported"
-                )
-                self.assertEqual(legacy["enrollment"], "enrolled")
-                self.assertIn("legacy", fixture.config["projects"])
-
     def test_audit_rechecks_earlier_members_after_later_members_finish(self):
         with AuditFixture().prepared() as fixture:
-            fixture.add_member("legacy", "v0.1.1")
+            fixture.add_member("beta", RELEASE)
             fixture.support["retirements"][RELEASE] = retirement()
             current_time = support.timestamp(BEFORE)
             execute = fixture.process
@@ -225,7 +181,7 @@ class SupportTests(ProjectTestCase):
             def finish_later_member(command, **kwargs):
                 nonlocal current_time
                 response = execute(command, **kwargs)
-                if command[command.index("--project") + 1] == "legacy":
+                if command[command.index("--project") + 1] == "beta":
                     current_time = support.timestamp(EFFECTIVE)
                 return response
 
@@ -302,155 +258,3 @@ class SupportTests(ProjectTestCase):
                 )
                 if expected:
                     self.assertEqual(output.read_text(), "")
-
-
-class LegacyCleanupTests(ProjectTestCase):
-    def prepare_removal(self):
-        self.pins["batches"] = [
-            {
-                "id": status,
-                "status": status,
-                "pins": self.pins["approved"],
-                "projects": {"example": SOURCE},
-            }
-            for status in ["complete", "withdrawn"]
-        ]
-        current = self.write_records()
-        previous = self.root.parent / "previous"
-        shutil.copytree(current, previous)
-        # The proposed removal must be judged against the prior roster as well.
-        self.config["projects"] = {}
-        self.pins["batches"] = []
-        self.members.clear()
-        return previous
-
-    def validate_removal(self, previous, *options):
-        return self.run_policy(
-            "validate", "--previous-policy-root", str(previous), *options
-        )
-
-    def retire_legacy(self):
-        self.support["retirements"].update(
-            {version: retirement() for version in support.KNOWN_LEGACY_RELEASES}
-        )
-
-    def test_supported_or_scheduled_legacy_releases_prevent_whole_surface_cleanup(self):
-        previous = self.prepare_removal()
-        for planned in [False, True]:
-            if planned:
-                self.retire_legacy()
-            with patch.object(support, "now", return_value=support.timestamp(BEFORE)):
-                code, report = self.validate_removal(previous)
-            self.assertEqual(code, 1, report)
-            self.assertEqual(
-                set(report["legacyRemovals"]),
-                {"legacy project example", "pin batch complete", "pin batch withdrawn"},
-            )
-            self.assertIn("v0.1.1", " ".join(report["issues"]))
-
-    def test_retirement_does_not_remove_still_needed_lists(self):
-        self.retire_legacy()
-        del self.config["projects"]["example"]["requiredChecks"]
-        with patch.object(support, "now", return_value=support.timestamp(AFTER)):
-            code, report = self.run_policy("validate")
-        self.assertEqual(code, 2, report)
-        self.assertIn("needs legacy requiredChecks", report["error"])
-
-    def test_retired_releases_still_require_exact_migration_evidence(self):
-        previous = self.prepare_removal()
-        self.retire_legacy()
-        with (
-            patch.object(support, "now", return_value=support.timestamp(AFTER)),
-            patch.object(
-                releases,
-                "published_versions",
-                return_value=list(support.KNOWN_LEGACY_RELEASES),
-            ),
-        ):
-            code, report = self.validate_removal(previous)
-            self.assertEqual(code, 2, report)
-            self.assertIn("--workspace", report["error"])
-            with (
-                patch.object(policy, "git_revision", return_value=SOURCE),
-                patch.object(policy, "git_dirty", return_value=False),
-                patch.object(releases, "public_get", side_effect=published),
-                patch.object(releases.subprocess, "run", side_effect=checked_process),
-            ):
-                code, migrated = self.validate_removal(
-                    previous, "--workspace", str(self.root.parent)
-                )
-                self.assertEqual(code, 0, migrated)
-                self.assertEqual(migrated["migrationEvidence"][0]["revision"], SOURCE)
-                self.workflow["jobs"]["policy"]["uses"] = (
-                    f"{POLICY_REPO}/.github/workflows/check.yml@v0.1.1"
-                )
-                self.declare(policy_version="v0.1.1")
-                code, old = self.validate_removal(
-                    previous, "--workspace", str(self.root.parent)
-                )
-                self.assertEqual(code, 1, old)
-                self.assertIn("remain needed", " ".join(old["issues"]))
-                self.write(".github/workflows/policy.yml", "{}")
-                code, missing = self.validate_removal(
-                    previous, "--workspace", str(self.root.parent)
-                )
-                self.assertEqual(code, 2, missing)
-
-    def test_unretired_immutable_patch_in_published_inventory_prevents_cleanup(self):
-        previous = self.prepare_removal()
-        self.retire_legacy()
-        inventory = [
-            published(f"/releases/tags/{version}")
-            for version in [*support.KNOWN_LEGACY_RELEASES, "v0.1.2", RELEASE]
-        ]
-        with (
-            patch.object(support, "now", return_value=support.timestamp(AFTER)),
-            patch.object(releases, "public_get", return_value=inventory) as lookup,
-        ):
-            code, report = self.validate_removal(previous)
-        self.assertEqual(code, 1, report)
-        self.assertIn("v0.1.2", " ".join(report["issues"]))
-        self.assertIn("releases?per_page=100&page=1", lookup.call_args.args[0])
-
-    def test_uninspectable_release_inventory_cannot_authorize_cleanup(self):
-        previous = self.prepare_removal()
-        self.retire_legacy()
-        for inventory in [
-            {},
-            [],
-            [
-                {
-                    "tag_name": "v0.1.0",
-                    "draft": False,
-                    "prerelease": False,
-                    "immutable": True,
-                }
-            ],
-        ]:
-            with (
-                self.subTest(inventory=inventory),
-                patch.object(support, "now", return_value=support.timestamp(AFTER)),
-                patch.object(releases, "public_get", return_value=inventory),
-            ):
-                code, report = self.validate_removal(previous)
-            self.assertEqual(code, 2, report)
-            self.assertIn("inventory", report["error"])
-
-    def test_historical_participant_removal_is_guarded_even_when_legacy_entry_remains(
-        self,
-    ):
-        self.pins["batches"] = [
-            {
-                "id": "historical",
-                "status": "withdrawn",
-                "pins": self.pins["approved"],
-                "projects": {"example": SOURCE},
-            }
-        ]
-        current = self.write_records()
-        previous = self.root.parent / "previous"
-        shutil.copytree(current, previous)
-        self.pins["batches"][0]["projects"] = {}
-        code, report = self.validate_removal(previous)
-        self.assertEqual(code, 1, report)
-        self.assertIn("pin batch historical project example", report["legacyRemovals"])

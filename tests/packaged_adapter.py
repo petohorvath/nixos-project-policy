@@ -1,7 +1,7 @@
-"""Test-only external services for the packaged release-transition scenario.
+"""Test-only external services for the packaged policy scenario.
 
 Loaded by a temporary sitecustomize, never by production checker code. Real
-packaged entrypoints and immutable legacy sources execute all policy decisions.
+packaged entrypoints execute all policy decisions.
 """
 
 import base64
@@ -9,13 +9,12 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 from urllib import request
 
 from tests.fixtures.github import GitHub, request_path
 
 
-CONFIG = json.loads(Path(os.environ["POLICY_TRANSITION_FIXTURE"]).read_text())
+CONFIG = json.loads(Path(os.environ["POLICY_PACKAGE_FIXTURE"]).read_text())
 REAL_RUN = subprocess.run
 REAL_OUTPUT = subprocess.check_output
 STATE = Path(CONFIG["state"])
@@ -108,16 +107,7 @@ def run(command, **kwargs):
             if value["revision"] == revision
         )
         arguments = command[command.index("--") + 1 :]
-        if "program" in release:
-            return REAL_RUN([release["program"], *arguments], **kwargs)
-        bootstrap = (
-            "import runpy; runpy.run_path("
-            + repr(release["source"])
-            + ", run_name='__main__', init_globals={'PACKAGED_REVISION': "
-            + repr(revision)
-            + "})"
-        )
-        return REAL_RUN([sys.executable, "-c", bootstrap, *arguments], **kwargs)
+        return REAL_RUN([release["program"], *arguments], **kwargs)
     with Path(CONFIG["commands"]).open("a") as stream:
         stream.write(json.dumps(command) + "\n")
     output = ""
@@ -131,7 +121,7 @@ def run(command, **kwargs):
         output = json.dumps({"locks": graph})
     elif command[1] == "eval":
         output = (
-            os.environ.get("POLICY_TRANSITION_SYSTEM", CONFIG["system"])
+            os.environ.get("POLICY_PACKAGE_SYSTEM", CONFIG["system"])
             if "--impure" in command
             else '["behavior"]'
         )

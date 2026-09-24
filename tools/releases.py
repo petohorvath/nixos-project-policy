@@ -21,11 +21,6 @@ class InvalidRelease(ValueError):
     """Available metadata proves the selected release is not an allowed release."""
 
 
-def version_at_least(version, minimum):
-    declarations.require_policy_version(version)
-    return tuple(map(int, version[1:].split("."))) >= minimum
-
-
 def public_get(path):
     headers = {
         "Accept": "application/vnd.github+json",
@@ -107,32 +102,6 @@ def checker_command(release, records_root, *arguments):
     ]
 
 
-def published_versions(repository):
-    versions = set()
-    for page in range(1, 101):
-        data = public_get(f"repos/{repository}/releases?per_page=100&page={page}")
-        if not isinstance(data, list):
-            raise ValueError("Published policy release inventory is unavailable")
-        for release in data:
-            if not isinstance(release, dict):
-                raise ValueError("Published policy release inventory is malformed")
-            if release.get("draft") is True or release.get("prerelease") is True:
-                continue
-            if (
-                release.get("draft") is not False
-                or release.get("prerelease") is not False
-                or release.get("immutable") is not True
-            ):
-                raise ValueError(
-                    "Published policy release inventory is incomplete or mutable"
-                )
-            declarations.require_policy_version(release.get("tag_name"))
-            versions.add(release["tag_name"])
-        if len(data) < 100:
-            return sorted(versions)
-    raise ValueError("Published policy release inventory could not be completed")
-
-
 def check_member(
     release,
     root,
@@ -142,7 +111,7 @@ def check_member(
     records_root,
     snapshot,
     *,
-    settings=None,
+    settings,
     support_assessment,
 ):
     process = subprocess.run(
@@ -158,14 +127,13 @@ def check_member(
         raise ValueError(process.stderr.strip() or "Released checker could not run")
     report = json.loads(process.stdout, object_pairs_hook=records.unique_mapping)
     version = release["version"]
-    modern = version_at_least(version, (0, 4, 0))
     expected = {
         "project": name,
         "policyVersion": version,
         "checkerVersion": version,
         "revision": revision,
         "policyRecordsRevision": snapshot["revision"],
-        "policyRecordsDigest": snapshot["digest" if modern else "legacyDigest"],
+        "policyRecordsDigest": snapshot["digest"],
     }
     if (
         not isinstance(report, dict)
@@ -184,15 +152,10 @@ def check_member(
         or (report["status"] != "fail" and report["issues"])
         or not declarations.valid_check_names(report.get("dependencies"))
         or any(not records.PROJECT.fullmatch(name) for name in report["dependencies"])
-        or (
-            version_at_least(version, (0, 3, 0))
-            and (
-                not report.get("requiredChecks")
-                or not declarations.valid_check_names(report["requiredChecks"])
-            )
-        )
-        or (modern and report.get("memberSettings") != settings)
-        or (modern and report.get("support") != support_assessment)
+        or not report.get("requiredChecks")
+        or not declarations.valid_check_names(report["requiredChecks"])
+        or (report.get("memberSettings") != settings)
+        or (report.get("support") != support_assessment)
     ):
         raise ValueError(
             "Released checker returned an incompatible report or substituted identity"

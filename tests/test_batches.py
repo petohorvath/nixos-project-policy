@@ -132,12 +132,10 @@ class BatchTests(BatchFixture, ProjectTestCase):
             self.locked,
         )
         self.assertNotEqual(
-            self.locked["legacy"],
-            plan["members"]["legacy"]["plan"]["source"]["revision"],
+            self.locked["beta"],
+            plan["members"]["beta"]["plan"]["source"]["revision"],
         )
-        self.assertEqual(
-            plan["members"]["legacy"]["plan"]["release"]["version"], "v0.3.0"
-        )
+        self.assertEqual(plan["members"]["beta"]["plan"]["release"]["version"], RELEASE)
         workers = self.workers(output)
         code, result, summary = self.aggregate(output, workers)
         self.assertEqual(code, 0, outcome(result))
@@ -172,11 +170,11 @@ class BatchTests(BatchFixture, ProjectTestCase):
 
     def test_missing_enrollment_registration_preserves_other_plans_and_results(self):
         pins = records.read_json(self.proposal / "policy/pins.json")
-        del pins["batches"][-1]["projects"]["legacy"]
+        del pins["batches"][-1]["projects"]["beta"]
         candidates.write_json(self.proposal / "policy/pins.json", pins)
         code, plan, output = self.plan()
         self.assertEqual(code, 1, plan)
-        self.assertEqual(plan["members"]["legacy"]["status"], "error")
+        self.assertEqual(plan["members"]["beta"]["status"], "error")
         workers = self.workers(output)
         code, result, _ = self.aggregate(output, workers)
         self.assertEqual(code, 1, outcome(result))
@@ -261,7 +259,7 @@ class BatchTests(BatchFixture, ProjectTestCase):
                 self.assertNotEqual(self.aggregate(plan, workers)[0], 0)
         candidates.write_json(source / "result.json", original)
         value = copy.deepcopy(saved)
-        del value["members"]["legacy"]
+        del value["members"]["beta"]
         value["matrix"] = batches.matrix(value["members"])
         value["planDigest"] = candidates.digest(
             {key: item for key, item in value.items() if key != "planDigest"}
@@ -392,11 +390,13 @@ class BatchTests(BatchFixture, ProjectTestCase):
             self.assertFalse(result["eligible"])
 
     def test_locked_mismatch_remains_failed_despite_successful_member_heads(self):
+        self.declaration("beta", "v0.5.0")
+        self.commit(self.roots["beta"])
         lock = records.read_json(self.root / "flake.lock")
-        lock["nodes"]["legacy"]["locked"]["rev"] = policy.git_revision(
-            self.roots["legacy"]
-        )
+        lock["nodes"]["beta"]["locked"]["rev"] = policy.git_revision(self.roots["beta"])
         candidates.write_json(self.root / "flake.lock", lock)
+        self.declaration("beta", RELEASE)
+        self.commit(self.roots["beta"])
         self.commit(self.root)
         self.propose()
         code, captured, plan = self.plan()
@@ -417,7 +417,7 @@ class BatchTests(BatchFixture, ProjectTestCase):
             workers.append(output)
         code, result, _ = self.aggregate(plan, workers)
         self.assertEqual(code, 1, outcome(result))
-        self.assertEqual(result["members"]["legacy"]["status"], "candidate-pass")
+        self.assertEqual(result["members"]["beta"]["status"], "candidate-pass")
 
     def test_fetch_captures_trusted_exact_sources_and_preserves_unavailable_member(
         self,
@@ -430,15 +430,15 @@ class BatchTests(BatchFixture, ProjectTestCase):
                 policy.git_revision(target / name), policy.git_revision(root)
             )
         pins = records.read_json(self.proposal / "policy/pins.json")
-        pins["batches"][-1]["projects"]["legacy"] = CHECKER
+        pins["batches"][-1]["projects"]["beta"] = CHECKER
         candidates.write_json(self.proposal / "policy/pins.json", pins)
         code, captured, output = self.plan(
             "--fetch", root=self.workspace.parent / "unavailable"
         )
         self.assertEqual(code, 1, captured)
-        self.assertEqual(captured["members"]["legacy"]["status"], "error")
+        self.assertEqual(captured["members"]["beta"]["status"], "error")
         self.assertEqual(captured["members"]["example"]["status"], "planned")
-        self.assertTrue(list((output / "fetch/legacy").glob("**/stderr.log")))
+        self.assertTrue(list((output / "fetch/beta").glob("**/stderr.log")))
 
     def test_final_assessment_rechecks_earlier_members_after_later_work(self):
         self.support["retirements"][RELEASE] = retirement()
@@ -453,7 +453,7 @@ class BatchTests(BatchFixture, ProjectTestCase):
 
         def lookup(path):
             nonlocal instant
-            if "repos/owner/legacy/git/commits/" in path:
+            if "repos/owner/beta/git/commits/" in path:
                 instant = support.timestamp(EFFECTIVE)
             return self.services.lookup(path)
 
@@ -464,7 +464,7 @@ class BatchTests(BatchFixture, ProjectTestCase):
             code, result, _ = self.aggregate(plan, workers)
         self.assertEqual(code, 1, outcome(result))
         self.assertEqual(result["members"]["alpha"]["status"], "fail")
-        self.assertEqual(result["members"]["legacy"]["status"], "candidate-pass")
+        self.assertEqual(result["members"]["beta"]["status"], "fail")
         self.assertIn("support changed", str(result["members"]["alpha"]["issues"]))
 
     def test_untrusted_coverage_and_checker_commands_cannot_replace_required_jobs(self):
@@ -582,8 +582,6 @@ class BatchTests(BatchFixture, ProjectTestCase):
                 records.read_json(self.baseline / "policy/pins.json")["approved"],
                 previous,
             )
-            for member in saved["members"].values():
-                self.assertEqual(member["plan"]["compatibilityMode"], "root-overrides")
             # Simulate the separate human merge, then prepare the next routine PR.
             shutil.copyfile(
                 self.proposal / "policy/pins.json", self.baseline / "policy/pins.json"
@@ -661,7 +659,7 @@ class BatchTests(BatchFixture, ProjectTestCase):
         )
         (workspace / "batch-plan").rename(workspace / "successful-plan")
         pins = records.read_json(self.proposal / "policy/pins.json")
-        del pins["batches"][-1]["projects"]["legacy"]
+        del pins["batches"][-1]["projects"]["beta"]
         candidates.write_json(self.proposal / "policy/pins.json", pins)
         self.commit(self.proposal)
         output.write_text("")

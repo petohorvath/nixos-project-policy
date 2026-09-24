@@ -188,7 +188,10 @@ def valid_check_names(checks):
 
 def require_policy_version(value):
     if not isinstance(value, str) or not POLICY_VERSION.fullmatch(value):
-        raise ValueError("Policy versions must be exact release tags such as v0.1.0")
+        raise ValueError("Policy versions must be exact release tags such as v0.4.0")
+
+    if tuple(map(int, value[1:].split("."))) < (0, 4, 0):
+        raise ValueError("Unsupported policy release: select v0.4.0 or later")
 
 
 def valid_system(system):

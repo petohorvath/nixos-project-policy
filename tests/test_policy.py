@@ -19,7 +19,6 @@ from tools import policy, records
 from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.compatibility import CompatibilityFixture
 from tests.fixtures.data import (
-    LEGACY_REQUIRED_CHECKS,
     CHECKER,
     COMPATIBILITY_CHECKS,
     NEW_PAIR,
@@ -170,7 +169,7 @@ class ProjectTests(ProjectTestCase):
 
     def test_pending_enrollment_does_not_prevent_full_checks(self):
         self.members.clear()
-        self.config["projects"]["example"]["adopted"] = False
+
         status, report = self.run_policy(
             "check", str(self.root), "--project", "example"
         )
@@ -220,45 +219,20 @@ class ProjectTests(ProjectTestCase):
         self.assertIn("allowed pin pair", " ".join(report["issues"]))
 
     def test_checks_report_enrollment_separately(self):
-        for adopted in [False, True]:
-            with self.subTest(adopted=adopted):
-                self.config["projects"]["example"]["adopted"] = adopted
+        for enrolled in [False, True]:
+            with self.subTest(enrolled=enrolled):
                 self.members.clear()
-                if adopted:
+                if enrolled:
                     self.members["example"] = "owner/example"
                 status, report = self.run_policy(
-                    "check", str(self.root), "--project", "example", "--readiness"
+                    "check", str(self.root), "--project", "example"
                 )
                 self.assertEqual(status, 0)
                 self.assertEqual(report["status"], "pass")
                 self.assertEqual(report["issues"], [])
                 self.assertEqual(
-                    report["enrollment"], "enrolled" if adopted else "not-enrolled"
+                    report["enrollment"], "enrolled" if enrolled else "not-enrolled"
                 )
-
-    def test_policy_versions_require_exact_release_tags_even_before_adoption(self):
-        for version in [
-            "main",
-            CHECKER,
-            "v0",
-            "v0.1",
-            "0.1.0",
-            "v00.1.0",
-            "v0.1.0-rc.1",
-            "v0.1.0+build",
-        ]:
-            self.config["projects"]["example"].update(
-                adopted=False, policyVersion=version
-            )
-            for args in [
-                ("validate",),
-                ("check", str(self.root), "--project", "example", "--readiness"),
-            ]:
-                with self.subTest(version=version, command=args[0]):
-                    status, report = self.run_policy(*args)
-                    self.assertEqual(status, 2)
-                    self.assertEqual(report["status"], "error")
-                    self.assertIn("release tags", report["error"])
 
     def test_pin_update_uses_current_records_without_changing_policy_version(self):
         command = ("check", str(self.root), "--project", "example")
@@ -332,19 +306,19 @@ class ProjectTests(ProjectTestCase):
         )
         for field in ["systems", "ci"]:
             self.assertEqual(config[field], requirements[field])
-            path = root / "policy/projects.json"
+            path = root / "policy/config.json"
             project_records = json.loads(path.read_text())
             project_records[field] = []
             path.write_text(json.dumps(project_records))
             with (
                 self.subTest(field=field),
-                self.assertRaisesRegex(ValueError, "belongs in the release"),
+                self.assertRaisesRegex(ValueError, "Policy configuration requires"),
             ):
                 records.load(root)
             del project_records[field]
             path.write_text(json.dumps(project_records))
 
-    def test_adopted_members_derive_checks_without_recording_mandatory_names(self):
+    def test_enrolled_members_derive_checks_without_recording_mandatory_names(self):
         self.assertEqual(self.run_policy("validate")[0], 0)
         status, report = self.run_policy(
             "check", str(self.root), "--project", "example"
@@ -465,8 +439,10 @@ class ProjectTests(ProjectTestCase):
     def test_current_release_requires_architectures_even_before_enrollment(self):
         del self.workflow["jobs"]["policy"]["with"]["required_architectures"]
         self.declare()
-        for adopted in [False, True]:
-            self.config["projects"]["example"]["adopted"] = adopted
+        for enrolled in [False, True]:
+            self.members.clear()
+            if enrolled:
+                self.members["example"] = "owner/example"
             status, report = self.run_policy("ci", "--project", "example")
             self.assertEqual(status, 2, report)
             self.assertIn("required_architectures", report["error"])
@@ -503,95 +479,11 @@ class ProjectTests(ProjectTestCase):
                 self.assertNotIn("matrix", report)
 
     def test_ci_plan_does_not_claim_pin_approval_or_adoption(self):
-        project = self.config["projects"]["example"]
-        project["adopted"] = False
+        self.members.clear()
         self.pins["approved"] = None
         status, report = self.run_policy("ci", "--project", "example")
         self.assertEqual(status, 0)
         self.assertEqual(report["status"], "planned")
-
-    def test_check_names_must_be_a_list_of_unique_nonempty_strings(self):
-        project = self.config["projects"]["example"]
-        for field in ["requiredChecks", "additionalRequiredChecks"]:
-            for invalid in [None, "Policy", {}, [None], [" "], ["Policy", "Policy"]]:
-                with self.subTest(field=field, checks=invalid):
-                    project[field] = invalid
-                    status, report = self.run_policy("validate")
-                    self.assertEqual(status, 2)
-                    self.assertIn(f"Invalid {field} names", report["error"])
-            del project[field]
-
-    def test_pending_members_can_prepare_callers_before_recording_merge_gates(self):
-        project = self.config["projects"]["example"]
-        project["adopted"] = False
-        status, report = self.run_policy(
-            "check", str(self.root), "--project", "example", "--readiness"
-        )
-        self.assertEqual(status, 0)
-        self.assertEqual(report["status"], "pass")
-        project["adopted"] = True
-        status, report = self.run_policy("validate")
-        self.assertEqual(status, 0, report)
-
-    def test_legacy_check_lists_must_match_generated_gates_including_additional_checks(
-        self,
-    ):
-        project = self.config["projects"]["example"]
-        project["policyVersion"] = "v0.3.0"
-        project["additionalRequiredChecks"] = ["Integration"]
-        checks = [*LEGACY_REQUIRED_CHECKS, "Integration"]
-        for recorded in [
-            [],
-            *([check for check in checks if check != missing] for missing in checks),
-            [*checks, "Stale gate"],
-        ]:
-            with self.subTest(recorded=recorded):
-                project["requiredChecks"] = recorded
-                status, report = self.run_policy("validate")
-                self.assertEqual(status, 2)
-                self.assertIn("must match the generated CI checks", report["error"])
-        project["requiredChecks"] = checks
-        self.assertEqual(self.run_policy("validate")[0], 0)
-        del project["requiredChecks"]
-        self.assertEqual(self.run_policy("validate")[0], 2)
-
-    def test_older_selected_checkers_need_lists_for_every_adopted_member(self):
-        project = self.config["projects"]["example"]
-        legacy = copy.deepcopy(project)
-        legacy.update(repository="owner/legacy", adopted=False)
-        self.config["projects"]["legacy"] = legacy
-        del project["requiredChecks"]
-        for version in ["v0.1.1", "v0.2.0"]:
-            with self.subTest(version=version):
-                legacy["policyVersion"] = version
-                status, report = self.run_policy("validate")
-                self.assertEqual(status, 2)
-                self.assertIn("needs legacy requiredChecks", report["error"])
-                project["requiredChecks"] = list(REQUIRED_CHECKS)
-                self.assertEqual(self.run_policy("validate")[0], 0)
-                del project["requiredChecks"]
-        legacy["policyVersion"] = RELEASE
-        self.assertEqual(self.run_policy("validate")[0], 2)
-
-    def test_legacy_members_still_require_recorded_names_and_cannot_use_additional_checks(
-        self,
-    ):
-        project = self.config["projects"]["example"]
-        del project["requiredChecks"]
-        for version in ["v0.1.1", "v0.2.0"]:
-            with self.subTest(version=version):
-                project["policyVersion"] = version
-                status, report = self.run_policy("validate")
-                self.assertEqual(status, 2)
-                self.assertIn("needs verified required check names", report["error"])
-                project["requiredChecks"] = list(REQUIRED_CHECKS)
-                self.assertEqual(self.run_policy("validate")[0], 0)
-                project["additionalRequiredChecks"] = ["Integration"]
-                status, report = self.run_policy("validate")
-                self.assertEqual(status, 2)
-                self.assertIn("needs policy v0.3.0 or later", report["error"])
-                del project["additionalRequiredChecks"]
-                del project["requiredChecks"]
 
     def test_additional_checks_cannot_replace_or_duplicate_mandatory_gates(self):
         self.declare(
@@ -653,8 +545,8 @@ class ProjectTests(ProjectTestCase):
                     [f"github: missing required check '{missing}'"],
                 )
 
-    def test_legacy_project_records_are_rejected(self):
-        self.config["schemaVersion"] = 1
+    def test_unknown_record_schema_is_rejected(self):
+        self.config["schemaVersion"] = 0
         status, report = self.run_policy("validate")
         self.assertEqual(status, 2)
         self.assertIn("Unsupported policy record schema", report["error"])
@@ -664,7 +556,7 @@ class ProjectTests(ProjectTestCase):
             f"{POLICY_REPO}/.github/workflows/check.yml@v9.0.0"
         )
         self.declare(policy_version="v9.0.0")
-        for options in [[], ["--readiness"]]:
+        for options in [[]]:
             with self.subTest(options=options):
                 status, report = self.run_policy(
                     "check", str(self.root), "--project", "example", *options
@@ -682,8 +574,7 @@ class ProjectTests(ProjectTestCase):
         self.assertEqual(report["projects"][0]["issues"], ["checkout missing"])
         github.assert_not_called()
 
-    def test_shell_probe_preserves_readiness_and_fails_on_probe_errors(self):
-        self.config["projects"]["example"]["adopted"] = False
+    def test_shell_probe_preserves_pre_enrollment_and_fails_on_probe_errors(self):
         for probe_error in [None, subprocess.CalledProcessError(1, "nix")]:
             with (
                 self.subTest(probe_error=probe_error),
@@ -697,7 +588,6 @@ class ProjectTests(ProjectTestCase):
                     str(self.root),
                     "--project",
                     "example",
-                    "--readiness",
                     "--shell",
                 )
                 self.assertEqual(status, 1 if probe_error else 0)
@@ -732,28 +622,19 @@ class ProjectTests(ProjectTestCase):
             code, report = self.run_policy("host-checks", str(self.root))
             self.assertEqual(code, 1, report)
 
-    def test_readiness_cannot_waive_missing_approval_or_policy_version(self):
-        self.config["projects"]["example"]["adopted"] = False
+    def test_pre_enrollment_cannot_waive_missing_approval_or_policy_version(self):
         self.pins["approved"] = None
         status, report = self.run_policy(
-            "check", str(self.root), "--project", "example", "--readiness"
+            "check", str(self.root), "--project", "example"
         )
         self.assertEqual(status, 1, report)
         self.pins["approved"] = PAIR
         del self.workflow["jobs"]["policy"]["with"]["policy_version"]
         self.declare()
         status, report = self.run_policy(
-            "check", str(self.root), "--project", "example", "--readiness"
+            "check", str(self.root), "--project", "example"
         )
         self.assertEqual(status, 2, report)
-
-    def test_legacy_adoption_does_not_change_audit_coverage(self):
-        self.config["projects"]["example"]["adopted"] = False
-        status, report = self.run_policy("audit", str(self.root.parent))
-        self.assertEqual(status, 0)
-        self.assertEqual(report["projects"][0]["status"], "pass")
-        self.assertEqual(report["projects"][0]["enrollment"], "enrolled")
-        self.assertEqual(report["projects"][0]["issues"], [])
 
     def test_registered_candidate_validation_is_not_approved_compliance(self):
         self.pins.update(
@@ -767,23 +648,24 @@ class ProjectTests(ProjectTestCase):
                 }
             ],
         )
-        for adopted in [True, False]:
+        for enrolled in [True, False]:
             for options in [[], ["--batch", "initial-candidate"]]:
                 with (
-                    self.subTest(adopted=adopted, options=options),
+                    self.subTest(enrolled=enrolled, options=options),
                     patch.object(
                         policy.subprocess,
                         "check_output",
                         side_effect=[SOURCE, "", SOURCE],
                     ),
                 ):
-                    self.config["projects"]["example"]["adopted"] = adopted
+                    self.members.clear()
+                    if enrolled:
+                        self.members["example"] = "owner/example"
                     status, report = self.run_policy(
                         "check",
                         str(self.root),
                         "--project",
                         "example",
-                        "--readiness",
                         *options,
                     )
                     self.assertEqual(status, 0)
@@ -854,10 +736,10 @@ class ProjectTests(ProjectTestCase):
                 )
 
     def test_github_audit_requires_member_credentials_only_for_enrolled_members(self):
-        for adopted in [True, False]:
-            with self.subTest(adopted=adopted):
+        for enrolled in [True, False]:
+            with self.subTest(enrolled=enrolled):
                 self.members.clear()
-                if adopted:
+                if enrolled:
                     self.members["example"] = "owner/example"
                 with (
                     patch.dict(os.environ, {}, clear=True),
@@ -870,8 +752,8 @@ class ProjectTests(ProjectTestCase):
                     status, report = self.run_policy(
                         "audit", str(self.root.parent), "--github"
                     )
-                self.assertEqual(status, 2 if adopted else 0)
-                if adopted:
+                self.assertEqual(status, 2 if enrolled else 0)
+                if enrolled:
                     self.assertIn("token", " ".join(report["projects"][0]["issues"]))
                 else:
                     self.assertEqual(report["projects"], [])
@@ -926,10 +808,7 @@ class ProjectTests(ProjectTestCase):
                     )
 
     def test_github_audit_combines_rulesets_and_classic_protection(self):
-        self.config["projects"]["example"]["additionalRequiredChecks"] = [
-            "Rules",
-            "Classic",
-        ]
+        self.declare(additional_required_checks='["Rules", "Classic"]')
         repository = "https://api.github.com/repos/owner/example"
         data = {
             repository: {
@@ -1245,10 +1124,7 @@ class ProjectTests(ProjectTestCase):
         )
 
     def test_trailing_slash_git_sources_retain_policy_pin_and_dependency_checks(self):
-        self.config["projects"]["other"] = {
-            **self.config["projects"]["example"],
-            "repository": "owner/other",
-        }
+        self.members["other"] = "owner/other"
         for repository in [POLICY_REPO, "NixOS/nixpkgs", "owner/other"]:
             with self.subTest(repository=repository):
                 lock = lockfile()
@@ -1283,7 +1159,7 @@ class ProjectTests(ProjectTestCase):
             )
         )
 
-    def test_unenrolled_legacy_projects_do_not_enter_audit_scope(self):
+    def test_unenrolled_projects_do_not_enter_audit_scope(self):
         self.members.clear()
         code, report = self.run_policy("audit", str(self.root))
         self.assertEqual(code, 0, report)
@@ -1433,7 +1309,6 @@ class ProjectTests(ProjectTestCase):
 
 class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
     def test_unenrolled_compatibility_uses_member_settings_and_approved_pins(self):
-        self.config["projects"] = {}
         self.members.clear()
         code, report = self.compatibility()
         self.assertEqual(code, 0, report)
@@ -1767,8 +1642,8 @@ class RecordTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "policy").mkdir()
-            (root / "policy/projects.json").write_text(
-                (source / "policy/projects.json").read_text()
+            (root / "policy/config.json").write_text(
+                (source / "policy/config.json").read_text()
             )
             (root / "policy/members.json").write_text(
                 (source / "policy/members.json").read_text()
@@ -1791,8 +1666,8 @@ class RecordTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "policy").mkdir()
-            (root / "policy/projects.json").write_text(
-                (source / "policy/projects.json").read_text()
+            (root / "policy/config.json").write_text(
+                (source / "policy/config.json").read_text()
             )
             (root / "policy/members.json").write_text(
                 (source / "policy/members.json").read_text()
@@ -1926,20 +1801,12 @@ class WorkflowTests(unittest.TestCase):
                 ["unsupported"],
             ]:
                 with self.subTest(architectures=architectures):
-                    (records / "projects.json").write_text(
+                    (records / "config.json").write_text(
                         json.dumps(
                             {
-                                "schemaVersion": 2,
+                                "schemaVersion": 1,
                                 "policyRepository": POLICY_REPO,
-                                "projects": {
-                                    "example": {
-                                        "repository": "owner/example",
-                                        "policyVersion": RELEASE,
-                                        "adopted": False,
-                                        "vmTargets": [],
-                                        "requiredArchitectures": ["x86_64-linux"],
-                                    }
-                                },
+                                "stableBranch": "nixos-26.05",
                             }
                         )
                     )

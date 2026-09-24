@@ -435,53 +435,13 @@ class AgreementTests(ProjectTestCase):
         del lock["nodes"]["alpha"]["locked"]["dir"]
         self.assertEqual(self.agreement(lock)[0], 1)
 
-    def test_legacy_only_identity_is_not_implicitly_enrolled(self):
-        self.config["projects"]["alpha"] = {
-            **copy.deepcopy(self.config["projects"]["example"]),
-            "repository": "owner/alpha",
-        }
+    def test_removed_identity_is_not_implicitly_enrolled(self):
         del self.members["alpha"]
         lock = self.locked_set()
         lock["nodes"]["alpha"]["locked"]["rev"] = "0" * 40
         code, report = self.agreement(lock)
         self.assertEqual(code, 0, report)
         self.assertEqual([member["project"] for member in report["members"]], ["beta"])
-
-    def test_historical_alias_uses_its_locked_source_and_enrolled_identity(self):
-        self.members["nixos-nftzones"] = "petohorvath/nixos-nftzones"
-        root = self.repositories["alpha"]
-        caller = root / ".github/workflows/policy.yml"
-        workflow = json.loads(caller.read_text())
-        workflow["jobs"]["policy"]["with"]["project"] = "nixos-nftzones"
-        caller.write_text(json.dumps(workflow))
-        revision = commit(root)
-        git(
-            self.root,
-            "config",
-            "--global",
-            f"url.{root.as_uri()}.insteadOf",
-            "https://github.com/petohorvath/nix-nftzones.git",
-        )
-        lock = self.locked_set()
-        lock["nodes"]["alpha"] = {
-            "locked": {
-                "type": "github",
-                "owner": "petohorvath",
-                "repo": "nix-nftzones",
-                "rev": revision,
-            }
-        }
-        code, report = self.agreement(lock)
-        self.assertEqual(code, 0, report)
-        member = next(
-            member
-            for member in report["members"]
-            if member["project"] == "nixos-nftzones"
-        )
-        self.assertEqual(member["repository"], "petohorvath/nixos-nftzones")
-        self.assertEqual(
-            member["source"]["url"], "https://github.com/petohorvath/nix-nftzones.git"
-        )
 
     def test_required_agreement_gate_needs_matching_unconditional_caller(self):
         original = copy.deepcopy(self.workflow["jobs"]["integration"])

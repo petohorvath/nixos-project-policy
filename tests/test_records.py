@@ -12,33 +12,36 @@ from tests.fixtures.cli import invoke
 from tools import records
 
 
-# Captured before consolidation; shared producer/oracle code must not redefine these.
-FULL_DIGEST = "c246bef03b01ea6c2355302a3572820e4518f9f47457a2802aaf66b969acdbc8"
-LEGACY_DIGEST = "4bccfa1a9a36c0a5c153e253190c0abc28a7bb5f296b90a2899a983a0a2fcb90"
+# Fixed current-record digest, independent of the producer under test.
+FULL_DIGEST = "10979ea2f825aafc0e56686e19a990ef40e98dc839212f93137dba5bd62d68f5"
 
 
 class RecordTests(unittest.TestCase):
+    def test_batch_history_survives_roster_removal(self):
+        pins = self.documents["pins.json"]
+        pins["batches"] = [
+            {
+                "id": "completed",
+                "status": "complete",
+                "pins": pins["approved"],
+                "projects": {"removed-member": "3" * 40},
+            }
+        ]
+        (self.root / "policy/pins.json").write_text(json.dumps(pins))
+        config, loaded = records.load(self.root)
+        self.assertNotIn("removed-member", config["_members"])
+        self.assertEqual(loaded, pins)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.workspace = Path(temporary.name)
         self.root = self.workspace / "source"
         self.documents = {
-            "projects.json": {
-                "schemaVersion": 2,
+            "config.json": {
+                "schemaVersion": 1,
                 "policyRepository": "owner/policy",
                 "stableBranch": "nixos-26.05",
-                "description": "Policy café",
-                "projects": {
-                    "legacy": {
-                        "repository": "owner/legacy",
-                        "adopted": True,
-                        "policyVersion": "v0.1.1",
-                        "vmTargets": ["vm-test"],
-                        "requiredArchitectures": ["x86_64-linux"],
-                        "requiredChecks": ["Legacy / check"],
-                    }
-                },
             },
             "pins.json": {
                 "schemaVersion": 1,
@@ -47,7 +50,7 @@ class RecordTests(unittest.TestCase):
             },
             "members.json": {
                 "schemaVersion": 1,
-                "members": {"legacy": "owner/legacy"},
+                "members": {"member": "owner/member"},
             },
             "support.json": {"schemaVersion": 1, "retirements": {}},
         }
@@ -81,18 +84,6 @@ class RecordTests(unittest.TestCase):
                 text=True,
             )
 
-    def test_existing_full_and_legacy_digest_values_are_preserved(self):
-        config, pins = records.load(self.root)
-        self.assertEqual(records.digest(config, pins), FULL_DIGEST)
-        self.assertEqual(records.digest(config, pins, legacy=True), LEGACY_DIGEST)
-        self.assertEqual(
-            records.digest(self.documents["projects.json"], pins, legacy=True),
-            LEGACY_DIGEST,
-        )
-        config.update(systems=[], requiredTools=[], readmeSections=[], ci={})
-        self.assertEqual(records.digest(config, pins), FULL_DIGEST)
-        self.assertEqual(records.digest(config, pins, legacy=True), LEGACY_DIGEST)
-
     def test_written_records_preserve_the_complete_surface_and_inputs(self):
         config, pins = records.load(self.root)
         before = copy.deepcopy((config, pins))
@@ -116,7 +107,6 @@ class RecordTests(unittest.TestCase):
         )
         self.assertEqual((captured_config, captured_pins), before)
         self.assertEqual(identity["digest"], FULL_DIGEST)
-        self.assertEqual(identity["legacyDigest"], LEGACY_DIGEST)
 
     def test_proposal_capture_rejects_indirection_and_missing_committed_records(self):
         for case in ["committed-symlink", "directory-symlink", "missing-record"]:

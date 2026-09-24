@@ -11,7 +11,13 @@ Current records live on `main`. Use one trusted snapshot for each operation.
 | [members.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/members.json) | Enrolled repository identities                |
 | [pins.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/pins.json)       | Approved shared pins and stable update branch |
 
-The selected release supplies the rules, checker code, repository identity, and CI [requirements](../policy/requirements.json). Each v0.4.0 member selects its release and settings in its policy caller. See [record formats](checker.md#member-declarations-and-central-records) for fields and validation rules. Keep approval and test evidence in PRs and CI results.
+The selected release supplies the rules, checker code, repository identity, and CI [requirements](../policy/requirements.json). Each member selects a supported release and its settings in its policy caller. See [record formats](checker.md#member-declarations-and-central-records) for fields and validation rules. Keep approval and test evidence in PRs and CI results.
+
+Run member commands with that selected checker and an explicit trusted record checkout. In the commands below, `./checker` is a checkout of the member's exact published release and `./records` contains the current central records. The checker and record checkouts can be at different revisions:
+
+```bash
+nix run --no-update-lock-file ./checker -- --policy-root ./records COMMAND
+```
 
 ## Pin candidates and approval
 
@@ -19,7 +25,7 @@ A pin update changes the approved pair through an ordinary central PR. Member co
 
 1. Select the weekly candidate artifact or prepare an urgent pair.
 2. Change `approved.stable` and `approved.unstable` in `policy/pins.json`. Keep enrollment and checker changes separate.
-3. Use each enrolled member's selected published checker against the proposed record checkout. Run both compatibility channels on its required architectures, committed-lock checks, and applicable VM and additional gates. For integration projects, include agreement and behavioral checks at their locked dependency revisions.
+3. Use each enrolled member's selected published checker against the proposed record checkout. Run both compatibility revisions on its required architectures, committed-lock checks, and applicable VM and additional gates. For integration projects, include agreement and behavioral checks at their locked dependency revisions.
 4. Retain exact tested source, checker, and record revisions with the results in the PR or CI artifacts. Resolve required member fixes through their own reviewed PRs, then renew affected checks.
 5. Obtain human approval and merge the central PR. Subsequent member CI runs capture the new pair from `main`.
 
@@ -39,7 +45,9 @@ Repeat on every required architecture and run the remaining member gates. These 
 
 ### Candidate preparation
 
-The [Prepare pin update workflow](../.github/workflows/pins.yml) produces an unapproved artifact weekly or on manual dispatch. The [Member audit workflow](../.github/workflows/audit.yml) runs daily or independently on manual dispatch. Urgent manual preparation accepts both `stable_revision` and `unstable_revision` as exact commits. Supplying only one fails. With neither input, it resolves the configured stable and unstable branches once.
+The [Prepare pin update workflow](../.github/workflows/pins.yml) produces `candidate.json` in the `pin-proposal` artifact weekly or on manual dispatch. Urgent manual preparation accepts both `stable_revision` and `unstable_revision` as exact commits. Supplying only one fails. With neither input, it resolves `stableBranch` from `policy/pins.json` and the `nixos-unstable` branch once. Preparation does not run member compatibility checks; retain those results separately before approval.
+
+The [Member audit workflow](../.github/workflows/audit.yml) runs daily or independently on manual dispatch. It uploads `audit.json` as the `drift-audit` artifact, including after a failed audit. Audits inspect selected releases and enforcement; they do not rerun member CI.
 
 Preparation creates no PR. Automation that creates member PRs requires a separately reviewed write identity and tests for targeted lock updates.
 
@@ -92,9 +100,9 @@ A repair that changes either nixpkgs revision creates a revised candidate. Rerun
 1. Select the member migration explicitly.
 2. Prepare its shell, tools, formatter, documentation, dependency selection, and checks. Preserve public contracts and specialized host requirements.
 3. Use the selected release's caller template. Match its release reference, `policy_version`, and documentation links. Declare [member settings](checker.md#member-declarations-and-central-records) in the caller.
-4. Run `nix run .# -- --policy-root . check PATH --project NAME --shell` from a trusted current records checkout.
-5. Run committed-lock checks, both compatibility revisions on every required architecture, and applicable VM suites.
-6. Run `ci PATH --project NAME` with the selected checker. Compare the generated names with actual PR statuses and merge gates. Verify audit access.
+4. Run `nix run --no-update-lock-file ./checker -- --policy-root ./records check PATH --project NAME --shell` with the member's selected checker and current trusted records.
+5. Run committed-lock checks, both compatibility revisions on every required architecture, and applicable VM suites on the selected `vm_architecture` (default `x86_64-linux`).
+6. Run `ci PATH --project NAME` with the same checker and records prefix. Compare the generated names with actual PR statuses and merge gates. Verify audit access.
 7. Retain the evidence on the member PR. Add the repository identity to `policy/members.json` through a reviewed central PR after verification.
 
 Drafts can prepare an unpublished release. Hosted checks require publication before activation. Checks before enrollment do not change membership or pin approval.
@@ -103,7 +111,13 @@ Removal also requires a reviewed central PR. Keep enrollment plans in issues. Or
 
 Enroll new identities in `policy/members.json`; ordinary member changes do not update the roster or pin records.
 
-Run `audit WORKSPACE --fetch --github` for all enrolled identities. Retain its JSON report. See [audit behavior](checker.md#enrollment-audits) for release discovery and inspection failures.
+Run an audit from a trusted current policy checkout for all enrolled identities:
+
+```bash
+nix run --no-update-lock-file .# -- --policy-root . audit WORKSPACE --fetch --github
+```
+
+The dispatcher discovers each member's selected release. Retain its JSON report. See [audit behavior](checker.md#enrollment-audits) for release discovery and inspection failures.
 
 ## Releases
 
@@ -128,10 +142,10 @@ Creating or enrolling an integration project requires a separate decision. Keep 
 1. Adopt the [integration caller template](../templates/integration-caller.yml) after release publication.
 2. Declare `Integration / Policy agreement` as an additional required check.
 3. Keep both callers on the same release. Preserve the template's source and record output bindings.
-4. Run `ci PATH --project NAME` to inspect required gates.
-5. Run `agreement PATH --project NAME` with the selected checker and trusted records.
+4. Run `ci PATH --project NAME` with the selected checker and records prefix to inspect required gates.
+5. Run `agreement PATH --project NAME` with the same prefix against a clean committed integration checkout.
 6. Verify the actual GitHub status. Review merge-setting changes separately.
 
 Upgrade the integration selection and its complete matching dependency set together. Member branches can upgrade independently while the integration lock retains older supported revisions. Review reported lock scopes, source revisions, and selections.
 
-Policy agreement does not prove functional compatibility. Preserve committed-lock tests, both compatibility revisions on each required architecture, and applicable VM tests. See the [agreement contract](checker.md#integration-policy-agreement).
+Policy agreement does not prove functional compatibility. Preserve committed-lock tests, both compatibility revisions on each required architecture, and applicable VM tests on the selected VM system. See the [agreement contract](checker.md#integration-policy-agreement).

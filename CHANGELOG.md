@@ -1,10 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - Allow members to select a Linux VM execution system with `vm_architecture`. Derive its worker and required status together; preserve x86_64 Linux as the default. Other VM systems require matching self-hosted runners with KVM. Members opting in must update their required VM status after selecting a release that includes this input.
-
-## 0.4.0
 
 - Separate daily member audits and weekly pin preparation into independently dispatched workflows. Consolidate CI host tests and cancel superseded PR CI runs.
 
@@ -29,6 +27,19 @@
 - Check integration policy agreement at exact committed member dependency revisions, including reachable transitive members, follows, aliases, and independent lock scopes. Preserve behavioral integration tests and reject mixed selections, cycles, missing declarations, and unavailable sources.
 - Provide the separate `Integration / Policy agreement` gate and caller template with primary Policy source/record snapshot outputs. Keep member upgrades independent of the integration project's locked set.
 - Match central PR runs and artifacts to the proposal commit. Verify the trusted workflow revision separately through `GITHUB_WORKFLOW_SHA`.
+
+### Migration from v0.3.0 and earlier
+
+This release breaks compatibility with earlier policy contracts. Releases below v0.4.0 are unsupported; current records and tools no longer provide adapters for them.
+
+- After publication, replace the member caller with [the policy caller template](templates/policy-caller.yml). Set both the reusable workflow reference and `policy_version` to `v0.4.0`, retain the literal project identity, and update policy documentation links to the same release.
+- Move required architectures, VM targets, and additional required checks from central records into the caller's `required_architectures`, `vm_targets`, and `additional_required_checks` inputs. Encode each list as a literal JSON string. Preserve existing coverage; optional lists default to empty. `vm_architecture` defaults to `x86_64-linux`; other Linux VM systems require matching self-hosted runners with KVM.
+- Run the selected checker's `ci` command with an explicit trusted `--policy-root` checkout and use its generated status names when updating merge gates. Retain member-owned formatting and lint checks after removing the policy-owned formatting/lint gate and `lint` command.
+- Provide an explicit default development shell and nonempty host checks under the committed lock. Validate committed-lock checks, both shared-pin compatibility channels on every required architecture, and applicable VM and additional gates before completing the upgrade.
+- Use current identity-only enrollment and pin records. Replace retired batch, readiness, cleanup, and old-release commands with the procedures in [maintenance](docs/maintenance.md); retain pin approval evidence in reviewed PRs and CI artifacts.
+- Integration projects must upgrade their policy selection and complete consumed member dependency set together. Use [the integration caller template](templates/integration-caller.yml), preserve its source and record snapshot bindings, and require `Integration / Policy agreement` alongside behavioral integration tests.
+
+Member upgrades, enrollment, and live merge-setting changes require separate reviewed decisions. Publishing this release does not perform those migrations.
 
 ## Historical releases (unsupported)
 

@@ -182,6 +182,7 @@ class DeclarationTests(ProjectTestCase):
         inputs = {
             **self.workflow["jobs"]["policy"]["with"],
             "vm_targets": "[]",
+            "vm_architecture": "x86_64-linux",
             "additional_required_checks": "[]",
         }
         code, hosted = self.run_policy(
@@ -230,6 +231,18 @@ class DeclarationTests(ProjectTestCase):
                 '["duplicate", "duplicate"]',
                 "${{ inputs.targets }}",
                 '["${{ github.sha }}"]',
+            ]
+        ]
+        cases += [
+            ("vm_architecture", value)
+            for value in [
+                "",
+                "aarch64-darwin",
+                "../linux",
+                "linux",
+                '["aarch64-linux"]',
+                "${{ inputs.arch }}",
+                None,
             ]
         ]
         cases += [
@@ -332,3 +345,42 @@ class DeclarationTests(ProjectTestCase):
             self.assertEqual(
                 self.run_policy("vm", str(self.root), "--project", "example")[0], 2
             )
+
+    def test_vm_architecture_controls_worker_gate_and_report(self):
+        for system in ["aarch64-linux", "riscv64-linux"]:
+            with self.subTest(system=system):
+                self.declare(
+                    required_architectures=json.dumps([system]),
+                    vm_architecture=system,
+                    vm_targets='["vm-tests"]',
+                )
+                code, plan = self.run_policy("ci", "--project", "example")
+                self.assertEqual(code, 0, plan)
+                self.assertEqual(
+                    plan["vmJob"],
+                    {
+                        "check": f"VM tests ({system})",
+                        "system": system,
+                        "runner": ["self-hosted", system],
+                    },
+                )
+                self.assertIn(f"Policy / VM tests ({system})", plan["requiredChecks"])
+                self.assertFalse(
+                    any("x86_64" in check for check in plan["requiredChecks"])
+                )
+                self.assertEqual(plan["memberSettings"]["vmArchitecture"], system)
+                inputs = {
+                    **self.workflow["jobs"]["policy"]["with"],
+                    "vm_architecture": "x86_64-linux",
+                }
+                code, report = self.run_policy(
+                    "ci", "--project", "example", "--inputs-json", json.dumps(inputs)
+                )
+                self.assertEqual(code, 2, report)
+                self.assertIn("disagree", report["error"])
+                self.declare(vm_targets="[]")
+                code, plan = self.run_policy("ci", "--project", "example")
+                self.assertEqual(code, 0, plan)
+                self.assertFalse(
+                    any("VM tests" in check for check in plan["requiredChecks"])
+                )

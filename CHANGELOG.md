@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Allow members to select a Linux VM execution system with `vm_architecture`. Derive its worker and required status together; preserve x86_64 Linux as the default. Other VM systems require matching self-hosted runners with KVM. Members opting in must update their required VM status after selecting a release that includes this input.
+
 ## 0.4.0
 
 - Separate daily member audits and weekly pin preparation into independently dispatched workflows. Consolidate CI host tests and cancel superseded PR CI runs.

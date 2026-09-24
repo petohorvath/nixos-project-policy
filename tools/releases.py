@@ -153,7 +153,8 @@ def check_member(
         or any(not records.PROJECT.fullmatch(name) for name in report["dependencies"])
         or not report.get("requiredChecks")
         or not declarations.valid_check_names(report["requiredChecks"])
-        or (report.get("memberSettings") != settings)
+        or not isinstance(report.get("memberSettings"), dict)
+        or ({"vmArchitecture": "x86_64-linux", **report["memberSettings"]} != settings)
     ):
         raise ValueError(
             "Released checker returned an incompatible report or substituted identity"

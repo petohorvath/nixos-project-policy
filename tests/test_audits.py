@@ -53,6 +53,40 @@ class AuditTests(AuditFixture, ProjectTestCase):
         self.assertEqual(report["projects"][0]["policyVersion"], RELEASE)
         self.assertEqual(report["projects"][0]["enrollment"], "enrolled")
 
+    def test_vm_architecture_is_bound_to_the_audited_declaration(self):
+        self.declare(
+            required_architectures='["aarch64-linux"]',
+            vm_architecture="aarch64-linux",
+            vm_targets='["vm-tests"]',
+        )
+        code, report = self.audit()
+        self.assertEqual(code, 0, report)
+        member = report["projects"][0]
+        self.assertEqual(member["memberSettings"]["vmArchitecture"], "aarch64-linux")
+        self.assertIn("Policy / VM tests (aarch64-linux)", member["requiredChecks"])
+
+        def changed(command, **kwargs):
+            process = checked_process(command, **kwargs)
+            result = json.loads(process.stdout)
+            result["memberSettings"].pop("vmArchitecture")
+            return subprocess.CompletedProcess(command, 0, json.dumps(result), "")
+
+        self.process = changed
+        code, report = self.audit()
+        self.assertEqual(code, 2, report)
+        self.assertIn("incompatible report", " ".join(report["projects"][0]["issues"]))
+
+    def test_audit_accepts_older_reports_with_implicit_x86_vm_architecture(self):
+        def older(command, **kwargs):
+            process = checked_process(command, **kwargs)
+            result = json.loads(process.stdout)
+            result["memberSettings"].pop("vmArchitecture")
+            return subprocess.CompletedProcess(command, 0, json.dumps(result), "")
+
+        self.process = older
+        code, report = self.audit()
+        self.assertEqual(code, 0, report)
+
     def test_missing_or_disabled_caller_stays_enrolled(self):
         original = copy.deepcopy(self.workflow)
         for change in [

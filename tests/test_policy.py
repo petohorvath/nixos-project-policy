@@ -1490,8 +1490,18 @@ class WorkflowTests(unittest.TestCase):
             requirements["ci"]["requiredChecks"],
             [REQUIRED_CHECKS[0]],
         )
-        self.assertEqual(f"{caller['name']} / {jobs['vm']['name']}", VM_CHECK)
-        self.assertEqual(requirements["ci"]["vmCheck"], VM_CHECK)
+        self.assertEqual(
+            jobs["vm"]["name"], "${{ fromJSON(needs.records.outputs.vm_job).check }}"
+        )
+        self.assertEqual(
+            jobs["vm"]["runs-on"],
+            "${{ fromJSON(needs.records.outputs.vm_job).runner }}",
+        )
+        self.assertEqual(f"{caller['name']} / {plan['vmJob']['check']}", VM_CHECK)
+        self.assertEqual(plan["vmJob"]["runner"], "ubuntu-24.04")
+        self.assertEqual(
+            requirements["ci"]["vmCheck"].format(architecture="x86_64-linux"), VM_CHECK
+        )
 
     def test_check_categories_run_independently_on_both_linux_architectures(self):
         workflow = yaml.load(
@@ -1532,6 +1542,12 @@ class WorkflowTests(unittest.TestCase):
         )
         records_job = workflow["jobs"]["records"]
         self.assertNotIn("strategy", records_job)
+        self.assertEqual(
+            records_job["outputs"]["vm_required"], "${{ steps.ci.outputs.vm_required }}"
+        )
+        self.assertEqual(
+            workflow["jobs"]["vm"]["if"], "needs.records.outputs.vm_required == 'true'"
+        )
         step = next(step for step in records_job["steps"] if step.get("id") == "ci")
         self.assertEqual(step["env"]["PROJECT"], "${{ inputs.project }}")
         self.assertIn("--no-update-lock-file ./policy", step["run"])
@@ -1560,14 +1576,15 @@ class WorkflowTests(unittest.TestCase):
             )
             stub.chmod(0o755)
             output = root / "output"
-            for architectures in [
-                ["x86_64-linux"],
-                ["aarch64-linux"],
-                ["x86_64-linux", "aarch64-linux"],
-                [],
-                ["unsupported"],
+            for architectures, targets in [
+                (["x86_64-linux"], []),
+                (["aarch64-linux"], []),
+                (["aarch64-linux"], ["vm-tests"]),
+                (["x86_64-linux", "aarch64-linux"], []),
+                ([], []),
+                (["unsupported"], []),
             ]:
-                with self.subTest(architectures=architectures):
+                with self.subTest(architectures=architectures, targets=targets):
                     caller = yaml.load(
                         (
                             policy.SOURCE_ROOT / "templates/policy-caller.yml"
@@ -1580,6 +1597,8 @@ class WorkflowTests(unittest.TestCase):
                         "project": "example",
                         "policy_version": RELEASE,
                         "required_architectures": json.dumps(architectures),
+                        "vm_architecture": "aarch64-linux",
+                        "vm_targets": json.dumps(targets),
                     }
                     member = root / "project/.github/workflows"
                     member.mkdir(parents=True, exist_ok=True)
@@ -1595,7 +1614,6 @@ class WorkflowTests(unittest.TestCase):
                             "WORKFLOW_INPUTS": json.dumps(
                                 {
                                     **job["with"],
-                                    "vm_targets": "[]",
                                     "additional_required_checks": "[]",
                                 }
                             ),
@@ -1613,6 +1631,13 @@ class WorkflowTests(unittest.TestCase):
                         outputs = dict(
                             line.split("=", 1)
                             for line in output.read_text().splitlines()
+                        )
+                        self.assertEqual(
+                            outputs["vm_required"], "true" if targets else "false"
+                        )
+                        self.assertEqual(
+                            json.loads(outputs["vm_job"])["runner"],
+                            ["self-hosted", "aarch64-linux"],
                         )
                         matrix = json.loads(outputs["matrix"])
                         compatibility_matrix = json.loads(

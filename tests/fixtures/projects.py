@@ -47,7 +47,13 @@ class ProjectFixture:
         self.write("flake.nix", "{}")
         self.write(".envrc", "use flake\n")
         self.write("LICENSE", "MIT")
-        self.write("README.md", "Example project.\n")
+        # Transition fixtures also run immutable checkers that require these headings.
+        self.write(
+            "README.md",
+            "# Example\n\nPurpose.\n\n"
+            "## Support\n\n## Quickstart\n\n## Development\n\n"
+            "## Contributing\n\n## Documentation\n",
+        )
         for file in ["CONTRIBUTING.md", "AGENTS.md"]:
             self.write(
                 file,

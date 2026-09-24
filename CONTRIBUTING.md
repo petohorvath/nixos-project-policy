@@ -5,7 +5,7 @@ Follow [POLICY.md](POLICY.md) for shared requirements. See [development](docs/de
 1. Make changes on a branch.
 2. Add behavioral tests for checker changes. Include invalid records, unsupported inputs, and transition states where applicable.
 3. Run `nix fmt` and `nix flake check`.
-4. Open a PR with a Conventional Commit title. Describe the change, test results, validation limits, and compatibility effects.
+4. Open a PR. Describe the change, test results, validation limits, and compatibility effects.
 5. Squash merge after required checks pass and a human approves the merge.
 
 For a new requirement, document its scope, exceptions, automatic checks, and review criteria. Follow [maintenance](docs/maintenance.md) to prepare affected projects. Changes here do not authorize member migrations.

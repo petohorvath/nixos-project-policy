@@ -16,6 +16,46 @@ from tools import policy
 
 
 class DeclarationTests(ProjectTestCase):
+    def test_any_named_system_can_be_selected_and_planned(self):
+        for systems in [
+            ["riscv64-linux"],
+            ["aarch64-darwin"],
+            ["x86_64-linux", "riscv64-linux"],
+        ]:
+            with self.subTest(systems=systems):
+                self.declare(required_architectures=json.dumps(systems))
+                code, report = self.run_policy(
+                    "check", str(self.root), "--project", "example"
+                )
+                self.assertEqual(code, 0, report)
+                code, report = self.run_policy("ci", "--project", "example")
+                self.assertEqual(code, 0, report)
+                self.assertEqual(
+                    report["memberSettings"]["requiredArchitectures"], systems
+                )
+                jobs = (
+                    report["matrix"]["include"]
+                    + report["compatibilityMatrix"]["include"]
+                )
+                self.assertEqual(len(jobs), 5 * len(systems))
+                self.assertEqual({job["system"] for job in jobs}, set(systems))
+                for job in jobs:
+                    runner = (
+                        "ubuntu-24.04"
+                        if job["system"] == "x86_64-linux"
+                        else ["self-hosted", job["system"]]
+                    )
+                    self.assertEqual(job["runner"], runner)
+                for system in systems:
+                    self.assertIn(
+                        f"Policy / Project tests ({system})", report["requiredChecks"]
+                    )
+                    for channel in ["stable", "unstable"]:
+                        self.assertIn(
+                            f"Policy / Compatibility ({channel}, {system})",
+                            report["requiredChecks"],
+                        )
+
     def test_actual_vm_workflow_step_uses_defaults_targets_and_failure_status(self):
         workflow = yaml.load(
             (policy.SOURCE_ROOT / ".github/workflows/check.yml").read_text(),
@@ -162,7 +202,7 @@ class DeclarationTests(ProjectTestCase):
                 "[null]",
                 '[""]',
                 '["x86_64-linux", "x86_64-linux"]',
-                '["aarch64-darwin"]',
+                '["../darwin"]',
                 ["x86_64-linux"],
                 "${{ inputs.architectures }}",
             ]

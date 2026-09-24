@@ -12,13 +12,13 @@ The rules for tools, pins, entrypoints, lint, and CI apply to enrolled projects 
 
 Provide a default `devShells` output in root `flake.nix`, with root `.envrc` activation. Document host Nix, enabled flake commands, direnv with flake support, and shell integration. The flake integration may come from direnv itself or nix-direnv. After those prerequisites, `direnv allow` must provide the normal development environment. Keep specialized host requirements explicit; installing packages cannot supply KVM or namespace permissions.
 
-Support development on `x86_64-linux` and `aarch64-linux`. Preserve existing Darwin outputs as best effort and document their lack of required CI coverage. Runtime support remains part of each project's public contract.
+Each member chooses its development platforms and declares at least one system for required CI. Runtime support remains part of each project's public contract.
 
 Keep an easy-to-find `systems` binding in root `flake.nix`. Declare the applicable top-level outputs explicitly there, including `devShells`, `formatter`, `checks`, `packages`, and library or module outputs that the project provides. Local helpers may implement them, but must not hide the flake interface behind an imported aggregate. Do not add empty outputs or artificial packages solely to populate namespaces.
 
-The default shell supplies Nix CLI, nil, nixfmt, statix, deadnix, the applicable formatters, and project-specific tools. Common tools, the shell, and the formatter come from the member's selected root nixpkgs revision. Document technical replacements, including Shields' matched Nix/plugin wrapper. The effective executable and its compatibility matter when a wrapper replaces a stock tool.
+The default development shell must start successfully and execute a command. Each project chooses its development tools. The shell and formatter come from the member's selected root nixpkgs revision. Document technical replacements, including Shields' matched Nix/plugin wrapper. The effective executable and its compatibility matter when a wrapper replaces a stock tool.
 
-Include language-specific tools only for first-party code that needs them. For example, Ruff belongs in projects with Python sources. Remove obsolete tools and formatter configuration when their sources are removed.
+Keep the development tools and formatter configuration suited to the project's sources.
 
 Root `nix fmt` formats applicable first-party Nix, Go, shell, Markdown, YAML, and JSON files. Include `.envrc` and applicable extensionless scripts. Projects own their formatter configuration; retain useful project-specific conventions and explicit formatter ordering. Exclude vendor/generated files, lockfiles, and fixtures whose exact serialized text is part of a test. Preserve existing Markdown wrapping during focused edits and use one source line per paragraph in new prose files.
 
@@ -52,11 +52,11 @@ Benchmarks are optional and require a concrete project need; policy adoption doe
 
 Fix real statix and deadnix findings before requiring their gates. Narrow, documented suppressions may cover intentional code or false positives. Broad disabling is not compliance.
 
-Root `nix flake check` runs applicable non-VM checks for the host platform. Provide nonempty host checks under the committed lock as well as under the shared compatibility pins. Keep VM execution and its build dependencies outside default checks. Provide explicit VM commands where applicable. Each member declares `required_architectures` in its policy caller as a nonempty subset of the policy release's supported Linux systems. Required CI covers formatting/lint and relevant evaluation/unit/integration checks on every recorded architecture, with pinned stable and unstable compatibility where relevant. Applicable VM suites gate merges on x86_64 Linux independently of that selection. Documentation-only PRs may use relevant documentation, formatting, and policy checks.
+Root `nix flake check` runs applicable non-VM checks for the host platform. Provide nonempty host checks under the committed lock as well as under the shared compatibility pins. Keep VM execution and its build dependencies outside default checks. Provide explicit VM commands where applicable. Each member declares at least one Nix system in its `required_architectures` policy caller input. Required CI covers formatting/lint and relevant evaluation/unit/integration checks on every recorded architecture, with pinned stable and unstable compatibility where relevant. Applicable VM suites gate merges on x86_64 Linux independently of that selection. Documentation-only PRs may use relevant documentation, formatting, and policy checks.
 
 ## Documentation and agent guidance
 
-Start the README with the project's purpose. Include support/status, quickstart, and links to development, contribution, and detailed documentation. The initial checker uses `Support`, `Quickstart`, `Development`, `Contributing`, and `Documentation` headings. Detailed guides and reference material follow the project's needs. Create glossaries and ADRs when meaningful terminology or architectural decisions need recording.
+Provide a root `README.md`. Its content and organization belong to the project. Detailed guides and reference material follow the project's needs. Create glossaries and ADRs when meaningful terminology or architectural decisions need recording.
 
 Write direct explanations with clear subjects, useful examples, and concise paragraphs. Tag fenced code blocks with their language. Keep project instructions accurate and agent guidance concise, pointing to authoritative rules when needed. A contributor must not need this maintainer's global skills or workstation paths to understand the policy.
 
@@ -64,7 +64,7 @@ Keep documentation focused on current usage, design, structure, and architectura
 
 ## Changes, releases, and licenses
 
-Use PRs for all changes. Main receives one Conventional Commit per PR through squash merge; use the PR title as the squash subject and mark breaking changes explicitly. Intermediate branch commits may be edited before merge. Additional title casing and length limits are not mandatory gates.
+Use PRs for all changes. Main receives one Conventional Commit per PR through squash merge; mark breaking changes explicitly. Intermediate branch commits may be edited before merge.
 
 A human must approve every merge initially. The maintainer may self-merge after required checks; a second human reviewer is not required. Agents do not acquire merge authority from passing CI. Change that authority only through a later explicit policy decision.
 
@@ -84,9 +84,9 @@ Name the member caller job `Policy`. The selected release defines mandatory stat
 
 Select policy releases through exact published immutable `vMAJOR.MINOR.PATCH` tags. Declare exactly one reusable-workflow caller; its `uses` reference, `policy_version` input, documentation links, and executing checker must agree. Branches, abbreviated versions, prereleases, and bare commit references do not select a release. Publish releases with GitHub release immutability enabled; never move or reuse a released version.
 
-The caller retains the literal `project` identity and requires `required_architectures`, a nonempty JSON list encoded as a string. Optional `vm_targets` and `additional_required_checks` use the same encoding and default to empty lists. Architectures must belong to the selected release's supported systems. Settings cannot be dynamic expressions or arbitrary policy overrides. Local commands and hosted jobs use the same declaration validation. Review must explicitly justify reductions in architecture, VM, or additional gate coverage; passing checks cannot establish that review.
+The caller retains the literal `project` identity and requires `required_architectures`, a nonempty JSON list of unique Nix system names encoded as a string. The policy does not restrict these names to a fixed platform list. Optional `vm_targets` and `additional_required_checks` use the same encoding and default to empty lists. Settings cannot be dynamic expressions or arbitrary policy overrides. Local commands and hosted jobs use the same declaration validation. Review must explicitly justify reductions in architecture, VM, or additional gate coverage; passing checks cannot establish that review.
 
-The selected release supplies written rules, tools, documentation requirements, supported systems, mandatory check categories and names, checker code, and workflow behavior. Current central records supply approved shared pins, pin update batches, and member enrollment. Members own their selected release and settings. A reviewed member PR authorizes an ordinary policy upgrade without repeating its selection, settings, or activation in central records. A valid checkout can run all applicable checks before enrollment; reports identify enrollment separately, and successful checks neither enroll a member nor approve pins.
+The selected release supplies written rules, tools, documentation requirements, default CI runner mappings, mandatory check categories and names, checker code, and workflow behavior. Current central records supply approved shared pins, pin update batches, and member enrollment. Members own their selected release and settings. A reviewed member PR authorizes an ordinary policy upgrade without repeating its selection, settings, or activation in central records. A valid checkout can run all applicable checks before enrollment; reports identify enrollment separately, and successful checks neither enroll a member nor approve pins.
 
 The central roster records enrolled repository identities only. Additions and removals require reviewed central changes; enrollment plans belong in issues. Independent audits inspect every enrolled identity at an exact clean revision, discover its selected published immutable release, and use that release's checker and gate contract. Missing or disabled enforcement remains a failed enrolled assessment. Member declarations cannot redirect repository inspection or replace policy minimum gates. Keep selection, enrollment, and compliance distinct in reports.
 

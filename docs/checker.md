@@ -20,7 +20,7 @@ nix run .# -- --policy-root . COMMAND
 | `validate --previous-policy-root OLD --workspace WORKSPACE`     | Review legacy removals against prior records, release retirement, and exact migrated checkouts.                  |
 | `ci PATH --project NAME`                                        | Report CI matrices and required status names. Do not execute checks.                                             |
 | `check PATH --project NAME`                                     | Inspect a member checkout against its selected policy and approved pins.                                         |
-| `check PATH --project NAME --shell`                             | Also execute the member shell, probe tools, and evaluate its root formatter.                                     |
+| `check PATH --project NAME --shell`                             | Also smoke-test the member shell and evaluate its root formatter.                                                |
 | `check PATH --project NAME --batch ID`                          | Check a registered candidate at its exact clean member commit.                                                   |
 | `compatibility PATH --project NAME --channel stable`            | Verify the stable override and run full root host checks. Use `unstable` for the other revision.                 |
 | `compatibility PATH --project NAME --channel stable --batch ID` | Run compatibility checks for an exact registered candidate.                                                      |
@@ -33,11 +33,10 @@ nix run .# -- --policy-root . COMMAND
 | `candidate --stable COMMIT --unstable COMMIT`                   | Emit an unapproved pair. Do not write locks or register a batch.                                                 |
 | `pin-batch plan\|execute\|aggregate`                            | [Plan, execute, and replay](#unmerged-candidate-coordination) a candidate for one member or the enrolled roster. |
 | `pin-pr capture\|collect\|finish\|invalidate`                   | [Check central PR evidence](#central-pin-prs) and report eligibility on the proposal head.                       |
-| `title TITLE`                                                   | Check Conventional Commit PR-title syntax.                                                                       |
 
 `check --readiness` remains accepted for older callers. It does not weaken v0.4.0 checks before enrollment.
 
-For a shell-only probe, run `nix run .# -- shell PATH`. This first evaluates `devShells.<host-system>.default.drvPath`, then probes common tools and the root formatter without asserting compliance. A default package or non-default shell cannot satisfy the development-shell requirement. Shell probes clear the inherited environment. Policy CI uses it as a host smoke test. Probes use supported help/version commands; statix has no `--version` flag at the bootstrap pin.
+For a shell-only probe, run `nix run .# -- shell PATH`. This first evaluates `devShells.<host-system>.default.drvPath`, enters the development shell with the inherited environment cleared, and executes `bash -c ':'`. It also evaluates the root formatter without asserting compliance. A default package or non-default shell cannot satisfy the development-shell requirement. Policy CI uses it as a host smoke test. The probe checks startup and command execution, not a fixed tool list or project-specific development tasks.
 
 After publication, use a selected release with current records:
 
@@ -69,7 +68,7 @@ An audit succeeds only if every enrolled assessment passes or the roster is empt
 
 ### Lock handling
 
-Default checks and shell/tool probes use `--no-update-lock-file` alone to reject required lock updates. Do not add `--no-write-lock-file`. In Nix 2.34.6, disabling writes also bypasses update rejection and permits an in-memory replacement lock. See the [locking implementation](https://github.com/NixOS/nix/blob/2.34.6/src/libflake/flake.cc#L749-L825).
+Default checks and shell probes use `--no-update-lock-file` alone to reject required lock updates. Do not add `--no-write-lock-file`. In Nix 2.34.6, disabling writes also bypasses update rejection and permits an in-memory replacement lock. See the [locking implementation](https://github.com/NixOS/nix/blob/2.34.6/src/libflake/flake.cc#L749-L825).
 
 Compatibility checks deliberately use an overridden graph. `--override-input` implies `--no-write-lock-file`. Adding `--no-update-lock-file` does not make an override check test the committed selection.
 
@@ -280,11 +279,15 @@ The policy caller owns literal `project`, `policy_version`, and these string inp
 
 | Input                        | Contract                                                                |
 | ---------------------------- | ----------------------------------------------------------------------- |
-| `required_architectures`     | Required nonempty JSON list of `x86_64-linux`, `aarch64-linux`, or both |
+| `required_architectures`     | Required nonempty JSON list of unique Nix system names                  |
 | `vm_targets`                 | Optional JSON list of simple lowercase build target names; default `[]` |
 | `additional_required_checks` | Optional JSON list of additional GitHub status names; default `[]`      |
 
 Validation rejects malformed JSON, wrong types, duplicates, unsupported values, dynamic expressions, forbidden inputs, and missing or multiple callers. Architectures cannot be empty. Additional gates cannot remove mandatory statuses or create jobs. Reports use `requiredArchitectures`, `vmTargets`, and `additionalRequiredChecks` inside `memberSettings`.
+
+Architecture selection has no platform allowlist. System names use an architecture and platform separated by a hyphen, such as `riscv64-linux` or `aarch64-darwin`, with letters, digits, underscores, and hyphens. The existing `x86_64-linux` and `aarch64-linux` mappings use `ubuntu-24.04` and `ubuntu-24.04-arm`. Other systems use runner labels `["self-hosted", SYSTEM]`. Provide a matching runner with Nix and the workflow prerequisites before running hosted checks; accepting a declaration does not establish runner availability or successful builds. The same runner selection applies to candidate workers. Declared VM targets still require a separate x86_64 Linux worker.
+
+The policy flake exposes its executable for every system in its pinned nixpkgs package sets. Systems outside those package sets require checker packaging support before hosted execution can succeed. This repository's own development and check outputs remain on its two Linux CI platforms.
 
 ### Record ownership
 
@@ -294,7 +297,7 @@ Validation rejects malformed JSON, wrong types, duplicates, unsupported values, 
 | `policy/projects.json`     | 2      | Legacy identities, stable update branch, adoption, selections, architectures, VM targets, and check lists |
 | `policy/pins.json`         | 1      | `approved` is null or an exact stable/unstable pair; `batches` records updates                            |
 | `policy/support.json`      | 1      | Explicit release [retirements](#release-support-and-retirement)                                           |
-| `policy/requirements.json` | 1      | Release-owned tools, systems, README headings, and CI requirements                                        |
+| `policy/requirements.json` | 1      | Default runner systems and release-owned CI requirements                                                  |
 
 The member roster contains no copied selections, settings, or adoption flags. Names and repository identities must be unique; repository comparison ignores case. Identities must agree with existing legacy records. Missing, malformed, or duplicate-key records fail inspection. An empty roster is valid and distinct from missing data.
 
@@ -332,12 +335,12 @@ For v0.2.0 and later, root `nixpkgs` must resolve to an immutable `NixOS/nixpkgs
 
 Additional root inputs, distinct transitive nodes, and independently locked examples require one allowed pair across the project. In these scopes, first-party stable inputs use `nixpkgs`; unstable inputs use `nixpkgs-unstable`. An absent input need not be added. Transitive input names and lock node identifiers are unrestricted. Branch declarations identify stable/unstable selections; exact revisions can identify them when they match one allowed value uniquely.
 
-Structural checks inspect the root development entrypoint, required files, README headings, and links to the selected release's `POLICY.md`.
+Structural checks inspect the root development entrypoint, required files, and links to the selected release's `POLICY.md`. The checker requires a root `README.md` without inspecting its content or headings.
 
 Caller validation requires:
 
 - One exact release reference, matching `policy_version`, and literal job name `Policy`.
-- Exactly `types: [opened, synchronize, reopened, edited]` for PR events, in any order. Title edits must rerun title validation.
+- PR event types must include `opened`, `synchronize`, and `reopened`, in any order. The `edited` event is optional.
 - No branch, path, or other trigger filters.
 - No caller matrix, error suppression, `if`, or `needs` on the Policy job.
 - Only the declared identity, release, and settings inputs. No compatibility revision overrides or skipped required revisions.
@@ -464,7 +467,7 @@ Automatic checks do not prove all policy requirements. Review these properties:
 
 - Meaningful functional coverage, use of the overridden input, and separation of VM tests.
 - Formatter language coverage and documented generated-source exclusions.
-- Required tools, Nix/plugin compatibility, visible root `systems`, and explicit flake outputs.
+- Project-specific development tasks, Nix/plugin compatibility, visible root `systems`, and explicit flake outputs.
 - Source-level dependencies, arbitrary fetch expressions, unsupported transports, and first-party flakes without independent locks.
 - NixOS option semantics, names, prose quality, and justified lint suppressions.
 - Justified reductions in required architectures, VM tests, or additional gates.
@@ -491,7 +494,7 @@ The first job captures the checker, member, and current record commits. All late
 
 The first job verifies the release and generates matrices once on x86_64. This metadata job does not add x86_64 to the member's required architectures or publish a release.
 
-Compliance runs structural, pin, caller, and shell checks, plus PR-title validation on PRs. Formatting/lint runs `lint` in the member shell and formats a disposable copy. Project tests first run `host-checks` to require nonempty host checks with `--no-update-lock-file`, then run full committed-lock root checks. Candidate execution and replay enforce the same sequence for v0.4.0 and later; older selected releases retain their existing behavior. Compatibility runs both shared revisions.
+Compliance runs structural, pin, caller, and shell checks. Formatting/lint runs `lint` in the member shell and formats a disposable copy. Project tests first run `host-checks` to require nonempty host checks with `--no-update-lock-file`, then run full committed-lock root checks. Candidate execution and replay enforce the same sequence for v0.4.0 and later; older selected releases retain their existing behavior. Compatibility runs both shared revisions.
 
 Each category runs independently on every required architecture with `fail-fast: false`. They and the VM job depend only on the first job. A failure does not suppress other categories. Declared VM targets require the x86_64 gate even with ARM-only ordinary coverage. Without targets, VM reports `not-applicable` and its status need not be required.
 

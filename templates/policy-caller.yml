@@ -2,7 +2,7 @@ name: Project checks
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
   workflow_dispatch:
@@ -20,6 +20,7 @@ jobs:
       project: PROJECT_NAME
       policy_version: POLICY_VERSION
       required_architectures: '["x86_64-linux", "aarch64-linux"]'
+      # Other Nix systems use self-hosted runners labelled with the system name.
       # Optional inputs default to empty lists.
       # vm_targets: '["vm-tests"]'
       # additional_required_checks: '["Integration"]'

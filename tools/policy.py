@@ -51,10 +51,6 @@ REVISION = records.REVISION
 POLICY_VERSION = declarations.POLICY_VERSION
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 ACTIVE_BATCH_STATES = records.ACTIVE_BATCH_STATES
-TITLE = re.compile(
-    r"(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)"
-    r"(?:\([^()\r\n]+\))?!?: [^\r\n]+\Z"
-)
 EXCLUDED_DIRS = {
     ".git",
     ".direnv",
@@ -99,8 +95,6 @@ def main(argv=None):
     )
     agreement_command.add_argument("project_dir", type=Path)
     agreement_command.add_argument("--project", required=True)
-    title = commands.add_parser("title", help="Check a Conventional Commit PR title")
-    title.add_argument("title")
     check = commands.add_parser(
         "check", help="Check one project; missing approval fails"
     )
@@ -136,7 +130,7 @@ def main(argv=None):
     )
     lint.add_argument("project_dir", type=Path)
     shell = commands.add_parser(
-        "shell", help="Probe common tools and the root formatter"
+        "shell", help="Smoke-test the default development shell and root formatter"
     )
     shell.add_argument("project_dir", type=Path)
     host_checks = commands.add_parser(
@@ -281,14 +275,12 @@ def main(argv=None):
                 "revision": git_revision(args.project_dir),
                 **ci_plan(project, config["ci"]),
             }
-        elif args.command == "title":
-            result = {"status": "pass" if TITLE.fullmatch(args.title) else "fail"}
         elif args.command == "candidate":
             pair = {"stable": args.stable, "unstable": args.unstable}
             records.validate_pair(pair)
             result = {"schemaVersion": 1, "status": "proposal", "pins": pair}
         elif args.command == "shell":
-            issues = check_shell(args.project_dir, config["requiredTools"])
+            issues = check_shell(args.project_dir)
             result = {"status": "fail" if issues else "pass", "issues": issues}
         elif args.command == "lint":
             issues = check_lint(args.project_dir)
@@ -338,9 +330,7 @@ def main(argv=None):
                 project=project,
             )
             if args.shell:
-                result["issues"].extend(
-                    check_shell(args.project_dir, config["requiredTools"])
-                )
+                result["issues"].extend(check_shell(args.project_dir))
                 if result["issues"]:
                     result["status"] = "fail"
         else:
@@ -600,19 +590,6 @@ def check_structure(root, config, version=None):
         r"^\s*use flake(?:\s+\.)?\s*(?:#.*)?$", envrc.read_text(), re.M
     ):
         issues.append("development: .envrc must activate the root flake")
-    if (root / "dev/flake.nix").exists():
-        issues.append(
-            "development: separate dev/flake.nix must be migrated to the root"
-        )
-    readme = root / "README.md"
-    if readme.exists():
-        headings = {
-            heading.lower()
-            for heading in re.findall(r"^##\s+(.+?)\s*$", readme.read_text(), re.M)
-        }
-        for section in config["readmeSections"]:
-            if section.lower() not in headings:
-                issues.append(f"documentation: README is missing '{section}'")
     rule_link = re.compile(
         r"https://github\.com/"
         + re.escape(config["policyRepository"])
@@ -774,8 +751,8 @@ def check_compatibility(
             ],
             capture=True,
         ).strip()
-        if result["system"] not in config["systems"]:
-            raise ValueError(f"Unsupported compatibility host: {result['system']}")
+        if not declarations.valid_system(result["system"]):
+            raise ValueError(f"Invalid compatibility host: {result['system']}")
         override = ["--override-input", "nixpkgs", f"github:NixOS/nixpkgs/{revision}"]
         metadata = compatibility_command(
             result,
@@ -918,9 +895,8 @@ def check_host_checks(root):
     return result
 
 
-def check_shell(root, tools):
-    # --ignore-environment prevents host tools from satisfying shell requirements.
-    script = 'set -eu; for tool in "$@"; do command -v "$tool"; case "$tool" in nix) "$tool" --version ;; *) "$tool" --help >/dev/null ;; esac; done'
+def check_shell(root):
+    # Smoke-test shell startup without inheriting the caller's environment.
     try:
         system = subprocess.check_output(
             ["nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem"],
@@ -950,9 +926,7 @@ def check_shell(root, tools):
                 "--command",
                 "bash",
                 "-c",
-                script,
-                "policy-shell",
-                *tools,
+                ":",
             ],
             check=True,
             timeout=900,

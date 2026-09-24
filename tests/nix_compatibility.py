@@ -72,7 +72,7 @@ class NixCompatibilityTests(unittest.TestCase):
                         )
                         self.assertNotEqual(build.returncode, 0)
 
-    def test_shell_probe_requires_default_dev_shell_despite_package_fallback(self):
+    def test_shell_probe_requires_working_default_shell_without_fixed_tools(self):
         graph = policy.LockGraph(records.read_json(policy.SOURCE_ROOT / "flake.lock"))
         revision = graph.nodes[graph.resolve(["nixpkgs"])]["locked"]["rev"]
         with tempfile.TemporaryDirectory(prefix="policy-shell-fixture-") as temporary:
@@ -83,7 +83,9 @@ class NixCompatibilityTests(unittest.TestCase):
   outputs = { nixpkgs, ... }: let
     systems = [ "x86_64-linux" "aarch64-linux" ];
     forSystems = nixpkgs.lib.genAttrs systems;
-    shell = system: nixpkgs.legacyPackages.${system}.mkShellNoCC {};
+    shell = system: nixpkgs.legacyPackages.${system}.mkShellNoCC {
+      shellHook = "SHELL_HOOK";
+    };
   in {
     packages = forSystems (system: { default = shell system; });
     formatter = forSystems (system: nixpkgs.legacyPackages.${system}.hello);
@@ -91,7 +93,9 @@ class NixCompatibilityTests(unittest.TestCase):
   };
 }
 """.replace("REVISION", revision)
-            flake.write_text(source.replace("SHELL_OUTPUT", ""))
+            flake.write_text(
+                source.replace("SHELL_OUTPUT", "").replace("SHELL_HOOK", "")
+            )
             self.run_command(["nix", "flake", "lock", str(root)])
             lock_before = (root / "flake.lock").read_bytes()
             self.run_command(
@@ -106,8 +110,13 @@ class NixCompatibilityTests(unittest.TestCase):
                     "--help",
                 ]
             )
-            for name in [None, "other", "default"]:
-                with self.subTest(shell=name):
+            for name, hook, passes in [
+                (None, "", False),
+                ("other", "", False),
+                ("default", "", True),
+                ("default", "exit 23", False),
+            ]:
+                with self.subTest(shell=name, hook=hook):
                     output = (
                         "devShells = forSystems (system: { "
                         + name
@@ -115,14 +124,31 @@ class NixCompatibilityTests(unittest.TestCase):
                         if name
                         else ""
                     )
-                    flake.write_text(source.replace("SHELL_OUTPUT", output))
-                    issues = policy.check_shell(root, ["bash"])
-                    if name == "default":
+                    flake.write_text(
+                        source.replace("SHELL_OUTPUT", output).replace(
+                            "SHELL_HOOK", hook
+                        )
+                    )
+                    issues = policy.check_shell(root)
+                    if passes:
                         self.assertEqual(issues, [])
+                        self.run_command(
+                            [
+                                "nix",
+                                "develop",
+                                "--no-update-lock-file",
+                                "--ignore-environment",
+                                f"path:{root}",
+                                "--command",
+                                "bash",
+                                "-c",
+                                "! command -v nil && ! command -v nixfmt",
+                            ]
+                        )
                     else:
                         self.assertTrue(
                             issues,
-                            "Package fallback must not satisfy the shell requirement",
+                            "Missing or broken default shells must fail the probe",
                         )
                     self.assertEqual((root / "flake.lock").read_bytes(), lock_before)
 

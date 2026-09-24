@@ -20,12 +20,15 @@ else:
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
 ACTIVE_BATCH_STATES = {"approved", "rolling", "paused"}
 _REQUIREMENTS_PATH = Path(__file__).resolve().parents[1] / "policy/requirements.json"
-_REQUIREMENT_FIELDS = ("systems", "requiredTools", "readmeSections", "ci")
+_REQUIREMENT_FIELDS = ("systems", "ci")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 PROJECT = re.compile(r"[a-z0-9-]+\Z")
 FILES = ("projects.json", "pins.json", "members.json", "support.json")
 _RUNTIME_FIELDS = {
     *_REQUIREMENT_FIELDS,
+    # Legacy release requirements, never part of record digests.
+    "requiredTools",
+    "readmeSections",
     "_members",
     "_support",
 }
@@ -80,9 +83,6 @@ def load(root):
         or set(config["ci"]["runners"]) != set(config["systems"])
     ):
         raise ValueError("Supported systems need unique names and matching CI runners")
-    for tool in config["requiredTools"]:
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]*", tool):
-            raise ValueError(f"Invalid tool name: {tool}")
     for name, project in config["projects"].items():
         if not re.fullmatch(r"[a-z0-9-]+", name) or not REPOSITORY.fullmatch(
             project["repository"]

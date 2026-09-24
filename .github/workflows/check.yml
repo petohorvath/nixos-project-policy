@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       required_architectures:
-        description: Literal nonempty JSON list of supported Linux systems
+        description: Literal nonempty JSON list of Nix systems
         required: true
         type: string
       vm_targets:
@@ -142,11 +142,6 @@ jobs:
         run: |
           nix run --no-update-lock-file ./policy -- --policy-root ./policy-state host-checks ./project
           nix flake check ./project --no-update-lock-file --print-build-logs
-      - name: Check PR title
-        if: matrix.check == 'Compliance' && github.event_name == 'pull_request'
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state title "$PR_TITLE"
       - name: Recheck policy support after execution
         env:
           PROJECT: ${{ inputs.project }}

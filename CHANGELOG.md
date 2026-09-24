@@ -2,6 +2,10 @@
 
 ## 0.4.0 (prepared)
 
+- Accept any nonempty selection of Nix systems for required architectures. Keep existing Linux runner mappings and use matching self-hosted runners for other systems in member CI and candidate batches.
+- Remove PR-title validation and make the caller's `edited` PR event optional.
+- Smoke-test development-shell startup and command execution without requiring a fixed tool list.
+- Require only the presence of `README.md`, without prescribing its content or headings.
 - Require nonempty host checks under the committed lock before project tests in member CI and candidate execution, including replay validation.
 - Require an explicit host `devShells.<system>.default` in shell probes; a default package or non-default shell cannot satisfy the development-shell requirement.
 - Read policy selection and member settings from one literal reusable-workflow caller, independently of central legacy selections or adoption state.

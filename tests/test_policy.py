@@ -322,8 +322,6 @@ class ProjectTests(ProjectTestCase):
                 {
                     "schemaVersion": 1,
                     "systems": [],
-                    "requiredTools": [],
-                    "readmeSections": [],
                 }
             )
         )
@@ -331,7 +329,7 @@ class ProjectTests(ProjectTestCase):
         requirements = json.loads(
             (policy.SOURCE_ROOT / "policy/requirements.json").read_text()
         )
-        for field in ["systems", "requiredTools", "readmeSections", "ci"]:
+        for field in ["systems", "ci"]:
             self.assertEqual(config[field], requirements[field])
             path = root / "policy/projects.json"
             project_records = json.loads(path.read_text())
@@ -454,7 +452,8 @@ class ProjectTests(ProjectTestCase):
             [""],
             [" "],
             ["x86_64-linux", "x86_64-linux"],
-            ["unknown-linux"],
+            ["../linux"],
+            ["x86_64 linux"],
         ]:
             with self.subTest(architectures=invalid):
                 self.declare(required_architectures=json.dumps(invalid))
@@ -1356,15 +1355,18 @@ class ProjectTests(ProjectTestCase):
                 )
                 self.assertEqual(code, 2, report)
 
-    def test_policy_caller_runs_after_title_edits(self):
-        self.workflow["on"]["pull_request"] = {
-            "types": ["opened", "synchronize", "reopened", "edited"]
-        }
-        self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
-        self.assertEqual(self.inspect()["issues"], [])
+    def test_policy_caller_edit_event_is_optional(self):
+        for activities in [
+            ["opened", "synchronize", "reopened"],
+            ["opened", "synchronize", "reopened", "edited"],
+        ]:
+            with self.subTest(activities=activities):
+                self.workflow["on"]["pull_request"] = {"types": activities}
+                self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
+                self.assertEqual(self.inspect()["issues"], [])
 
     def test_policy_caller_requires_every_supported_pr_activity(self):
-        activities = ["opened", "synchronize", "reopened", "edited"]
+        activities = ["opened", "synchronize", "reopened"]
         triggers = ["pull_request", ["pull_request"], {"pull_request": None}]
         triggers.extend(
             {
@@ -1373,6 +1375,10 @@ class ProjectTests(ProjectTestCase):
                 }
             }
             for missing in activities
+        )
+        triggers.extend(
+            {"pull_request": {"types": [*activities, extra]}}
+            for extra in ["opened", "closed"]
         )
         for trigger in triggers:
             with self.subTest(trigger=trigger):
@@ -1390,9 +1396,28 @@ class ProjectTests(ProjectTestCase):
                 self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
                 self.assertEqual(self.inspect()["status"], "error")
 
-    def test_missing_readme_section_is_reported(self):
-        self.write("README.md", "# Example\n\nPurpose.\n")
-        self.assertTrue(any("README" in issue for issue in self.inspect()["issues"]))
+    def test_dev_flake_file_does_not_fail_structure_check(self):
+        self.write("dev/flake.nix", "{}")
+        self.write("dev/flake.lock", json.dumps(lockfile()))
+        code, report = self.run_policy("check", str(self.root), "--project", "example")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["status"], "pass")
+
+    def test_readme_contents_are_unrestricted(self):
+        for contents in ["", "Example project.\n", "# Custom title\n\n## Usage\n"]:
+            with self.subTest(contents=contents):
+                self.write("README.md", contents)
+                code, report = self.run_policy(
+                    "check", str(self.root), "--project", "example"
+                )
+                self.assertEqual(code, 0, report)
+                self.assertEqual(report["status"], "pass")
+
+    def test_missing_readme_file_is_reported(self):
+        (self.root / "README.md").unlink()
+        code, report = self.run_policy("check", str(self.root), "--project", "example")
+        self.assertEqual(code, 1, report)
+        self.assertIn("structure: missing README.md", report["issues"])
 
     def test_stale_rule_links_fail(self):
         self.write(
@@ -1564,13 +1589,24 @@ class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
         self.assertEqual(code, 1, report)
         self.assertIn("nix unavailable", report["commands"][-1]["error"])
 
-    def test_supported_native_hosts_are_detected_and_other_hosts_fail(self):
-        for host in ["x86_64-linux", "aarch64-linux", "aarch64-darwin"]:
+    def test_native_compatibility_hosts_are_not_limited_to_default_runners(self):
+        for host in [
+            "x86_64-linux",
+            "aarch64-linux",
+            "aarch64-darwin",
+            "riscv64-linux",
+        ]:
             with self.subTest(host=host):
                 self.host = host
                 code, report = self.compatibility()
-                self.assertEqual(code, 1 if host.endswith("darwin") else 0, report)
+                self.assertEqual(code, 0, report)
                 self.assertEqual(report["system"], host)
+
+    def test_invalid_native_compatibility_host_fails(self):
+        self.host = "../invalid"
+        code, report = self.compatibility()
+        self.assertEqual(code, 1, report)
+        self.assertIn("Invalid compatibility host", " ".join(report["issues"]))
 
     def test_active_and_terminal_batches_use_only_the_central_approved_pair(self):
         for state in ["approved", "rolling", "paused", "complete", "withdrawn"]:
@@ -1850,13 +1886,6 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual(steps[0]["if"], f"matrix.check == '{category}'")
                 self.assertIn("--no-update-lock-file", steps[0]["run"])
                 self.assertNotIn("continue-on-error", steps[0])
-        title = next(
-            step for step in job["steps"] if step.get("name") == "Check PR title"
-        )
-        self.assertEqual(
-            title["if"],
-            "matrix.check == 'Compliance' && github.event_name == 'pull_request'",
-        )
 
     def test_snapshot_job_generates_matrix_from_member_inputs_and_checkout(self):
         workflow = yaml.load(
@@ -2184,16 +2213,20 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertNotIn("GITHUB_TOKEN", audit["env"])
 
-    def test_pr_workflows_refresh_title_checks(self):
+    def test_pr_workflows_cover_source_changes_without_edit_events(self):
         source = Path(__file__).resolve().parents[1]
-        for path in [".github/workflows/ci.yml", "templates/policy-caller.yml"]:
+        for path in [
+            ".github/workflows/ci.yml",
+            "templates/policy-caller.yml",
+            "templates/integration-caller.yml",
+        ]:
             with self.subTest(path=path):
                 workflow = yaml.load(
                     (source / path).read_text(), Loader=yaml.BaseLoader
                 )
                 self.assertEqual(
                     workflow["on"]["pull_request"],
-                    {"types": ["opened", "synchronize", "reopened", "edited"]},
+                    {"types": ["opened", "synchronize", "reopened"]},
                 )
 
     def test_fingerprints_notice_added_and_changed_files(self):
@@ -2223,16 +2256,6 @@ class WorkflowTests(unittest.TestCase):
                 policy.check_lint(root), ["formatting: changes required in flake.nix"]
             )
             self.assertEqual((root / "flake.nix").read_text(), "{}")
-
-    def test_titles(self):
-        for title in [
-            "feat: Add a tool",
-            "fix(nix)!: Change an option",
-            "docs: Clarify setup",
-        ]:
-            self.assertTrue(policy.TITLE.fullmatch(title))
-        for title in ["Update stuff", "fix: ", "fix: Message\nextra"]:
-            self.assertFalse(policy.TITLE.fullmatch(title))
 
     def test_cycle_detection(self):
         self.assertEqual(

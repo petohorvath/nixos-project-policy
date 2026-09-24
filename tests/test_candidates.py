@@ -16,7 +16,7 @@ from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.cli import invoke
 from tests.fixtures.data import CHECKER, NEW_PAIR, PAIR, POLICY_REPO, RELEASE
 from tests.fixtures.services import Services
-from tools import candidates, policy, records, releases, support
+from tools import batches, candidates, policy, records, releases, support
 
 
 class CandidateTests(CandidateFixture, ProjectTestCase):
@@ -109,6 +109,32 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
         return self.call(
             "aggregate", "--plan", str(plan / "plan.json"), "--results", str(directory)
         )
+
+    def test_custom_architecture_executes_and_replays_every_candidate_gate(self):
+        system = "riscv64-linux"
+        self.declare(required_architectures=json.dumps([system]))
+        self.commit(self.root)
+        self.propose()
+        code, report, plan = self.plan()
+        self.assertEqual(code, 0, report)
+        self.assertEqual(
+            report["matrix"]["include"],
+            [{"system": system, "runner": ["self-hosted", system]}],
+        )
+        members = {"example": {"status": "planned", "plan": report}}
+        self.assertEqual(
+            batches.matrix(members)["include"][0]["runner"], ["self-hosted", system]
+        )
+        forged = copy.deepcopy(members)
+        forged["example"]["plan"]["matrix"]["include"][0]["runner"] = "ubuntu-24.04"
+        with self.assertRaisesRegex(ValueError, "Unsafe or conflicting"):
+            batches.matrix(forged)
+        code, result, output = self.worker(plan, system)
+        self.assertEqual(code, 0, result)
+        self.assertEqual(len(result["results"]), 5)
+        code, result, _ = self.aggregate(plan, [output])
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["status"], "candidate-pass")
 
     def test_complete_single_member_runs_both_channels_and_all_gates_without_approval(
         self,

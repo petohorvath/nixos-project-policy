@@ -402,7 +402,7 @@ class RosterTests(ProjectTestCase):
         path.unlink()
         self.assertEqual(invoke("--policy-root", str(root), "validate")[0], 2)
 
-    def test_actual_maintenance_adapter_retains_mixed_member_failure_reports(self):
+    def test_actual_audit_workflow_retains_mixed_member_failure_reports(self):
         root = self.write_records()
         workspace = self.root.parent
         runner = workspace / "runner"
@@ -410,7 +410,7 @@ class RosterTests(ProjectTestCase):
         projects.mkdir(parents=True)
         shutil.copytree(self.root, projects / "example")
         workflow = yaml.load(
-            (policy.SOURCE_ROOT / ".github/workflows/maintenance.yml").read_text(),
+            (policy.SOURCE_ROOT / ".github/workflows/audit.yml").read_text(),
             Loader=yaml.BaseLoader,
         )
         steps = workflow["jobs"]["audit"]["steps"]

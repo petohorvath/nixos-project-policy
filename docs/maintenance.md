@@ -39,7 +39,7 @@ Repeat on every required architecture and run the remaining member gates. These 
 
 ### Candidate preparation
 
-Maintenance prepares an unapproved artifact weekly and audits members daily. Urgent manual preparation accepts both `stable_revision` and `unstable_revision` as exact commits. Supplying only one fails. With neither input, it resolves the configured stable and unstable branches once.
+The [Prepare pin update workflow](../.github/workflows/pins.yml) produces an unapproved artifact weekly or on manual dispatch. The [Member audit workflow](../.github/workflows/audit.yml) runs daily or independently on manual dispatch. Urgent manual preparation accepts both `stable_revision` and `unstable_revision` as exact commits. Supplying only one fails. With neither input, it resolves the configured stable and unstable branches once.
 
 Preparation creates no PR. Automation that creates member PRs requires a separately reviewed write identity and tests for targeted lock updates.
 
@@ -75,7 +75,7 @@ Configure the policy repository's `MEMBER_AUDIT_TOKEN` Actions secret for all en
 
 Add newly enrolled repositories to the token's selection. Renew the token before expiry. No write permission is required.
 
-Maintenance passes this secret as `GH_TOKEN`. It does not use the automatic [`GITHUB_TOKEN`](https://docs.github.com/en/actions/concepts/security/github_token), which is limited to the policy repository. Local audits accept `GH_TOKEN` or `GITHUB_TOKEN`; `GH_TOKEN` takes precedence. A GitHub App installation token with the same read permissions also works locally. Hosted token issuance needs separate setup.
+The Member audit workflow passes this secret as `GH_TOKEN`. It does not use the automatic [`GITHUB_TOKEN`](https://docs.github.com/en/actions/concepts/security/github_token), which is limited to the policy repository. Local audits accept `GH_TOKEN` or `GITHUB_TOKEN`; `GH_TOKEN` takes precedence. A GitHub App installation token with the same read permissions also works locally. Hosted token issuance needs separate setup.
 
 An empty roster requires no member credential. Otherwise, missing credentials or inaccessible metadata cause inspection errors. An HTTP 404 does not prove absent protection. Verify hosted access before activation. See [audit results](checker.md#enrollment-audits).
 

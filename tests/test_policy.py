@@ -1821,10 +1821,10 @@ class WorkflowTests(unittest.TestCase):
             "nix flake check ./project --no-update-lock-file --print-build-logs",
         )
 
-    def test_maintenance_audit_uses_a_member_access_secret(self):
+    def test_audit_uses_a_member_access_secret(self):
         source = Path(__file__).resolve().parents[1]
         workflow = yaml.load(
-            (source / ".github/workflows/maintenance.yml").read_text(),
+            (source / ".github/workflows/audit.yml").read_text(),
             Loader=yaml.BaseLoader,
         )
         audit = next(

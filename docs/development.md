@@ -32,7 +32,7 @@ nix run .# -- --version
 
 ### Host tests
 
-These tests run outside Nix build sandboxes because they invoke Nix themselves. CI runs both on each supported architecture:
+These tests run outside Nix build sandboxes because they invoke Nix themselves. The CI workflow runs both in one development-shell invocation on each supported architecture:
 
 ```bash
 nix develop --command python -m unittest tests.nix_compatibility -v

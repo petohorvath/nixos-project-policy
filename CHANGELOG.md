@@ -2,6 +2,8 @@
 
 ## 0.4.0
 
+- Separate daily member audits and weekly pin preparation into independently dispatched workflows. Consolidate CI host tests and cancel superseded PR CI runs.
+
 - Require v0.4.0 or later for all member selections. Remove pre-v0.4.0 checker adapters, compatibility records, readiness and cleanup options, and old-release tests and guides. Reduce `policy/` to enrollment, pins, and release requirements. Store the stable update branch with pins and policy identity with release requirements; derive default systems from runner mappings.
 
 - Remove the policy-owned formatting/lint job and `lint` command. Members own formatting and lint enforcement.

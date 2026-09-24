@@ -15,7 +15,14 @@ import yaml
 from tests.fixtures.audits import AuditFixture, checked_process
 from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.cli import invoke
-from tests.fixtures.data import CHECKER, POLICY_REPO, RELEASE, REQUIRED_CHECKS, SOURCE
+from tests.fixtures.data import (
+    LEGACY_REQUIRED_CHECKS,
+    CHECKER,
+    POLICY_REPO,
+    RELEASE,
+    REQUIRED_CHECKS,
+    SOURCE,
+)
 from tests.fixtures.services import published
 from tools import policy, records
 
@@ -25,8 +32,11 @@ class AuditTests(AuditFixture, ProjectTestCase):
         self.add_member("legacy", "v0.1.1")
         self.add_member("derived", "v0.3.0")
         project = self.config["projects"]["derived"]
-        project["requiredChecks"] = policy.ci_plan(project, self.config["ci"])[
-            "requiredChecks"
+        project["requiredChecks"] = [
+            name
+            for name in LEGACY_REQUIRED_CHECKS
+            if not name.endswith("(aarch64-linux)")
+            and not name.endswith(", aarch64-linux)")
         ]
         self.config["projects"]["example"].update(policyVersion="v0.3.0", adopted=False)
         inspected = []

@@ -57,6 +57,12 @@ class Services:
             requirements = records.read_json(
                 policy.SOURCE_ROOT / "policy/requirements.json"
             )
+            if declarations_version(self.root) != RELEASE:
+                requirements["ci"]["architectureChecks"] = [
+                    "Compliance",
+                    "Formatting and lint",
+                    "Project tests",
+                ]
             if declarations_version(self.root) == "v0.1.1":
                 requirements.pop("ci")
             return {
@@ -122,8 +128,6 @@ class Services:
                 status = 1
             if self.failure == "compatibility" and "--override-input" in command:
                 status = 1
-        elif command[1] == "fmt" and self.failure == "lint":
-            status = 1
         if status and kwargs.get("check"):
             raise subprocess.CalledProcessError(status, command)
         return subprocess.CompletedProcess(
@@ -153,7 +157,15 @@ class Services:
             "policyRecordsDigest": records.digest(config, pins, legacy=True),
         }
         if operation == "ci":
-            report.update(status="planned", **policy.ci_plan(member, config["ci"]))
+            legacy_ci = {
+                **config["ci"],
+                "architectureChecks": [
+                    "Compliance",
+                    "Formatting and lint",
+                    "Project tests",
+                ],
+            }
+            report.update(status="planned", **policy.ci_plan(member, legacy_ci))
         elif operation in {"check", "compatibility"}:
             report.update(
                 status="candidate-ready",

@@ -19,6 +19,7 @@ from tools import policy, records
 from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.compatibility import CompatibilityFixture
 from tests.fixtures.data import (
+    LEGACY_REQUIRED_CHECKS,
     CHECKER,
     COMPATIBILITY_CHECKS,
     NEW_PAIR,
@@ -388,7 +389,7 @@ class ProjectTests(ProjectTestCase):
                 self.assertEqual(report["policyVersion"], RELEASE)
                 jobs = report["matrix"]["include"]
                 compatibility_jobs = report["compatibilityMatrix"]["include"]
-                self.assertEqual(len(jobs), 3 * len(architectures))
+                self.assertEqual(len(jobs), 2 * len(architectures))
                 self.assertEqual(len(compatibility_jobs), 2 * len(architectures))
                 self.assertEqual(
                     {(job["channel"], job["system"]) for job in compatibility_jobs},
@@ -404,7 +405,6 @@ class ProjectTests(ProjectTestCase):
                         (check, system)
                         for check in [
                             "Compliance",
-                            "Formatting and lint",
                             "Project tests",
                         ]
                         for system in architectures
@@ -539,7 +539,7 @@ class ProjectTests(ProjectTestCase):
         project = self.config["projects"]["example"]
         project["policyVersion"] = "v0.3.0"
         project["additionalRequiredChecks"] = ["Integration"]
-        checks = [*REQUIRED_CHECKS, "Integration"]
+        checks = [*LEGACY_REQUIRED_CHECKS, "Integration"]
         for recorded in [
             [],
             *([check for check in checks if check != missing] for missing in checks),
@@ -1874,7 +1874,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(job["runs-on"], "${{ matrix.runner }}")
         categories = {
             "--policy-root ./policy-state check ./project": "Compliance",
-            "lint ./project": "Formatting and lint",
             "nix flake check ./project": "Project tests",
         }
         for command, category in categories.items():
@@ -1994,7 +1993,7 @@ class WorkflowTests(unittest.TestCase):
                         compatibility_matrix = json.loads(
                             outputs["compatibility_matrix"]
                         )
-                        self.assertEqual(len(matrix["include"]), 3 * len(architectures))
+                        self.assertEqual(len(matrix["include"]), 2 * len(architectures))
                         self.assertEqual(
                             len(compatibility_matrix["include"]), 2 * len(architectures)
                         )
@@ -2240,22 +2239,6 @@ class WorkflowTests(unittest.TestCase):
             after = policy.fingerprints(root)
             self.assertNotEqual(before["file.nix"], after["file.nix"])
             self.assertIn("new.md", after)
-
-    @patch.object(policy.subprocess, "run")
-    def test_lint_uses_temporary_copy_and_reports_changes(self, run):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "flake.nix").write_text("{}")
-
-            def format_copy(command, **kwargs):
-                if command[1] == "fmt":
-                    (kwargs["cwd"] / "flake.nix").write_text("{ }\n")
-
-            run.side_effect = format_copy
-            self.assertEqual(
-                policy.check_lint(root), ["formatting: changes required in flake.nix"]
-            )
-            self.assertEqual((root / "flake.nix").read_text(), "{}")
 
     def test_cycle_detection(self):
         self.assertEqual(

@@ -37,7 +37,7 @@ class DeclarationTests(ProjectTestCase):
                     report["matrix"]["include"]
                     + report["compatibilityMatrix"]["include"]
                 )
-                self.assertEqual(len(jobs), 5 * len(systems))
+                self.assertEqual(len(jobs), 4 * len(systems))
                 self.assertEqual({job["system"] for job in jobs}, set(systems))
                 for job in jobs:
                     runner = (
@@ -149,8 +149,9 @@ class DeclarationTests(ProjectTestCase):
             additionalRequiredChecks=["Legacy gate"],
         )
         project = self.config["projects"]["example"]
-        project["requiredChecks"] = policy.ci_plan(project, self.config["ci"])[
-            "requiredChecks"
+        project["requiredChecks"] = [
+            *policy.ci_plan(project, self.config["ci"])["requiredChecks"],
+            "Policy / Formatting and lint (x86_64-linux)",
         ]
         for command in ["check", "ci", "vm"]:
             code, report = self.run_policy(

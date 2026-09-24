@@ -14,7 +14,14 @@ from tests.fixtures import workflows
 from tests.fixtures.candidates import CandidateFixture
 from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.cli import invoke
-from tests.fixtures.data import CHECKER, NEW_PAIR, PAIR, POLICY_REPO, RELEASE
+from tests.fixtures.data import (
+    LEGACY_REQUIRED_CHECKS,
+    CHECKER,
+    NEW_PAIR,
+    PAIR,
+    POLICY_REPO,
+    RELEASE,
+)
 from tests.fixtures.services import Services
 from tools import batches, candidates, policy, records, releases, support
 
@@ -46,6 +53,16 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
         self.commit(self.proposal)
         return self.call(
             "plan", "--project", "example", "--batch", "next", "--attempt", "fixture-1"
+        )
+
+    def test_current_release_executes_without_policy_formatting_or_lint(self):
+        code, report, plan = self.plan()
+        self.assertEqual(code, 0, report)
+        code, report, _ = self.worker(plan, "x86_64-linux")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(
+            {item["job"]["kind"] for item in report["results"]},
+            {"compliance", "tests", "compatibility"},
         )
 
     def test_proposal_records_must_be_regular_files_at_the_exact_commit(self):
@@ -131,7 +148,7 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
             batches.matrix(forged)
         code, result, output = self.worker(plan, system)
         self.assertEqual(code, 0, result)
-        self.assertEqual(len(result["results"]), 5)
+        self.assertEqual(len(result["results"]), 4)
         code, result, _ = self.aggregate(plan, [output])
         self.assertEqual(code, 0, result)
         self.assertEqual(result["status"], "candidate-pass")
@@ -152,7 +169,7 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
         for system in candidates.SYSTEMS:
             code, result, output = self.worker(plan, system)
             self.assertEqual(code, 0, result)
-            self.assertEqual(len(result["results"]), 5)
+            self.assertEqual(len(result["results"]), 4)
             compatibility = [
                 item["report"]
                 for item in result["results"]
@@ -270,12 +287,12 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
 
     def test_failure_does_not_suppress_other_independent_execution(self):
         _, _, plan = self.plan()
-        self.services.failure = "lint"
+        self.services.failure = "tests"
         code, result, output = self.worker(plan, "x86_64-linux")
         self.assertEqual(code, 1, result)
         by_kind = {item["job"]["kind"]: item["status"] for item in result["results"]}
-        self.assertEqual(by_kind["lint"], "fail")
-        self.assertEqual(by_kind["tests"], "pass")
+        self.assertEqual(by_kind["compliance"], "pass")
+        self.assertEqual(by_kind["tests"], "fail")
         self.assertEqual(by_kind["compatibility"], "pass")
         self.assertEqual(records.read_json(output / "result.json"), result)
 
@@ -321,7 +338,7 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
         )
         code, result, output = self.worker(plan, "x86_64-linux")
         self.assertEqual(code, 1, result)
-        self.assertEqual(len(result["results"]), 5)
+        self.assertEqual(len(result["results"]), 4)
         self.assertTrue(any(item["status"] == "fail" for item in result["results"]))
         self.assertTrue(list(output.glob("job-*/execution/stdout.log")))
 
@@ -529,9 +546,7 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
                         "Policy / Policy (aarch64-linux)",
                     ]
                 else:
-                    member["requiredChecks"] = policy.ci_plan(
-                        member, self.config["ci"]
-                    )["requiredChecks"]
+                    member["requiredChecks"] = list(LEGACY_REQUIRED_CHECKS)
                 self.write_records()
                 candidates.write_json(
                     self.proposal / "policy/projects.json",
@@ -620,7 +635,7 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
         process = shell(
             "execute",
             SYSTEM="x86_64-linux",
-            CANDIDATE_FIXTURE_FAILURE="lint",
+            CANDIDATE_FIXTURE_FAILURE="tests",
         )
         self.assertNotEqual(process.returncode, 0)
         self.assertEqual(

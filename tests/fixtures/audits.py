@@ -8,7 +8,7 @@ import subprocess
 from unittest.mock import patch
 
 from tests.fixtures.cli import invoke
-from tests.fixtures.data import POLICY_REPO, RELEASE, REQUIRED_CHECKS, SOURCE
+from tests.fixtures.data import POLICY_REPO, RELEASE, LEGACY_REQUIRED_CHECKS, SOURCE
 from tests.fixtures.projects import ProjectFixture
 from tests.fixtures.services import published
 from tools import policy, records, releases
@@ -48,7 +48,9 @@ def checked_process(command, **kwargs):
 class AuditFixture(ProjectFixture):
     def prepare(self):
         super().prepare()
-        self.config["projects"]["example"]["requiredChecks"] = list(REQUIRED_CHECKS)
+        self.config["projects"]["example"]["requiredChecks"] = list(
+            LEGACY_REQUIRED_CHECKS
+        )
         self.release_requests = []
         self.commands = []
         self.process = checked_process

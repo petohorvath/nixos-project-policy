@@ -14,7 +14,13 @@ import yaml
 
 from tests.fixtures import workflows
 from tests.fixtures.candidates import BatchFixture
-from tests.fixtures.data import NEW_PAIR, PAIR, POLICY_REPO, RELEASE
+from tests.fixtures.data import (
+    LEGACY_REQUIRED_CHECKS,
+    NEW_PAIR,
+    PAIR,
+    POLICY_REPO,
+    RELEASE,
+)
 from tests.fixtures.github import GitHub
 from tests.fixtures.process import REAL_RUN
 from tests.fixtures.projects import enabled_enforcement
@@ -59,6 +65,9 @@ class PackagedTransitionTests(unittest.TestCase):
             }
         fixture.declaration("alpha", "v0.3.0")
         fixture.config["projects"]["alpha"]["policyVersion"] = "v0.3.0"
+        fixture.config["projects"]["alpha"]["requiredChecks"] = list(
+            LEGACY_REQUIRED_CHECKS
+        )
         fixture.commit(fixture.roots["alpha"])
         fixture.config["projects"]["example"] = {
             "repository": fixture.members["example"],
@@ -190,7 +199,6 @@ class PackagedTransitionTests(unittest.TestCase):
                 "check", root, "--project", name, "--shell", system=system
             )
             self.assertEqual(checked["enrollment"], enrolled)
-            self.call("lint", root, system=system)
             for channel in PAIR:
                 output = self.workspace / f"compatibility-{self.counter}"
                 self.counter += 1

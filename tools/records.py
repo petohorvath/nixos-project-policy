@@ -130,7 +130,18 @@ def load(root):
         if project["policyVersion"] == "v0.3.0":
             if "requiredChecks" in project:
                 required = set(
-                    declarations.ci_plan(project, config["ci"])["requiredChecks"]
+                    declarations.ci_plan(
+                        project,
+                        {
+                            **config["ci"],
+                            # Retained v0.3.0 records keep that release's lint gate.
+                            "architectureChecks": [
+                                "Compliance",
+                                "Formatting and lint",
+                                "Project tests",
+                            ],
+                        },
+                    )["requiredChecks"]
                 )
                 if set(project["requiredChecks"]) != required:
                     raise ValueError(

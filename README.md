@@ -4,7 +4,7 @@ Shared development and maintenance rules for independent Nix and NixOS projects.
 
 ## Support
 
-Development and CI support `x86_64-linux` and `aarch64-linux`. This repository has no VM tests.
+Development shells, formatting, and checks support `x86_64-linux` and `aarch64-linux`. The flake exposes the checker package and default app for every system in its pinned nixpkgs package sets. This repository has no VM tests.
 
 Support starts at v0.4.0. [VERSION](VERSION) identifies the current checker version. Publish new releases through the [release procedure](docs/maintenance.md#releases). Policy releases contain the rules and checker code. Current [records on `main`](docs/maintenance.md#records) contain shared pins, the stable update branch, and member enrollment.
 
@@ -15,16 +15,32 @@ Install the [host prerequisites](docs/development.md#host-prerequisites), then r
 ```bash
 direnv allow
 nix flake check
-nix run .# -- validate
+nix run .# -- --policy-root . validate
 ```
 
-Use `nix develop` to enter the shell without direnv. `validate` checks record structure; it does not check member compliance.
+Use `nix develop` to enter the shell without direnv. `nix flake check` runs checker tests, record validation, formatting, and lint checks for the host architecture. `validate` checks the selected record checkout and reports whether it contains an approved pin pair; it does not check member compliance or approve pins.
 
-For member checks and audits, use the [checker commands](docs/checker.md#commands).
+## Member projects
+
+Use the [policy caller template](templates/policy-caller.yml) to select a published immutable policy release and declare the member name and required architectures. Optional settings select VM targets, their Linux architecture, and additional required checks. Keep the policy repository outside member flake inputs, shells, and builds. Follow the [enrollment procedure](docs/maintenance.md#enrollment) to add a member to the central roster; a passing check does not enroll it.
+
+Members choose their root `nixpkgs` revision independently. Policy CI runs separate compliance, committed-lock project tests, and stable/unstable compatibility jobs on every required architecture. Compatibility jobs override the root input with the approved shared pins and run full root checks. Other nixpkgs lock scopes remain subject to shared-pin requirements. Declared VM tests run separately.
+
+For local checks, run the member's selected checker release with an explicit trusted checkout of current records:
+
+```bash
+nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
+  --policy-root ../nixos-project-policy-records \
+  check ../PROJECT --project PROJECT --shell
+```
+
+Replace the tag with the member's selected release and `PROJECT` with its name. Update the records checkout from `main` before checking current approval; the command does not fetch records. `check` inspects structure, locks, and the policy caller. `--shell` also smoke-tests the default development shell and evaluates the formatter. Compatibility execution requires separate `compatibility` commands for `stable` and `unstable`.
+
+The checker also plans CI gates, audits enrolled members, checks integration policy agreement at locked member revisions, and executes declared VM targets. See the [checker reference](docs/checker.md#commands) for commands, JSON results, and validation limits.
 
 ## Development
 
-Run `nix fmt` and `nix flake check` before submitting changes. See [development](docs/development.md) for tools and focused tests.
+Run `nix fmt` and `nix flake check` before submitting changes. CI also runs real-Nix and packaged-checker host tests on both supported Linux architectures and smoke-tests the development shell. See [development](docs/development.md) for tools, focused tests, and host test commands.
 
 ## Contributing
 

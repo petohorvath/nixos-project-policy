@@ -70,7 +70,7 @@ Compatibility checks deliberately use an overridden graph. `--override-input` im
 
 - A member caller selecting the executing checker release.
 - A Git checkout whose root lock matches its committed copy.
-- A supported native Linux host.
+- A native Nix host whose system name passes declaration validation and whose package set can build the checker and member checks. The runner has no Linux-only restriction.
 - A non-null approved pair in the supplied trusted records.
 
 The runner resolves the root input through `LockGraph`, including renamed nodes and `follows`. It verifies the repository and revision from `nix flake metadata --json`. A missing input, ignored override, wrong source, or wrong revision fails before execution.
@@ -123,7 +123,9 @@ The policy caller owns literal `project`, `policy_version`, and these string inp
 
 Validation rejects malformed JSON, wrong types, duplicates, unsupported values, dynamic expressions, forbidden inputs, and missing or multiple callers. Architectures cannot be empty. Additional gates cannot remove mandatory statuses or create jobs. Reports use `requiredArchitectures`, `vmTargets`, `vmArchitecture`, and `additionalRequiredChecks` inside `memberSettings`.
 
-Architecture selection has no platform allowlist. System names use an architecture and platform separated by a hyphen, such as `riscv64-linux` or `aarch64-darwin`, with letters, digits, underscores, and hyphens. The existing `x86_64-linux` and `aarch64-linux` mappings use `ubuntu-24.04` and `ubuntu-24.04-arm`. Other systems use runner labels `["self-hosted", SYSTEM]`. Provide a matching runner with Nix and the workflow prerequisites before running hosted checks; accepting a declaration does not establish runner availability or successful builds. The same runner selection applies to candidate workers. VM execution uses `vm_architecture` independently of ordinary coverage. The `ci.vmRunners` mapping selects `ubuntu-24.04` for x86_64 Linux; other Linux systems use `["self-hosted", SYSTEM]`. VM workers must provide Nix and usable KVM. An ARM-only member can set `vm_architecture: aarch64-linux` and provide an ARM runner with KVM.
+Architecture selection has no platform allowlist. System names use an architecture and platform separated by a hyphen, such as `riscv64-linux` or `aarch64-darwin`, with letters, digits, underscores, and hyphens. The existing `x86_64-linux` and `aarch64-linux` mappings use `ubuntu-24.04` and `ubuntu-24.04-arm`. Other systems use runner labels `["self-hosted", SYSTEM]`. Provide a matching runner with Nix and the workflow prerequisites before running hosted checks; accepting a declaration does not establish runner availability or successful builds. Compliance, project tests, and compatibility jobs use these mappings.
+
+VM execution uses `vm_architecture` independently of ordinary coverage. The `ci.vmRunners` mapping selects `ubuntu-24.04` for x86_64 Linux; other Linux systems use `["self-hosted", SYSTEM]`. VM workers must provide Nix and usable KVM. An ARM-only member can set `vm_architecture: aarch64-linux` and provide an ARM runner with KVM. Locally, `vm` builds each declared target with `nix build --no-link --no-update-lock-file --print-build-logs`; it does not select a worker or configure KVM. Run it on a suitable host or with a configured builder for the declared VM system.
 
 The policy flake exposes its executable for every system in its pinned nixpkgs package sets. Systems outside those package sets require checker packaging support before hosted execution can succeed. This repository's own development and check outputs remain on its two Linux CI platforms.
 

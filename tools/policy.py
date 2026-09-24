@@ -17,22 +17,16 @@ from urllib.request import Request, urlopen
 if __package__:
     from . import (
         agreement,
-        batches,
-        candidates,
         declarations,
         locks,
-        pin_pr,
         records,
         releases,
     )
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import agreement
-    import batches
-    import candidates
     import declarations
     import locks
-    import pin_pr
     import records
     import releases
 
@@ -44,7 +38,6 @@ dependency_cycles = locks.dependency_cycles
 
 REVISION = records.REVISION
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
-ACTIVE_BATCH_STATES = records.ACTIVE_BATCH_STATES
 EXCLUDED_DIRS = {
     ".git",
     ".direnv",
@@ -85,9 +78,6 @@ def main(argv=None):
     check.add_argument("project_dir", type=Path)
     check.add_argument("--project", required=True)
     check.add_argument(
-        "--batch", help="Registered candidate batch, bound to the tested commit"
-    )
-    check.add_argument(
         "--shell", action="store_true", help="Execute the project's Nix shell"
     )
     compatibility = commands.add_parser(
@@ -97,9 +87,6 @@ def main(argv=None):
     compatibility.add_argument("--project", required=True)
     compatibility.add_argument(
         "--channel", required=True, choices=["stable", "unstable"]
-    )
-    compatibility.add_argument(
-        "--batch", help="Registered candidate at this exact commit"
     )
     compatibility.add_argument(
         "--output", type=Path, help="New evidence directory outside the project"
@@ -132,8 +119,6 @@ def main(argv=None):
     )
     candidate.add_argument("--stable", required=True)
     candidate.add_argument("--unstable", required=True)
-    candidates.add_commands(commands)
-    pin_pr.add_commands(commands)
     args = parser.parse_args(argv)
     try:
         declarations.require_policy_version(f"v{version}")
@@ -146,8 +131,6 @@ def main(argv=None):
                 "compatibility",
                 "ci",
                 "agreement",
-                "pin-batch",
-                "pin-pr",
             }
             and args.policy_root is None
         ):
@@ -156,32 +139,6 @@ def main(argv=None):
                 "a policy release's bundled pins do not establish current approval"
             )
         records_root = args.policy_root or SOURCE_ROOT
-        if args.command == "pin-pr":
-            result = pin_pr.run(args)
-            print(json.dumps(result, indent=2, sort_keys=True))
-            return {"fail": 1, "error": 2}.get(result.get("status"), 0)
-        if args.command == "pin-batch":
-            whole = args.all
-            if args.operation != "plan" and not whole:
-                try:
-                    saved = records.read_json(args.plan)
-                    whole = (
-                        isinstance(saved, dict) and saved.get("scope") == "whole-batch"
-                    )
-                except candidates.ERRORS:
-                    pass
-            run_batch = batches.run if whole else candidates.run
-            result = run_batch(
-                args,
-                source_root=SOURCE_ROOT,
-                git_revision=git_revision,
-                git_dirty=git_dirty,
-                fingerprints=fingerprints,
-                orchestrator_revision=globals().get("PACKAGED_REVISION")
-                or git_revision(SOURCE_ROOT),
-            )
-            print(json.dumps(result, indent=2, sort_keys=True))
-            return {"fail": 1, "error": 2}.get(result.get("status"), 0)
         config, pins = records.load(records_root)
         project = None
         if args.command in {"check", "ci", "compatibility", "vm", "agreement"}:
@@ -239,7 +196,6 @@ def main(argv=None):
                 config,
                 pins,
                 args.channel,
-                args.batch,
                 args.output,
                 project=project,
             )
@@ -270,7 +226,6 @@ def main(argv=None):
                 args.project,
                 config,
                 pins,
-                args.batch,
                 project=project,
             )
             if args.shell:
@@ -352,17 +307,11 @@ def enrollment(config, name):
     return "enrolled" if name in config["_members"] else "not-enrolled"
 
 
-def inspect_project(root, name, config, pins, batch_id=None, *, project):
+def inspect_project(root, name, config, pins, *, project):
     root = root.resolve()
     issues = check_structure(root, config, project["policyVersion"])
     revision = git_revision(root)
-    candidate = candidate_for(pins, name, revision, batch_id)
-    if candidate:
-        if git_dirty(root):
-            raise ValueError(
-                "A candidate check requires the clean registered project commit"
-            )
-    pairs = allowed_pairs(pins, name, revision, batch_id)
+    pairs = [pins["approved"]] if pins["approved"] else []
     if not pairs:
         issues.append("pins: no approved family baseline; compliance cannot pass yet")
     observations = []
@@ -455,15 +404,12 @@ def inspect_project(root, name, config, pins, batch_id=None, *, project):
         issues.append("pins: project lockfiles do not share one allowed pair")
     if issues:
         status = "fail"
-    elif candidate:
-        status = "candidate-ready"
     else:
         status = "pass"
     return {
         "project": name,
         "policyVersion": project["policyVersion"],
         "revision": revision,
-        "candidateBatch": candidate["id"] if candidate else None,
         "status": status,
         "compatibility": "not-run",
         "enrollment": enrollment(config, name),
@@ -539,47 +485,8 @@ def check_structure(root, config, version):
     return issues
 
 
-def allowed_pairs(pins, name, revision, batch_id=None):
-    candidate = candidate_for(pins, name, revision, batch_id)
-    if candidate:
-        return [candidate["pins"]]
-    pairs = [pins["approved"]] if pins["approved"] else []
-    for batch in pins["batches"]:
-        if name in batch["projects"] and batch["status"] in ACTIVE_BATCH_STATES:
-            pairs.append(batch["pins"])
-            if batch.get("previous"):
-                pairs.append(batch["previous"])
-    return pairs
-
-
-def candidate_for(pins, name, revision, batch_id=None):
-    if batch_id:
-        batch = next(
-            (entry for entry in pins["batches"] if entry["id"] == batch_id), None
-        )
-        if batch is None or batch["status"] != "candidate":
-            raise ValueError("Requested batch is not a registered candidate")
-        if revision is None or batch["projects"].get(name) != revision:
-            raise ValueError(
-                "Candidate is not registered for this exact project commit"
-            )
-        return batch
-    matches = [
-        batch
-        for batch in pins["batches"]
-        if batch["status"] == "candidate"
-        and revision is not None
-        and batch["projects"].get(name) == revision
-    ]
-    if len(matches) > 1:
-        raise ValueError(
-            "More than one candidate is registered for this project commit"
-        )
-    return matches[0] if matches else None
-
-
 def check_compatibility(
-    root, name, config, pins, channel, batch_id=None, output=None, *, project=None
+    root, name, config, pins, channel, output=None, *, project=None
 ):
     root = root.resolve()
     project = project or member_project(root, name, config)
@@ -614,7 +521,6 @@ def check_compatibility(
         "system": None,
         "expectedRevision": None,
         "resolvedRevision": None,
-        "candidateBatch": None,
         "pinStatus": None,
         "status": "error",
         "commands": [],
@@ -638,20 +544,10 @@ def check_compatibility(
         if before != committed_lock:
             raise ValueError("Compatibility requires the committed root lock")
         selected_nixpkgs(LockGraph(json.loads(before)))
-        candidate = candidate_for(pins, name, result["revision"], batch_id)
-        if candidate:
-            result["candidateBatch"] = candidate["id"]
-            result["pinStatus"] = "candidate"
-            if result["sourceDirty"]:
-                raise ValueError(
-                    "A candidate check requires the clean registered project commit"
-                )
-        # Active rollouts always test the central approved pair, even when old
-        # locks remain allowed. Candidates select exactly their registered pair.
-        pair = candidate["pins"] if candidate else pins["approved"]
+        pair = pins["approved"]
         if pair is None:
             raise ValueError("No approved family baseline for compatibility")
-        result["pinStatus"] = "candidate" if candidate else "approved"
+        result["pinStatus"] = "approved"
         revision = pair[channel]
         result["expectedRevision"] = revision
         result["system"] = compatibility_command(
@@ -722,7 +618,7 @@ def check_compatibility(
                 *override,
             ],
         )
-        result["status"] = "candidate-pass" if candidate else "pass"
+        result["status"] = "pass"
     except (
         ValueError,
         OSError,
@@ -956,11 +852,6 @@ def audit_family(
                         records=snapshot,
                     )
                     report["assessment"] = assessed["status"]
-                    if report["status"] == "candidate-ready":
-                        report["status"] = "fail"
-                        report["issues"].append(
-                            "Candidate validation does not establish approved-pin compliance"
-                        )
                     graph[name] = report["dependencies"]
                     if github:
                         report["issues"].extend(

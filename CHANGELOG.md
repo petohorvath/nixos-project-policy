@@ -5,11 +5,11 @@
 - Require v0.4.0 or later for all member selections. Remove pre-v0.4.0 checker adapters, compatibility records, readiness and cleanup options, and old-release tests and guides. Reduce `policy/` to enrollment, pins, and release requirements. Store the stable update branch with pins and policy identity with release requirements; derive default systems from runner mappings.
 
 - Remove the policy-owned formatting/lint job and `lint` command. Members own formatting and lint enforcement.
-- Accept any nonempty selection of Nix systems for required architectures. Keep existing Linux runner mappings and use matching self-hosted runners for other systems in member CI and candidate batches.
+- Accept any nonempty selection of Nix systems for required architectures. Keep existing Linux runner mappings and use matching self-hosted runners for other systems in member CI.
 - Remove PR-title validation and make the caller's `edited` PR event optional.
 - Smoke-test development-shell startup and command execution without requiring a fixed tool list.
 - Require only the presence of `README.md`, without prescribing its content or headings.
-- Require nonempty host checks under the committed lock before project tests in member CI and candidate execution, including replay validation.
+- Require nonempty host checks under the committed lock before project tests in member CI.
 - Require an explicit host `devShells.<system>.default` in shell probes; a default package or non-default shell cannot satisfy the development-shell requirement.
 - Read policy selection and member settings from one literal reusable-workflow caller, with enrollment recorded separately.
 - Require `required_architectures` as a JSON list encoded as a string; default `vm_targets` and `additional_required_checks` to empty lists. Reject ambiguous callers, dynamic inputs, malformed settings, and mismatched release references.
@@ -19,12 +19,9 @@
 
 - Keep active enrollment in an identity-only roster. Audit exact member revisions with their discovered published immutable checkers and validated report identities; retain missing enforcement and inaccessible metadata as visible failures.
 
-- Remove scheduled release retirement handling and its tests. Prune the completed adoption batch; retain its history and evidence in Git and the original PR.
-- Add single-member candidate planning, native execution, and replayable aggregation against unmerged proposals. Keep baseline authority separate from proposed approval fields, use each selected immutable checker, and retain complete gate evidence without granting batch approval.
+- Remove scheduled release retirement handling and its tests. Remove member batch tracking, rollout allowances, candidate coordinators, and the pin-PR gate. Pin records hold only the approved pair and stable update branch; member test evidence stays in PRs and CI artifacts.
 - Check integration policy agreement at exact committed member dependency revisions, including reachable transitive members, follows, aliases, and independent lock scopes. Preserve behavioral integration tests and reject mixed selections, cycles, missing declarations, and unavailable sources.
 - Provide the separate `Integration / Policy agreement` gate and caller template with primary Policy source/record snapshot outputs. Keep member upgrades independent of the integration project's locked set.
-- Extend candidate coordination to the complete trusted roster, with exact locked integration evidence, required native worker accounting, strict attempt and execution bindings, and retained replay artifacts. Add a manual whole-batch workflow and distinguish complete candidate eligibility from human approval.
-- Validate routine root-only shared-pin updates in one central PR. Attach `Pin batch / Complete candidate` to the exact proposal head after trusted native worker and artifact verification; renew evidence when its authority or subjects change. Keep candidate execution separate from human-reviewed approval and separately activate the live merge gate. See the [pin routine](docs/maintenance.md#pin-candidates-and-approval).
 - Match central PR runs and artifacts to the proposal commit. Verify the trusted workflow revision separately through `GITHUB_WORKFLOW_SHA`.
 
 ## Historical releases (unsupported)

@@ -19,7 +19,7 @@ Each root flake exposes its systems and applicable outputs. Local helpers supply
 | Policy release          | Rules, checker code, workflows, and required checks                         |
 | Member caller           | Policy selection, required architectures, VM targets, and additional checks |
 | Member lockfiles        | Selected dependencies                                                       |
-| Current central records | Shared pins, the stable update branch, pin update batches, and enrollment   |
+| Current central records | Shared pins, the stable update branch, and enrollment                       |
 
 Each CI run captures one member commit, checker commit, and record commit. Compatibility checks test shared pins through root input overrides. Separate checks test the committed lock. Candidate validation supplies evidence; human-reviewed merge approves pins.
 
@@ -36,4 +36,4 @@ See [checker coverage](checker.md#implemented-coverage) for automatic checks and
 - [0005: External policy checks](adr/0005-external-policy-enforcement.md).
 - [0006: Separate selected dependencies from compatibility coverage](adr/0006-independent-selection-and-compatibility.md).
 - [0007: Member-owned policy selection](adr/0007-member-owned-policy-selection.md).
-- [0008: Validate pins before approval](adr/0008-validate-pin-updates-before-approval.md).
+- [0008: Review pin updates without member bookkeeping](adr/0008-validate-pin-updates-before-approval.md).

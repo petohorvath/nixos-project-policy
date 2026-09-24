@@ -37,7 +37,6 @@ class ProjectFixture:
             "stableBranch": "nixos-26.05",
             "schemaVersion": 1,
             "approved": PAIR,
-            "batches": [],
         }
         self.members = {"example": "owner/example"}
         self.config["_members"] = self.members

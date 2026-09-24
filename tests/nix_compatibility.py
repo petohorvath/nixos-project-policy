@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -242,7 +241,6 @@ class NixCompatibilityTests(unittest.TestCase):
                         "schemaVersion": 1,
                         "stableBranch": "nixos-26.05",
                         "approved": pins,
-                        "batches": [],
                     }
                 )
             )
@@ -250,7 +248,6 @@ class NixCompatibilityTests(unittest.TestCase):
                 json.dumps({"schemaVersion": 1, "members": {}})
             )
             lock_before = (project / "flake.lock").read_bytes()
-            caller_before = caller.read_bytes()
             self.run_command(
                 [
                     "nix",
@@ -287,56 +284,6 @@ class NixCompatibilityTests(unittest.TestCase):
                     self.assertEqual(report["commands"][-1]["returncode"], 0)
                     self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
                     self.assertTrue((evidence / "metadata.json").is_file())
-            proposal = workspace / "proposal"
-            shutil.copytree(record_directory.parent, proposal)
-            approved_before = (record_directory / "pins.json").read_bytes()
-            (proposal / "policy/pins.json").write_text(
-                json.dumps(
-                    {
-                        "schemaVersion": 1,
-                        "stableBranch": "nixos-26.05",
-                        "approved": None,
-                        "batches": [
-                            {
-                                "id": "unmerged",
-                                "status": "candidate",
-                                "pins": pins,
-                                "projects": {"fixture": policy.git_revision(project)},
-                            }
-                        ],
-                    }
-                )
-            )
-            for channel, revision in pins.items():
-                with self.subTest(candidate_channel=channel):
-                    report = json.loads(
-                        self.run_command(
-                            [
-                                sys.executable,
-                                str(policy.SOURCE_ROOT / "tools/policy.py"),
-                                "--policy-root",
-                                str(proposal),
-                                "compatibility",
-                                str(project),
-                                "--project",
-                                "fixture",
-                                "--batch",
-                                "unmerged",
-                                "--channel",
-                                channel,
-                                "--output",
-                                str(workspace / f"candidate-{channel}"),
-                            ]
-                        )
-                    )
-                    self.assertEqual(report["status"], "candidate-pass", report)
-                    self.assertEqual(report["resolvedRevision"], revision)
-                    self.assertEqual(report["pinStatus"], "candidate")
-                    self.assertEqual(caller.read_bytes(), caller_before)
-                    self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
-                    self.assertEqual(
-                        (record_directory / "pins.json").read_bytes(), approved_before
-                    )
             flake.write_text(
                 flake.read_text().replace(pins["stable"], pins["unstable"])
             )

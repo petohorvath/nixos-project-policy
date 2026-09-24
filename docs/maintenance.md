@@ -6,31 +6,36 @@ This guide covers v0.4.0 and later. Publish each immutable release before activa
 
 Current records live on `main`. Use one trusted snapshot for each operation.
 
-| Record                                                                                            | Purpose                                                            |
-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| [members.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/members.json) | Enrolled repository identities                                     |
-| [pins.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/pins.json)       | Approved shared pins, stable update branch, and pin update batches |
+| Record                                                                                            | Purpose                                       |
+| ------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| [members.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/members.json) | Enrolled repository identities                |
+| [pins.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/pins.json)       | Approved shared pins and stable update branch |
 
 The selected release supplies the rules, checker code, repository identity, and CI [requirements](../policy/requirements.json). Each v0.4.0 member selects its release and settings in its policy caller. See [record formats](checker.md#member-declarations-and-central-records) for fields and validation rules. Keep approval and test evidence in PRs and CI results.
 
 ## Pin candidates and approval
 
-Routine shared-pin updates use one central PR. The PR proposes an exact stable/unstable pair and registers every enrolled member's exact clean commit. Normal member CI keeps the current approval until human-reviewed merge.
+A pin update changes the approved pair through an ordinary central PR. Member commits and rollout states are not stored in this repository.
 
-1. Select the weekly candidate artifact or prepare an urgent pair. Candidate artifacts do not approve pins.
-2. Capture clean member commits from the trusted roster. Keep integration projects at their intended committed dependency sets.
-3. Resolve source failures and required lock updates through separate member PRs. Use the lock procedure below.
-4. Add a new batch to `policy/pins.json`. Put the proposed pair in `approved`. For a routine update with no remaining member rollout, set the batch to `complete`. Record the current approved pair in `previous`.
-5. Open the central PR. Keep enrollment, the stable update branch, policy versions, and checker changes separate. Commit records as regular files; symlinks and uncommitted edits fail validation.
-6. Review `Pin batch / Complete candidate` on the current PR head. Verify the baseline, all member outcomes, every required architecture, both compatibility results, ordinary checks, and applicable VM and additional gates. For integration projects, verify agreement and behavioral checks at the locked dependency revisions.
-7. Retain the plan, worker artifacts, GitHub provenance, and complete summary with the PR. Retain evidence from failed workers too.
-8. Obtain human merge approval with current complete evidence. Merge changes the approved pair for subsequent checks.
+1. Select the weekly candidate artifact or prepare an urgent pair.
+2. Change `approved.stable` and `approved.unstable` in `policy/pins.json`. Keep enrollment and checker changes separate.
+3. Use each enrolled member's selected published checker against the proposed record checkout. Run both compatibility channels on its required architectures, committed-lock checks, and applicable VM and additional gates. For integration projects, include agreement and behavioral checks at their locked dependency revisions.
+4. Retain exact tested source, checker, and record revisions with the results in the PR or CI artifacts. Resolve required member fixes through their own reviewed PRs, then renew affected checks.
+5. Obtain human approval and merge the central PR. Subsequent member CI runs capture the new pair from `main`.
 
-Retain active batches. Completed and withdrawn batches can be pruned in a separate reviewed cleanup; preserve their evidence in Git history and the original PR. Do not reuse an approved or historical batch as a candidate. For an active rollout, use `approved`, `rolling`, or `paused` until the member changes are complete. State-only pause, resume, completion, and withdrawal changes use ordinary review; they do not require a new candidate.
+For example, test a reviewed proposed record checkout with the member's selected checker:
 
-The `Central pin proposal` workflow uses the current trusted default-branch workflow, coordinator, and baseline. It tests proposed records as candidate data. It does not execute proposed code or requirements. See [central PR checks](checker.md#central-pin-prs) for evidence and permissions.
+```bash
+nix run --no-update-lock-file ./checker -- \
+  --policy-root ./proposed-records compatibility ./member \
+  --project MEMBER --channel stable --output ./evidence-stable
+nix run --no-update-lock-file ./checker -- \
+  --policy-root ./proposed-records compatibility ./member \
+  --project MEMBER --channel unstable --output ./evidence-unstable
+nix flake check ./member --no-update-lock-file --print-build-logs
+```
 
-For investigation, run `Complete candidate batch` or `Candidate member validation` from trusted `main`. Supply an exact committed proposal and batch ID. These manual results do not replace the central PR gate. See [local execution and replay](checker.md#complete-enrolled-batches).
+Repeat on every required architecture and run the remaining member gates. These results establish behavior against the supplied snapshot; they do not approve pins or verify that the snapshot is current `main`. No batch registration, central copy of member revisions, or separate pin-approval workflow is required.
 
 ### Candidate preparation
 
@@ -49,25 +54,13 @@ Members can retain their selected root dependency during compatibility tests. In
 5. Run builds and checks with `--no-update-lock-file` and no overrides.
 6. Also run the policy runner against both candidate revisions.
 
-Record each tested commit and result in the central PR. Test these lock properties on controlled fixtures when changing update automation. Preserve human review and rollout records for required member changes.
+Record each tested commit and result in the central PR. Test these lock properties on controlled fixtures when changing update automation. Keep member changes and their review evidence in their own PRs.
 
-Keep `VERSION` and member workflow references unchanged for pin updates. At completion, every enrolled member must meet its selected release's requirements against the new shared pins. During active rollouts, compatibility tests use the central approved pair. Temporary old/new lock allowances do not change that test target.
+Keep `VERSION` and member workflow references unchanged for pin updates. Validate enrolled members against the proposed pair before approval. Shared-pin lock scopes use one pair; no per-member old/new allowance is recorded.
 
 ## Renewing PR evidence
 
-Renew validation when the candidate pair, proposal head, registered source, settings, integration dependencies, checker, enrollment, or captured records change. Start a fresh attempt. An unrelated member branch update does not change an exact registration. Replay checks captured evidence; it cannot renew a live PR check.
-
-Maintenance invalidates stale proposal checks after pushes to `main`, scheduled runs, and manual dispatch. It checks baseline changes. After a baseline change, update/rebase the proposal or reopen the PR to start a fresh target event. Rerun an older workflow only while its original workflow revision and baseline remain current.
-
-Before activating the central gate:
-
-1. Verify that repository Actions settings allow `pull_request_target`.
-2. Verify that `Pin batch / Complete candidate` appears on the reviewed head.
-3. Require the intended trusted workflow and issuer in merge protection.
-4. Require an up-to-date branch or equivalent validation at merge time.
-5. Verify that selections are v0.4.0 or later and obtain human approval.
-
-Final GitHub checks and periodic invalidation are not atomic with a later merge. Local fixtures cannot verify hosted permissions, native ARM execution, or live merge protection. See GitHub's [target-trigger guidance](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target) and the [evidence contract](checker.md#central-pin-prs).
+Renew validation when either proposed revision changes. Renew affected checks when member sources, settings, integration dependencies, checker, or enrollment change. Review evidence against the final proposed pair before merge. Keep exact tested commits with the results; independent member changes require no central bookkeeping commit.
 
 ## Audit access
 
@@ -90,9 +83,9 @@ An empty roster requires no member credential. Otherwise, missing credentials or
 
 Pause further update merges when a regression appears. If the repair is understood and testable, keep the new pair. Add a regression test and validate the repair before resuming.
 
-If the impact is unacceptable or the repair is uncertain, roll back through tested PRs. Test the prior pair against current code. Both paths require human approval and records of temporary differences. Historical releases remain unchanged.
+If the impact is unacceptable or the repair is uncertain, roll back through tested PRs. Test the prior pair against current code. Both paths require human approval and evidence in the relevant PRs. Historical releases remain unchanged.
 
-A repair that changes either nixpkgs revision creates a revised candidate. Rerun all affected checks. Complete the batch only after rollout finishes. Mark superseded candidates as `withdrawn`.
+A repair that changes either nixpkgs revision creates a revised candidate. Rerun all affected checks.
 
 ## Enrollment
 
@@ -108,7 +101,7 @@ Drafts can prepare an unpublished release. Hosted checks require publication bef
 
 Removal also requires a reviewed central PR. Keep enrollment plans in issues. Ordinary policy upgrades do not change the roster.
 
-Before a new identity participates in pin batches, enroll it in `policy/members.json`. Retained batches keep their tested member names and commits after roster removal.
+Enroll new identities in `policy/members.json`; ordinary member changes do not update the roster or pin records.
 
 Run `audit WORKSPACE --fetch --github` for all enrolled identities. Retain its JSON report. See [audit behavior](checker.md#enrollment-audits) for release discovery and inspection failures.
 

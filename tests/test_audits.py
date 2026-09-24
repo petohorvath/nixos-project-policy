@@ -199,18 +199,6 @@ class AuditTests(AuditFixture, ProjectTestCase):
             )
             self.assertEqual(self.audit()[0], 2)
 
-    def test_candidate_report_is_visible_but_not_approved_compliance(self):
-        def candidate(command, **kwargs):
-            process = checked_process(command, **kwargs)
-            report = json.loads(process.stdout)
-            report["status"] = "candidate-ready"
-            return subprocess.CompletedProcess(command, 0, json.dumps(report), "")
-
-        self.process = candidate
-        code, report = self.audit()
-        self.assertEqual(code, 1, report)
-        self.assertEqual(report["projects"][0]["assessment"], "candidate-ready")
-
     def test_github_uses_roster_identity_and_keeps_unknown_metadata_as_errors(self):
         info = {
             "default_branch": "main",

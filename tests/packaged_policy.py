@@ -1,6 +1,5 @@
 """Host fixture: the built release package with controlled external services."""
 
-import copy
 import json
 import os
 from pathlib import Path
@@ -8,25 +7,21 @@ import shutil
 import sys
 import unittest
 
-import yaml
 
-from tests.fixtures import workflows
-from tests.fixtures.candidates import BatchFixture
+from tests.fixtures.family import FamilyFixture, write_json
 from tests.fixtures.data import (
-    NEW_PAIR,
     PAIR,
     POLICY_REPO,
     RELEASE,
 )
-from tests.fixtures.github import GitHub
 from tests.fixtures.process import REAL_RUN
 from tests.fixtures.projects import enabled_enforcement
-from tools import candidates, policy, records
+from tools import policy, records
 
 
 class PackagedPolicyTests(unittest.TestCase):
     def setUp(self):
-        self.fixture = self.enterContext(BatchFixture().prepared())
+        self.fixture = self.enterContext(FamilyFixture().prepared())
         fixture = self.fixture
         self.workspace = fixture.workspace.parent
         authority = self.workspace / "authority"
@@ -59,9 +54,9 @@ class PackagedPolicyTests(unittest.TestCase):
             Path(built[0]["outputs"]["out"]) / "bin/nixos-project-policy"
         )
         self.state = self.workspace / "github.json"
-        self.save({"github": {}, "checks": [], "requests": []})
+        self.save({"github": {}})
         self.config = self.workspace / "adapter.json"
-        candidates.write_json(
+        write_json(
             self.config,
             {
                 "state": str(self.state),
@@ -129,13 +124,13 @@ class PackagedPolicyTests(unittest.TestCase):
         return result
 
     def save(self, value):
-        candidates.write_json(self.state, value)
+        write_json(self.state, value)
 
     def gates(self, root, name, *, enrolled):
         planned = self.call("ci", root, "--project", name)
         self.assertEqual(planned["enrollment"], enrolled)
         self.call("vm", root, "--project", name)
-        for system in candidates.SYSTEMS:
+        for system in records.load_requirements()["ci"]["runners"]:
             checked = self.call(
                 "check", root, "--project", name, "--shell", system=system
             )
@@ -167,11 +162,10 @@ class PackagedPolicyTests(unittest.TestCase):
                 environment={**self.environment, "POLICY_PACKAGE_SYSTEM": system},
             )
 
-    def test_packaged_member_checks_and_complete_pin_pr(self):
+    def test_packaged_member_checks_audit_and_integration(self):
         fixture = self.fixture
         self.assertIn("0.4.0", self.command([self.program, "--version"]))
-        for arguments in (("--help",), ("pin-batch", "--help"), ("pin-pr", "--help")):
-            self.command([self.program, *arguments])
+        self.command([self.program, "--help"])
         self.call("validate")
         baseline = policy.fingerprints(fixture.baseline)
         before = self.call("audit", fixture.workspace)
@@ -187,7 +181,7 @@ class PackagedPolicyTests(unittest.TestCase):
         workflow["jobs"]["policy"]["with"].update(
             project="pending", vm_targets="[]", additional_required_checks="[]"
         )
-        candidates.write_json(pending / ".github/workflows/policy.yml", workflow)
+        write_json(pending / ".github/workflows/policy.yml", workflow)
         fixture.commit(pending)
         self.gates(pending, "pending", enrolled="not-enrolled")
         audited = self.call("audit", fixture.workspace)
@@ -207,7 +201,6 @@ class PackagedPolicyTests(unittest.TestCase):
         self.assertEqual(integration["behavioralIntegration"], "not-run")
         self.assertTrue(integration["dependencySetDigest"])
         self.assertEqual(policy.fingerprints(fixture.baseline), baseline)
-        self.routine_pr()
 
     def hosted_audit(self, audited):
         state = records.read_json(self.state)
@@ -266,185 +259,3 @@ class PackagedPolicyTests(unittest.TestCase):
         state = records.read_json(self.state)
         state["github"][path]["state"] = "active"
         self.save(state)
-
-    def artifact(self, name, directory):
-        github = GitHub.load(self.state)
-        github.artifact(POLICY_REPO, self.head, name, directory)
-        github.save(self.state)
-
-    def routine_pr(self):
-        fixture = self.fixture
-        subjects = {root: policy.fingerprints(root) for root in fixture.roots.values()}
-        baseline = policy.fingerprints(fixture.baseline)
-        fixture.proposal.rename(self.workspace / "unused-proposal")
-        shutil.copytree(
-            fixture.baseline, fixture.proposal, ignore=shutil.ignore_patterns(".git")
-        )
-        pins = copy.deepcopy(fixture.pins)
-        pins["approved"] = NEW_PAIR
-        pins["batches"].append(
-            {
-                "id": "next",
-                "status": "complete",
-                "previous": PAIR,
-                "pins": NEW_PAIR,
-                "projects": {
-                    name: policy.git_revision(root)
-                    for name, root in fixture.roots.items()
-                },
-            }
-        )
-        candidates.write_json(fixture.proposal / "policy/pins.json", pins)
-        fixture.commit(fixture.proposal)
-        head = policy.git_revision(fixture.proposal)
-        self.head = head
-        github = GitHub.load(self.state)
-        github.pin_pr(POLICY_REPO, self.base, head)
-        github.save(self.state)
-        workflow = yaml.load(
-            (policy.SOURCE_ROOT / ".github/workflows/pin-pr.yml").read_text(),
-            Loader=yaml.BaseLoader,
-        )
-        workspace = self.workspace / "workflow"
-        workspace.mkdir()
-        for name, root in (
-            ("authority", fixture.baseline),
-            ("proposal", fixture.proposal),
-            ("members", fixture.workspace),
-        ):
-            (workspace / name).symlink_to(root, target_is_directory=True)
-        environment = {
-            **workflows.environment(
-                workspace, program=self.program, inherited=self.environment
-            ),
-            "PR_NUMBER": "7",
-            "PROPOSAL_HEAD": head,
-            "GITHUB_WORKFLOW_SHA": self.base,
-            "RUN_ID": "91",
-            "RUN_ATTEMPT": "2",
-            "ATTEMPT": "91:2",
-            "BATCH": "next",
-        }
-
-        def shell(job, **extra):
-            process = workflows.run_step(workflow, job, workspace, environment, **extra)
-            self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
-            return process.stdout
-
-        shell("capture")
-        shell("plan")
-        plan = records.read_json(workspace / "pin-plan/plan.json")
-        self.assertEqual(plan["orchestratorRevision"], self.base)
-        self.assertFalse(plan["eligible"])
-        self.artifact("pin-plan-91-2", workspace / "pin-plan")
-        jobs = [
-            {
-                "id": index + 1,
-                "name": name,
-                "status": "completed",
-                "conclusion": "success",
-            }
-            for index, name in enumerate(
-                (
-                    "Capture pin proposal",
-                    "Plan pin candidate",
-                    "Aggregate pin candidate",
-                )
-            )
-        ]
-        for index, row in enumerate(plan["matrix"]["include"]):
-            member = workspace / "member"
-            member.unlink(missing_ok=True)
-            member.symlink_to(fixture.roots[row["project"]], target_is_directory=True)
-            shell(
-                "execute",
-                PROJECT=row["project"],
-                SYSTEM=row["system"],
-                POLICY_PACKAGE_SYSTEM=row["system"],
-            )
-            self.artifact(f"pin-result-91-2-{row['worker']}", workspace / "pin-result")
-            (workspace / "pin-result").rename(workspace / row["worker"])
-            jobs.append(
-                {
-                    "id": index + 4,
-                    "name": row["job"],
-                    "status": "completed",
-                    "conclusion": "success",
-                    "labels": [row["runner"]],
-                }
-            )
-        state = records.read_json(self.state)
-        state["github"][f"repos/{POLICY_REPO}/actions/runs/91/attempts/2/jobs"] = {
-            "jobs": jobs
-        }
-        self.save(state)
-        shell("aggregate")
-        summary = records.read_json(workspace / "pin-summary/result.json")
-        self.assertTrue(summary["eligible"])
-        self.assertEqual(summary["approval"], "not-granted")
-        for member in summary["members"].values():
-            for item in member["results"]:
-                if item["job"]["kind"] == "compatibility":
-                    self.assertEqual(item["report"]["pinStatus"], "candidate")
-        self.artifact("pin-summary-91-2", workspace / "pin-summary")
-        shell("finish", CHECK_ID="1")
-        check = records.read_json(self.state)["checks"][0]
-        self.assertEqual((check["head_sha"], check["conclusion"]), (head, "success"))
-        self.assertEqual(policy.fingerprints(fixture.baseline), baseline)
-        for root, source in subjects.items():
-            self.assertEqual(policy.fingerprints(root), source)
-        # Simulate a reviewed merge only in a new isolated record snapshot.
-        merged = self.workspace / "simulated-merged-records"
-        shutil.copytree(fixture.proposal, merged)
-        fixture.baseline = merged
-        report = self.call(
-            "compatibility",
-            fixture.roots["alpha"],
-            "--project",
-            "alpha",
-            "--channel",
-            "stable",
-            "--output",
-            self.workspace / "after-merge",
-        )
-        self.assertEqual(
-            (report["pinStatus"], report["resolvedRevision"]),
-            ("approved", NEW_PAIR["stable"]),
-        )
-        following = self.workspace / "following-proposal"
-        shutil.copytree(merged, following, ignore=shutil.ignore_patterns(".git"))
-        following_pins = copy.deepcopy(pins)
-        pair = {"stable": "6" * 40, "unstable": "7" * 40}
-        following_pins["approved"] = pair
-        following_pins["batches"].append(
-            {
-                "id": "following",
-                "status": "complete",
-                "previous": NEW_PAIR,
-                "pins": pair,
-                "projects": pins["batches"][-1]["projects"],
-            }
-        )
-        candidates.write_json(following / "policy/pins.json", following_pins)
-        fixture.commit(following)
-        next_plan = self.call(
-            "pin-batch",
-            "plan",
-            fixture.workspace,
-            "--all",
-            "--proposal-root",
-            following,
-            "--batch",
-            "following",
-            "--attempt",
-            "next-review",
-            "--output",
-            self.workspace / "following-plan",
-        )
-        self.assertEqual(next_plan["status"], "planned")
-        self.assertEqual(next_plan["pins"], pair)
-        self.assertFalse(next_plan["eligible"])
-
-
-if __name__ == "__main__":
-    unittest.main()

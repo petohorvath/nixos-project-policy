@@ -1,8 +1,6 @@
 name: Maintenance
 
 on:
-  push:
-    branches: [main]
   schedule:
     - cron: "23 6 * * *"
     - cron: "23 7 * * 1"
@@ -19,30 +17,6 @@ permissions:
   contents: read
 
 jobs:
-  invalidate:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      pull-requests: read
-      checks: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
-        with:
-          install_url: https://releases.nixos.org/nix/nix-2.34.6/install
-      - name: Invalidate stale open pin proposal results
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: nix run --no-update-lock-file .# -- --policy-root . pin-pr invalidate --output "$RUNNER_TEMP/pin-invalidation"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: pin-invalidation-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/pin-invalidation
-          if-no-files-found: error
   audit:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 6 * * *'
     runs-on: ubuntu-24.04

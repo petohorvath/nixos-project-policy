@@ -141,7 +141,7 @@ def check_member(
         )
         or report.get("repository", repository) != repository
         or report.get("checkerRevision", release["revision"]) != release["revision"]
-        or report.get("status") not in {"pass", "fail", "candidate-ready"}
+        or report.get("status") not in {"pass", "fail"}
         or (report["status"] == "fail") != (process.returncode == 1)
         or not isinstance(report.get("issues"), list)
         or any(

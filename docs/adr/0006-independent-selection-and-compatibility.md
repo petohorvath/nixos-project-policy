@@ -6,6 +6,6 @@ The policy runner reads trusted records and verifies the resolved root input. It
 
 A separate check tests the committed default configuration. Root overrides preserve normal flake evaluation and builds, including tools from the selected revision. They need no compatibility flake or import of the root `outputs` function. Cached builds can satisfy checks; metadata alone cannot.
 
-The exception covers only the selected root lock node. Other nixpkgs nodes and independently locked examples retain shared-pin checks. Candidates require exact clean member commits. Active rollouts test the approved pair, even when other lock scopes temporarily permit old pins. Candidate success does not approve pins.
+The exception covers only the selected root lock node. Other nixpkgs nodes and independently locked examples retain shared-pin checks. Pin-update validation records exact member commits in PR evidence. Central records contain one approved pair with no per-member rollout allowances. Successful tests do not approve pins.
 
 [ADR 0005](0005-external-policy-enforcement.md) still applies: policy records and execution remain outside member flakes, shells, imports, and builds. Human review establishes test coverage and approves activation, merges, and publication.

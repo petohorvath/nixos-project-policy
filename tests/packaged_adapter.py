@@ -4,7 +4,6 @@ Loaded by a temporary sitecustomize, never by production checker code. Real
 packaged entrypoints execute all policy decisions.
 """
 
-import base64
 import json
 import os
 from pathlib import Path
@@ -41,53 +40,11 @@ class PackagedGitHub(GitHub):
                     "sha": CONFIG["releases"][path.rsplit("/", 1)[1]]["revision"],
                 }
             }
-        if "/contents/policy/requirements.json" in path:
-            revision = query.full_url.rsplit("ref=", 1)[1]
-            release = next(
-                value
-                for value in CONFIG["releases"].values()
-                if value["revision"] == revision
-            )
-            return {
-                "encoding": "base64",
-                "content": base64.b64encode(
-                    Path(release["requirements"]).read_bytes()
-                ).decode(),
-            }
-        if "/git/commits/" in path:
-            name, revision = path.split("/")[2], path.rsplit("/", 1)[1]
-            process = REAL_RUN(
-                [
-                    "git",
-                    "-C",
-                    CONFIG["members"][name],
-                    "cat-file",
-                    "-e",
-                    revision + "^{commit}",
-                ],
-                capture_output=True,
-            )
-            assert process.returncode == 0, path
-            return {"sha": revision}
-        if "/commits/" in path and path.endswith("/check-runs"):
-            return {
-                "check_runs": [
-                    {
-                        "name": "Member / Extra",
-                        "head_sha": path.split("/")[-2],
-                        "status": "completed",
-                        "conclusion": "success",
-                    }
-                ]
-            }
         return super().lookup(query)
 
 
 def transport(query, **kwargs):
-    github = PackagedGitHub.load(STATE)
-    response = github.transport(query, **kwargs)
-    github.save(STATE)
-    return response
+    return PackagedGitHub.load(STATE).transport(query, **kwargs)
 
 
 def run(command, **kwargs):

@@ -41,7 +41,7 @@ nix develop --command python -m unittest tests.packaged_policy -v
 
 `tests.nix_compatibility` runs real metadata queries and root checks with both exact nixpkgs overrides. It checks lock preservation, rejection of required default-lock updates, nonempty host checks under the committed lock, and the explicit default development-shell requirement.
 
-`tests.packaged_policy` builds the checker from a controlled clean repository. It exercises member checks, checks before enrollment, audits, integration agreement, and the central PR workflow shell using the current release contract.
+`tests.packaged_policy` builds the checker from a controlled clean repository. It exercises member checks, checks before enrollment, audits, and integration agreement using the current release contract.
 
 Test adapters supply unpublished release metadata, GitHub responses, and Nix process results. Git operations, record processing, checker code, and packaged commands execute normally. Use the real-Nix test to verify native override behavior. Neither host test verifies live GitHub merge protection.
 

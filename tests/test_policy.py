@@ -91,41 +91,6 @@ class LockTests(unittest.TestCase):
 
 
 class PinStateTests(unittest.TestCase):
-    def batch(self, state):
-        return {
-            "id": "batch-1",
-            "status": state,
-            "pins": NEW_PAIR,
-            "previous": PAIR,
-            "projects": {"example": SOURCE},
-        }
-
-    def test_no_approval_is_not_a_baseline(self):
-        self.assertEqual(
-            policy.allowed_pairs({"approved": None, "batches": []}, "example", SOURCE),
-            [],
-        )
-
-    def test_candidate_requires_exact_registered_project_revision(self):
-        pins = {"approved": PAIR, "batches": [self.batch("candidate")]}
-        self.assertEqual(
-            policy.allowed_pairs(pins, "example", SOURCE, "batch-1"), [NEW_PAIR]
-        )
-        with self.assertRaisesRegex(ValueError, "exact project commit"):
-            policy.allowed_pairs(pins, "example", CHECKER, "batch-1")
-        self.assertEqual(policy.allowed_pairs(pins, "example", SOURCE), [NEW_PAIR])
-        self.assertEqual(policy.allowed_pairs(pins, "example", CHECKER), [PAIR])
-
-    def test_paused_rollout_keeps_old_and_new_pairs_for_affected_projects(self):
-        pins = {"approved": NEW_PAIR, "batches": [self.batch("paused")]}
-        self.assertIn(PAIR, policy.allowed_pairs(pins, "example", SOURCE))
-        self.assertEqual(policy.allowed_pairs(pins, "unrelated", SOURCE), [NEW_PAIR])
-
-    def test_completed_or_withdrawn_batch_cannot_extend_allowed_pins(self):
-        for state in ["complete", "withdrawn"]:
-            pins = {"approved": NEW_PAIR, "batches": [self.batch(state)]}
-            self.assertEqual(policy.allowed_pairs(pins, "example", SOURCE), [NEW_PAIR])
-
     def test_floating_revisions_fail(self):
         with self.assertRaises(ValueError):
             records.validate_pair({"stable": "nixos-26.05", "unstable": UNSTABLE})
@@ -626,63 +591,6 @@ class ProjectTests(ProjectTestCase):
         )
         self.assertEqual(status, 2, report)
 
-    def test_registered_candidate_validation_is_not_approved_compliance(self):
-        self.pins.update(
-            approved=None,
-            batches=[
-                {
-                    "id": "initial-candidate",
-                    "status": "candidate",
-                    "pins": PAIR,
-                    "projects": {"example": SOURCE},
-                }
-            ],
-        )
-        for enrolled in [True, False]:
-            for options in [[], ["--batch", "initial-candidate"]]:
-                with (
-                    self.subTest(enrolled=enrolled, options=options),
-                    patch.object(
-                        policy.subprocess,
-                        "check_output",
-                        side_effect=[SOURCE, "", SOURCE],
-                    ),
-                ):
-                    self.members.clear()
-                    if enrolled:
-                        self.members["example"] = "owner/example"
-                    status, report = self.run_policy(
-                        "check",
-                        str(self.root),
-                        "--project",
-                        "example",
-                        *options,
-                    )
-                    self.assertEqual(status, 0)
-                    self.assertEqual(report["status"], "candidate-ready")
-                    self.assertEqual(report["candidateBatch"], "initial-candidate")
-
-    def test_candidate_worktree_must_match_registered_commit(self):
-        self.pins["batches"] = [
-            {
-                "id": "candidate",
-                "status": "candidate",
-                "pins": NEW_PAIR,
-                "projects": {"example": SOURCE},
-            }
-        ]
-        with (
-            patch.object(policy, "git_revision", return_value=SOURCE),
-            patch.object(
-                policy.subprocess, "check_output", return_value=" M flake.lock\n"
-            ),
-        ):
-            code, report = self.run_policy(
-                "check", str(self.root), "--project", "example"
-            )
-        self.assertEqual(code, 2, report)
-        self.assertIn("clean registered", report["error"])
-
     def test_audit_reports_inaccessible_protection_without_claiming_it_is_absent(self):
         repository = "https://api.github.com/repos/owner/example"
         info = {
@@ -1059,17 +967,8 @@ class ProjectTests(ProjectTestCase):
         self.write("flake.lock", json.dumps(lock))
         self.assertEqual(self.inspect()["status"], "pass")
 
-    def test_mixed_old_new_channels_cannot_pass_rollout(self):
+    def test_mixed_shared_channels_cannot_pass(self):
         self.pins["approved"] = NEW_PAIR
-        self.pins["batches"] = [
-            {
-                "id": "rollout",
-                "status": "rolling",
-                "pins": NEW_PAIR,
-                "previous": PAIR,
-                "projects": {"example": SOURCE},
-            }
-        ]
         lock = lockfile()
         lock["nodes"]["rolling"]["locked"]["rev"] = NEW_UNSTABLE
         self.write("examples/flake.lock", json.dumps(lock))
@@ -1077,15 +976,6 @@ class ProjectTests(ProjectTestCase):
 
     def test_separate_locks_cannot_select_different_pairs(self):
         self.pins["approved"] = NEW_PAIR
-        self.pins["batches"] = [
-            {
-                "id": "rollout",
-                "status": "paused",
-                "pins": NEW_PAIR,
-                "previous": PAIR,
-                "projects": {"example": SOURCE},
-            }
-        ]
         lock = lockfile()
         lock["nodes"]["arbitrary-node"]["locked"]["rev"] = NEW_STABLE
         lock["nodes"]["rolling"]["locked"]["rev"] = NEW_UNSTABLE
@@ -1343,34 +1233,6 @@ class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
                     json.loads((evidence / "metadata.json").read_text()), self.metadata
                 )
 
-    def test_registered_candidate_executes_without_approving_or_changing_default_lock(
-        self,
-    ):
-        before = (self.root / "flake.lock").read_bytes()
-        self.pins.update(
-            approved=None,
-            batches=[
-                {
-                    "id": "next",
-                    "status": "candidate",
-                    "pins": NEW_PAIR,
-                    "projects": {"example": SOURCE},
-                }
-            ],
-        )
-        self.metadata["locks"]["nodes"]["arbitrary-node"]["locked"]["rev"] = NEW_STABLE
-        code, report = self.compatibility()
-        self.assertEqual(code, 0, report)
-        self.assertEqual(report["status"], "candidate-pass")
-        self.assertEqual(report["pinStatus"], "candidate")
-        self.assertEqual(report["candidateBatch"], "next")
-        self.assertEqual(report["expectedRevision"], NEW_STABLE)
-        self.assertEqual((self.root / "flake.lock").read_bytes(), before)
-        self.dirty = " M flake.nix"
-        code, report = self.compatibility("stable", "--batch", "next")
-        self.assertEqual(code, 1, report)
-        self.assertIn("clean registered", " ".join(report["issues"]))
-
     def test_resolved_input_must_be_present_exact_and_from_nixos(self):
         for failure in [
             "missing",
@@ -1473,70 +1335,11 @@ class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
         self.assertEqual(code, 1, report)
         self.assertIn("Invalid compatibility host", " ".join(report["issues"]))
 
-    def test_active_and_terminal_batches_use_only_the_central_approved_pair(self):
-        for state in ["approved", "rolling", "paused", "complete", "withdrawn"]:
-            for approved in [PAIR, NEW_PAIR]:
-                with self.subTest(state=state, approved=approved):
-                    self.pins.update(
-                        approved=approved,
-                        batches=[
-                            {
-                                "id": "rollout",
-                                "status": state,
-                                "pins": NEW_PAIR,
-                                "previous": PAIR,
-                                "projects": {"example": SOURCE},
-                            }
-                        ],
-                    )
-                    self.metadata["locks"]["nodes"]["arbitrary-node"]["locked"][
-                        "rev"
-                    ] = approved["stable"]
-                    code, report = self.compatibility()
-                    self.assertEqual(code, 0, report)
-                    self.assertEqual(report["expectedRevision"], approved["stable"])
-                    self.assertEqual(report["pinStatus"], "approved")
-                    self.assertIsNone(report["candidateBatch"])
-                    code, report = self.compatibility("stable", "--batch", "rollout")
-                    self.assertEqual(code, 1, report)
-
-    def test_candidate_selection_rejects_wrong_commits_and_ambiguity(self):
-        self.pins["batches"] = [
-            {
-                "id": "next",
-                "status": "candidate",
-                "pins": PAIR,
-                "projects": {"example": CHECKER},
-            }
-        ]
-        code, report = self.compatibility("stable", "--batch", "next")
-        self.assertEqual(code, 1, report)
-        self.assertIn("exact project commit", " ".join(report["issues"]))
-        self.pins["batches"][0]["projects"]["example"] = SOURCE
-        self.pins["batches"].append({**self.pins["batches"][0], "id": "other"})
-        code, report = self.compatibility()
-        self.assertEqual(code, 1, report)
-        self.assertIn("More than one candidate", " ".join(report["issues"]))
-        code, report = self.compatibility("stable", "--batch", "next")
-        self.assertEqual(code, 0, report)
-        self.assertEqual(report["status"], "candidate-pass")
-
-    def test_missing_approval_and_invalid_rollout_records_cannot_run(self):
+    def test_missing_approval_cannot_run(self):
         self.pins["approved"] = None
         code, report = self.compatibility()
         self.assertEqual(code, 1, report)
         self.assertEqual(report["commands"], [])
-        for state in ["rolling", "unknown"]:
-            self.pins["batches"] = [
-                {
-                    "id": "invalid",
-                    "status": state,
-                    "pins": PAIR,
-                    "projects": {"example": SOURCE},
-                }
-            ]
-            code, report = self.compatibility()
-            self.assertEqual(code, 2, report)
 
     def test_lock_changes_are_reported_as_failure(self):
         original = self.run_command
@@ -1639,7 +1442,6 @@ class RecordTests(unittest.TestCase):
                 "schemaVersion": 1,
                 "stableBranch": "nixos-26.05",
                 "approved": PAIR,
-                "batches": [],
             }
             (root / "policy/pins.json").write_text(json.dumps(pins))
             output = io.StringIO()
@@ -1649,31 +1451,6 @@ class RecordTests(unittest.TestCase):
             self.assertEqual(status, 0)
             self.assertTrue(report["approvedPins"])
             self.assertEqual(len(report["policyRecordsDigest"]), 64)
-
-    def test_active_batch_cannot_substitute_for_missing_approval(self):
-        source = Path(__file__).resolve().parents[1]
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "policy").mkdir()
-            (root / "policy/members.json").write_text(
-                (source / "policy/members.json").read_text()
-            )
-            pins = {
-                "schemaVersion": 1,
-                "stableBranch": "nixos-26.05",
-                "approved": None,
-                "batches": [
-                    {
-                        "id": "invalid",
-                        "status": "rolling",
-                        "pins": PAIR,
-                        "projects": {"nix-libnet": SOURCE},
-                    }
-                ],
-            }
-            (root / "policy/pins.json").write_text(json.dumps(pins))
-            with self.assertRaisesRegex(ValueError, "approved baseline"):
-                records.load(root)
 
 
 class WorkflowTests(unittest.TestCase):
@@ -1769,7 +1546,6 @@ class WorkflowTests(unittest.TestCase):
                         "schemaVersion": 1,
                         "stableBranch": "nixos-26.05",
                         "approved": PAIR,
-                        "batches": [],
                     }
                 )
             )

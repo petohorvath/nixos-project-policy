@@ -56,7 +56,3 @@ The immutable nixpkgs revision a member chooses for its normal root development,
 
 **Pin candidate**:
 An exact stable and unstable nixpkgs revision pair proposed for shared-pin approval. Successful checks provide evidence for approval but do not approve the pair.
-
-**Pin update batch**:
-A coordinated change to the shared pins, tracked across affected member projects from candidate evaluation through approval and any required rollout, or withdrawal.
-_Avoid_: Independent pin updates

@@ -39,7 +39,7 @@ nix develop --command python -m unittest tests.nix_compatibility -v
 nix develop --command python -m unittest tests.packaged_transition -v
 ```
 
-`tests.nix_compatibility` runs real metadata queries and root checks with both exact nixpkgs overrides. It checks lock preservation and rejection of required default-lock updates.
+`tests.nix_compatibility` runs real metadata queries and root checks with both exact nixpkgs overrides. It checks lock preservation, rejection of required default-lock updates, nonempty host checks under the committed lock, and the explicit default development-shell requirement.
 
 Fetch the repository's release tags before running `tests.packaged_transition`. This test builds the checker from a controlled clean repository. It exercises member upgrades, checks before enrollment, audits across releases, integration agreement, and the central PR workflow shell. It also checks retained records with the actual older release sources.
 
@@ -59,4 +59,4 @@ Add `--shell` to execute the member's development environment. The default check
 
 Follow the [shared Nix rules](../POLICY.md#nix-code-and-tests). Root `flake.nix` declares `systems`, inputs, and public outputs. Expressions in `nix/` supply the package and formatter through `pkgs.callPackage`. The check constructor takes named arguments; its callers appear above its implementation.
 
-The shell probe uses `nix eval --impure --expr builtins.currentSystem` to identify the host before selecting its formatter. Dependency and build evaluation use the locked flake. Review command usage, module dependencies, and names as well as lint results.
+The shell probe uses `nix eval --impure --expr builtins.currentSystem` to identify the host before checking its default development shell and formatter. Dependency and build evaluation use the locked flake. Review command usage, module dependencies, and names as well as lint results.

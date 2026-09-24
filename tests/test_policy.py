@@ -704,6 +704,35 @@ class ProjectTests(ProjectTestCase):
                 self.assertEqual(status, 1 if probe_error else 0)
                 self.assertEqual(report["status"], "fail" if probe_error else "pass")
 
+    def test_host_check_probe_rejects_empty_malformed_and_failed_evaluations(self):
+        for output in ["[]", "{}", "null", "[1]", "invalid", '["behavior"]']:
+            with (
+                self.subTest(output=output),
+                patch.object(
+                    policy.subprocess, "check_output", return_value="aarch64-linux\n"
+                ),
+                patch.object(
+                    policy.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess([], 0, output),
+                ),
+            ):
+                code, report = self.run_policy("host-checks", str(self.root))
+                self.assertEqual(code, 0 if output == '["behavior"]' else 1, report)
+                self.assertEqual(report["system"], "aarch64-linux")
+        with (
+            patch.object(
+                policy.subprocess, "check_output", return_value="x86_64-linux"
+            ),
+            patch.object(
+                policy.subprocess,
+                "run",
+                side_effect=subprocess.CalledProcessError(1, "nix"),
+            ),
+        ):
+            code, report = self.run_policy("host-checks", str(self.root))
+            self.assertEqual(code, 1, report)
+
     def test_readiness_cannot_waive_missing_approval_or_policy_version(self):
         self.config["projects"]["example"]["adopted"] = False
         self.pins["approved"] = None
@@ -2121,10 +2150,22 @@ class WorkflowTests(unittest.TestCase):
         default = workflow["jobs"]["policy"]["steps"]
         self.assertTrue(
             any(
-                step.get("run")
-                == "nix flake check ./project --no-update-lock-file --print-build-logs"
+                "nix flake check ./project --no-update-lock-file --print-build-logs"
+                in step.get("run", "")
                 for step in default
             )
+        )
+        tests_step = next(
+            step for step in default if step.get("name") == "Run project tests"
+        )
+        commands = tests_step["run"].strip().splitlines()
+        self.assertEqual(
+            commands[0],
+            "nix run --no-update-lock-file ./policy -- --policy-root ./policy-state host-checks ./project",
+        )
+        self.assertEqual(
+            commands[1],
+            "nix flake check ./project --no-update-lock-file --print-build-logs",
         )
 
     def test_maintenance_audit_uses_a_member_access_secret(self):

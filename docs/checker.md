@@ -25,6 +25,7 @@ nix run .# -- --policy-root . COMMAND
 | `compatibility PATH --project NAME --channel stable`            | Verify the stable override and run full root host checks. Use `unstable` for the other revision.                 |
 | `compatibility PATH --project NAME --channel stable --batch ID` | Run compatibility checks for an exact registered candidate.                                                      |
 | `lint PATH`                                                     | Run statix, deadnix, and root formatting in a temporary source copy.                                             |
+| `host-checks PATH`                                              | Require nonempty `checks.<host-system>` under the committed lock, without building checks.                       |
 | `audit WORKSPACE`                                               | Inspect each enrolled checkout with its selected published checker; report failures and dependency cycles.       |
 | `audit WORKSPACE --fetch --github`                              | Also clone missing public checkouts and inspect GitHub enforcement. Leave existing checkouts unchanged.          |
 | `agreement PATH --project NAME`                                 | Compare an integration project's policy selection with its exact locked member revisions.                        |
@@ -36,7 +37,7 @@ nix run .# -- --policy-root . COMMAND
 
 `check --readiness` remains accepted for older callers. It does not weaken v0.4.0 checks before enrollment.
 
-For a shell-only probe, run `nix run .# -- shell PATH`. This probes common tools and the root formatter without asserting compliance. Shell probes clear the inherited environment. Policy CI uses it as a host smoke test. Probes use supported help/version commands; statix has no `--version` flag at the bootstrap pin.
+For a shell-only probe, run `nix run .# -- shell PATH`. This first evaluates `devShells.<host-system>.default.drvPath`, then probes common tools and the root formatter without asserting compliance. A default package or non-default shell cannot satisfy the development-shell requirement. Shell probes clear the inherited environment. Policy CI uses it as a host smoke test. Probes use supported help/version commands; statix has no `--version` flag at the bootstrap pin.
 
 After publication, use a selected release with current records:
 
@@ -490,7 +491,7 @@ The first job captures the checker, member, and current record commits. All late
 
 The first job verifies the release and generates matrices once on x86_64. This metadata job does not add x86_64 to the member's required architectures or publish a release.
 
-Compliance runs structural, pin, caller, and shell checks, plus PR-title validation on PRs. Formatting/lint runs `lint` in the member shell and formats a disposable copy. Project tests run committed-lock root checks. Compatibility runs both shared revisions.
+Compliance runs structural, pin, caller, and shell checks, plus PR-title validation on PRs. Formatting/lint runs `lint` in the member shell and formats a disposable copy. Project tests first run `host-checks` to require nonempty host checks with `--no-update-lock-file`, then run full committed-lock root checks. Candidate execution and replay enforce the same sequence for v0.4.0 and later; older selected releases retain their existing behavior. Compatibility runs both shared revisions.
 
 Each category runs independently on every required architecture with `fail-fast: false`. They and the VM job depend only on the first job. A failure does not suppress other categories. Declared VM targets require the x86_64 gate even with ARM-only ordinary coverage. Without targets, VM reports `not-applicable` and its status need not be required.
 

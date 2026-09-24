@@ -253,6 +253,41 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
         self.assertEqual(by_kind["compatibility"], "pass")
         self.assertEqual(records.read_json(output / "result.json"), result)
 
+    def test_empty_committed_checks_fail_even_when_compatibility_checks_pass(self):
+        _, _, plan = self.plan()
+        self.services.failure = "empty-host-checks"
+        code, result, output = self.worker(plan, "x86_64-linux")
+        self.assertEqual(code, 1, result)
+        tests = next(
+            item for item in result["results"] if item["job"]["kind"] == "tests"
+        )
+        self.assertEqual(tests["status"], "fail")
+        self.assertIn("nonempty host checks", " ".join(tests["issues"]))
+        self.assertEqual(len(tests["commands"]), 1)
+        self.assertTrue(
+            all(
+                item["status"] == "pass"
+                for item in result["results"]
+                if item["job"]["kind"] == "compatibility"
+            )
+        )
+        self.assertEqual(self.aggregate(plan, [output])[0], 1)
+
+    def test_replay_rejects_missing_committed_host_check_probe(self):
+        _, _, plan = self.plan()
+        code, result, output = self.worker(plan, "x86_64-linux")
+        self.assertEqual(code, 0, result)
+        tests = next(
+            item for item in result["results"] if item["job"]["kind"] == "tests"
+        )
+        tests["commands"].pop(0)
+        (output / "result.json").write_text(json.dumps(result))
+        code, report, _ = self.aggregate(plan, [output])
+        self.assertEqual(code, 1, report)
+        self.assertTrue(
+            any("substituted" in issue for issue in report["issues"]), report
+        )
+
     def test_source_mutation_retains_failure_results_and_execution_logs(self):
         _, _, plan = self.plan()
         self.services.mutation = lambda command: (self.root / "flake.lock").write_text(

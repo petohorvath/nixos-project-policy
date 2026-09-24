@@ -470,6 +470,12 @@ class Coordinator:
         legacy_compatibility = (
             kind == "compatibility" and plan["compatibilityMode"] == "committed-pair"
         )
+        if kind == "tests" and len(commands) > 1:
+            probe = run_process(commands[0], output / "host-checks")
+            result["commands"].append(probe)
+            validate_host_checks_report(
+                child_report(probe, release, plan["executionRecords"]), job
+            )
         if legacy_compatibility:
             inspection = run_process(commands[0], output / "pins")
             result["commands"].append(inspection)
@@ -648,6 +654,15 @@ class Coordinator:
                             )
                         validate_committed_execution(item["commands"][-1])
                     elif job["kind"] == "tests":
+                        if len(item["commands"]) > 1:
+                            validate_host_checks_report(
+                                child_report(
+                                    item["commands"][0],
+                                    plan["release"],
+                                    plan["executionRecords"],
+                                ),
+                                job,
+                            )
                         validate_committed_execution(item["commands"][-1])
                     else:
                         raise ValueError(f"Missing selected checker report: {key}")
@@ -763,6 +778,18 @@ def child_report(process, release, snapshot):
     return report
 
 
+def validate_host_checks_report(report, job):
+    checks = report.get("checks")
+    if (
+        report.get("status") != "pass"
+        or report.get("system") != job["system"]
+        or not isinstance(checks, list)
+        or not checks
+        or not all(isinstance(check, str) for check in checks)
+    ):
+        raise ValueError("Committed-lock project tests require nonempty host checks")
+
+
 def validate_committed_execution(process):
     command = process.get("command", [])
     if (
@@ -803,6 +830,13 @@ def job_command_plan(plan, job, root, record_root, *, compatibility_output=None)
         "agreement": ["agreement", root, "--project", plan["project"]],
     }
     if job["kind"] == "tests":
+        if releases.version_at_least(plan["release"]["version"], (0, 4, 0)):
+            return [
+                releases.checker_command(
+                    plan["release"], Path(record_root), "host-checks", root
+                ),
+                committed,
+            ]
         return [committed]
     if job["kind"] == "compatibility" and plan["compatibilityMode"] == "committed-pair":
         return [

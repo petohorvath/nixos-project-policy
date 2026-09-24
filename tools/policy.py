@@ -139,6 +139,10 @@ def main(argv=None):
         "shell", help="Probe common tools and the root formatter"
     )
     shell.add_argument("project_dir", type=Path)
+    host_checks = commands.add_parser(
+        "host-checks", help="Require nonempty host checks with the committed lock"
+    )
+    host_checks.add_argument("project_dir", type=Path)
     vm = commands.add_parser(
         "vm", help="Run member-declared VM targets on a suitable host"
     )
@@ -289,6 +293,8 @@ def main(argv=None):
         elif args.command == "lint":
             issues = check_lint(args.project_dir)
             result = {"status": "fail" if issues else "pass", "issues": issues}
+        elif args.command == "host-checks":
+            result = check_host_checks(args.project_dir)
         elif args.command == "compatibility":
             records_revision = git_revision(records_root)
             result = check_compatibility(
@@ -874,10 +880,66 @@ def compatibility_command(result, command, *, capture=False):
         raise
 
 
+def check_host_checks(root):
+    result = {"status": "fail", "system": None, "checks": [], "issues": []}
+    try:
+        result["system"] = subprocess.check_output(
+            ["nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem"],
+            text=True,
+            timeout=30,
+        ).strip()
+        process = subprocess.run(
+            [
+                "nix",
+                "eval",
+                "--json",
+                "--no-update-lock-file",
+                f"path:{root.resolve()}#checks.{result['system']}",
+                "--apply",
+                "builtins.attrNames",
+            ],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            timeout=120,
+        )
+        checks = json.loads(process.stdout)
+        if (
+            not isinstance(checks, list)
+            or not checks
+            or not all(isinstance(check, str) for check in checks)
+        ):
+            raise ValueError(
+                "Committed-lock project tests require nonempty host checks"
+            )
+        result.update(status="pass", checks=checks)
+    except (ValueError, subprocess.SubprocessError, OSError) as error:
+        result["issues"].append(f"project tests: host check probe failed: {error}")
+    return result
+
+
 def check_shell(root, tools):
     # --ignore-environment prevents host tools from satisfying shell requirements.
     script = 'set -eu; for tool in "$@"; do command -v "$tool"; case "$tool" in nix) "$tool" --version ;; *) "$tool" --help >/dev/null ;; esac; done'
     try:
+        system = subprocess.check_output(
+            ["nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem"],
+            text=True,
+            timeout=30,
+        ).strip()
+        # Unnamed nix develop can fall back to the default package.
+        subprocess.run(
+            [
+                "nix",
+                "eval",
+                "--no-update-lock-file",
+                "--raw",
+                f"path:{root.resolve()}#devShells.{system}.default.drvPath",
+            ],
+            check=True,
+            timeout=120,
+            stdout=sys.stderr,
+        )
         subprocess.run(
             [
                 "nix",
@@ -896,11 +958,6 @@ def check_shell(root, tools):
             timeout=900,
             stdout=sys.stderr,
         )
-        system = subprocess.check_output(
-            ["nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem"],
-            text=True,
-            timeout=30,
-        ).strip()
         subprocess.run(
             [
                 "nix",

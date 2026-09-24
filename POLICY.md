@@ -52,7 +52,7 @@ Benchmarks are optional and require a concrete project need; policy adoption doe
 
 Fix real statix and deadnix findings before requiring their gates. Narrow, documented suppressions may cover intentional code or false positives. Broad disabling is not compliance.
 
-Root `nix flake check` runs applicable non-VM checks for the host platform. Keep VM execution and its build dependencies outside default checks. Provide explicit VM commands where applicable. Each member declares `required_architectures` in its policy caller as a nonempty subset of the policy release's supported Linux systems. Required CI covers formatting/lint and relevant evaluation/unit/integration checks on every recorded architecture, with pinned stable and unstable compatibility where relevant. Applicable VM suites gate merges on x86_64 Linux independently of that selection. Documentation-only PRs may use relevant documentation, formatting, and policy checks.
+Root `nix flake check` runs applicable non-VM checks for the host platform. Provide nonempty host checks under the committed lock as well as under the shared compatibility pins. Keep VM execution and its build dependencies outside default checks. Provide explicit VM commands where applicable. Each member declares `required_architectures` in its policy caller as a nonempty subset of the policy release's supported Linux systems. Required CI covers formatting/lint and relevant evaluation/unit/integration checks on every recorded architecture, with pinned stable and unstable compatibility where relevant. Applicable VM suites gate merges on x86_64 Linux independently of that selection. Documentation-only PRs may use relevant documentation, formatting, and policy checks.
 
 ## Documentation and agent guidance
 

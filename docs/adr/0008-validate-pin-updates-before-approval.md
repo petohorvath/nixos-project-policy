@@ -2,14 +2,12 @@
 status: accepted
 ---
 
-# Validate shared-pin updates before approval
+# Review pin updates without member bookkeeping
 
-Registering candidates solely to run CI requires a registration PR before approval. Use one central PR to propose and test both revisions across all enrolled members, including integration projects. Human-reviewed merge approves the pair. Routine compatibility updates need no member PR or policy-version change.
+Store one approved stable/unstable pair and its stable update branch in central pin records. Recording member revisions and rollout states requires synchronization commits whenever member work changes. Keep test subjects and results in PRs and CI artifacts instead.
 
-Prepare candidates weekly or urgently when needed. Capture exact clean member commits, selected immutable checker releases, settings, and records. Test both revisions on every required architecture. For integration projects, use the actual locked dependency set. Preserve committed-lock checks and applicable VM gates. Keep evidence in the PR and CI results.
+Prepare candidate pairs weekly or urgently when needed. Propose a pair through an ordinary central PR. Validate both revisions with enrolled members' selected immutable checkers on their required architectures. Preserve committed-lock checks and applicable VM gates. Integration projects test their actual locked dependency sets. Human review assesses this evidence and approves the pair through merge; normal member CI uses current approval until then.
 
-Proposed records are test data. Trusted enrollment and published checkers define coverage; a proposal cannot omit members or replace checking code. Report candidate success separately from approved-pin compliance. Normal member CI uses current approval until merge. Changing either candidate revision requires renewed checks across the batch. Changed member sources require renewed evidence for affected projects.
+The repository does not coordinate member update states or publish a separate pin-approval status. Member repairs use independently reviewed PRs. Changes to the proposed pair require renewed validation, and changes to tested sources require renewed evidence for the affected projects. Keep the exact tested commits with the results, outside central pin records.
 
-[ADR 0006](0006-independent-selection-and-compatibility.md) still applies. Members can retain selected root dependencies during compatibility tests. Source repairs and pin-bound lock scopes still require member PRs. These include older releases, independently locked examples, additional inputs, and distinct transitive nixpkgs nodes. Rollout and recovery obligations remain.
-
-The central PR workflow and candidate coordinator implement this decision in the prepared v0.4.0 contract. Publication and live merge-gate activation remain separate requirements. Follow [pin maintenance](../maintenance.md#pin-candidates-and-approval) and [activation](../maintenance.md#renewing-pr-evidence).
+[ADR 0006](0006-independent-selection-and-compatibility.md) still applies. Members retain their selected root dependencies, while other shared-pin scopes use the approved pair without temporary per-member allowances. Recovery restores a tested pair through a reviewed central PR or fixes the member. Follow [pin maintenance](../maintenance.md#pin-candidates-and-approval).

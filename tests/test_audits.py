@@ -16,66 +16,29 @@ from tests.fixtures.audits import AuditFixture, checked_process
 from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.cli import invoke
 from tests.fixtures.data import (
-    LEGACY_REQUIRED_CHECKS,
     CHECKER,
     POLICY_REPO,
     RELEASE,
     REQUIRED_CHECKS,
-    SOURCE,
 )
 from tests.fixtures.services import published
 from tools import policy, records
 
 
 class AuditTests(AuditFixture, ProjectTestCase):
-    def test_mixed_selections_use_verified_commits_and_separate_gate_contracts(self):
-        self.add_member("legacy", "v0.1.1")
-        self.add_member("derived", "v0.3.0")
-        project = self.config["projects"]["derived"]
-        project["requiredChecks"] = [
-            name
-            for name in LEGACY_REQUIRED_CHECKS
-            if not name.endswith("(aarch64-linux)")
-            and not name.endswith(", aarch64-linux)")
-        ]
-        self.config["projects"]["example"].update(policyVersion="v0.3.0", adopted=False)
-        inspected = []
+    def test_unsupported_selection_remains_an_enrolled_failure(self):
+        self.add_member("unsupported", "v0.3.99")
+        code, report = self.audit()
+        self.assertEqual(code, 1, report)
+        member = next(p for p in report["projects"] if p["project"] == "unsupported")
+        self.assertEqual(member["enrollment"], "enrolled")
+        self.assertEqual(member["status"], "fail")
+        self.assertIn("v0.4.0 or later", " ".join(member["issues"]))
+        self.assertFalse(any("v0.3.99" in path for path in self.release_requests))
 
-        def gates(project, checks, *, workflow):
-            self.assertEqual(workflow, ".github/workflows/policy.yml")
-            inspected.append((project["repository"], checks))
-            return []
-
-        with patch.object(policy, "check_github", side_effect=gates):
-            code, report = self.audit("--github")
-        self.assertEqual(code, 0, report)
-        by_name = {member["project"]: member for member in report["projects"]}
-        self.assertEqual(by_name["example"]["policyVersion"], RELEASE)
-        self.assertEqual(by_name["legacy"]["policyVersion"], "v0.1.1")
-        for member in by_name.values():
-            self.assertEqual(member["revision"], SOURCE)
-            self.assertEqual(member["checkerRevision"], CHECKER)
-            self.assertEqual(member["records"]["revision"], SOURCE)
-            self.assertEqual(member["enrollment"], "enrolled")
-            self.assertEqual(member["assessment"], "pass")
-        self.assertEqual(
-            dict(inspected)["owner/legacy"], ["Historical / Release-specific tests"]
-        )
-        self.assertEqual(dict(inspected)["owner/example"], REQUIRED_CHECKS)
-        for command in self.commands:
-            self.assertIn(f"github:{POLICY_REPO}/{CHECKER}", command)
-            self.assertEqual(
-                command[command.index("--policy-root") + 1],
-                str(self.root.parent / "records"),
-            )
-        self.assertIn(
-            f"repos/{POLICY_REPO}/releases/tags/v0.1.1", self.release_requests
-        )
-
-    def test_roster_removal_changes_coverage_and_digest_without_pruning_legacy_data(
+    def test_roster_removal_changes_coverage_and_digest(
         self,
     ):
-        before_config = copy.deepcopy(self.config)
         code, before = self.audit()
         self.assertEqual(code, 0, before)
         self.members.clear()
@@ -83,13 +46,8 @@ class AuditTests(AuditFixture, ProjectTestCase):
         self.assertEqual(code, 0, after)
         self.assertEqual(after["projects"], [])
         self.assertNotEqual(before["policyRecordsDigest"], after["policyRecordsDigest"])
-        self.assertEqual(
-            before["records"]["legacyDigest"], after["records"]["legacyDigest"]
-        )
-        self.assertEqual(self.config["projects"], before_config["projects"])
 
-    def test_new_enrolled_member_does_not_need_copied_legacy_settings(self):
-        self.config["projects"] = {}
+    def test_new_enrolled_member_uses_member_settings(self):
         code, report = self.audit()
         self.assertEqual(code, 0, report)
         self.assertEqual(report["projects"][0]["policyVersion"], RELEASE)
@@ -240,18 +198,6 @@ class AuditTests(AuditFixture, ProjectTestCase):
                 command, 0, body, ""
             )
             self.assertEqual(self.audit()[0], 2)
-
-    def test_candidate_report_is_visible_but_not_approved_compliance(self):
-        def candidate(command, **kwargs):
-            process = checked_process(command, **kwargs)
-            report = json.loads(process.stdout)
-            report["status"] = "candidate-ready"
-            return subprocess.CompletedProcess(command, 0, json.dumps(report), "")
-
-        self.process = candidate
-        code, report = self.audit()
-        self.assertEqual(code, 1, report)
-        self.assertEqual(report["projects"][0]["assessment"], "candidate-ready")
 
     def test_github_uses_roster_identity_and_keeps_unknown_metadata_as_errors(self):
         info = {
@@ -443,7 +389,6 @@ class RosterTests(ProjectTestCase):
                     "example": {"repository": "owner/example", "adopted": True}
                 },
             },
-            {"schemaVersion": 1, "members": {"example": "owner/other"}},
             {"schemaVersion": 1, "members": {"one": "owner/same", "two": "OWNER/SAME"}},
         ]
         for value in values:
@@ -457,49 +402,7 @@ class RosterTests(ProjectTestCase):
         path.unlink()
         self.assertEqual(invoke("--policy-root", str(root), "validate")[0], 2)
 
-    def test_whole_transitional_snapshot_retains_historical_batch_identities(self):
-        root = self.write_records()
-        source = policy.SOURCE_ROOT / "policy"
-        config = records.read_json(source / "projects.json")
-        pins = records.read_json(source / "pins.json")
-        roster = records.read_json(source / "members.json")
-        self.assertEqual(
-            roster["members"],
-            {
-                name: project["repository"]
-                for name, project in config["projects"].items()
-                if project["adopted"]
-            },
-        )
-        config["projects"]["modern"] = {
-            "repository": "owner/modern",
-            "adopted": False,
-            "policyVersion": None,
-            "vmTargets": [],
-        }
-        for state in ["complete", "withdrawn"]:
-            pins["batches"].append(
-                {
-                    "id": state,
-                    "status": state,
-                    "pins": pins["approved"],
-                    "projects": {name: SOURCE for name in config["projects"]},
-                }
-            )
-        for enrolled in [{"modern": "owner/modern"}, {}]:
-            (root / "policy/projects.json").write_text(json.dumps(config))
-            (root / "policy/pins.json").write_text(json.dumps(pins))
-            (root / "policy/members.json").write_text(
-                json.dumps({"schemaVersion": 1, "members": enrolled})
-            )
-            self.assertEqual(invoke("--policy-root", str(root), "validate")[0], 0)
-        del config["projects"]["modern"]
-        (root / "policy/projects.json").write_text(json.dumps(config))
-        code, report = invoke("--policy-root", str(root), "validate")
-        self.assertEqual(code, 2, report)
-        self.assertIn("Unknown project in batch", report["error"])
-
-    def test_actual_maintenance_adapter_retains_mixed_member_failure_reports(self):
+    def test_actual_audit_workflow_retains_mixed_member_failure_reports(self):
         root = self.write_records()
         workspace = self.root.parent
         runner = workspace / "runner"
@@ -507,7 +410,7 @@ class RosterTests(ProjectTestCase):
         projects.mkdir(parents=True)
         shutil.copytree(self.root, projects / "example")
         workflow = yaml.load(
-            (policy.SOURCE_ROOT / ".github/workflows/maintenance.yml").read_text(),
+            (policy.SOURCE_ROOT / ".github/workflows/audit.yml").read_text(),
             Loader=yaml.BaseLoader,
         )
         steps = workflow["jobs"]["audit"]["steps"]
@@ -528,7 +431,6 @@ class RosterTests(ProjectTestCase):
             ("missing", 1),
             ("identity", 1),
             ("github-error", 2),
-            ("mixed", 0),
         ]:
             with self.subTest(mode=mode):
                 caller = json.loads(original)
@@ -539,30 +441,6 @@ class RosterTests(ProjectTestCase):
                 (projects / "example/.github/workflows/policy.yml").write_text(
                     json.dumps(caller)
                 )
-                if mode == "mixed":
-                    shutil.copytree(projects / "example", projects / "legacy")
-                    caller["jobs"]["policy"]["uses"] = (
-                        f"{POLICY_REPO}/.github/workflows/check.yml@v0.1.1"
-                    )
-                    caller["jobs"]["policy"]["with"] = {
-                        "project": "legacy",
-                        "policy_version": "v0.1.1",
-                    }
-                    (projects / "legacy/.github/workflows/policy.yml").write_text(
-                        json.dumps(caller)
-                    )
-                    self.members["legacy"] = "owner/legacy"
-                    self.config["projects"]["example"]["requiredChecks"] = (
-                        REQUIRED_CHECKS
-                    )
-                    self.config["projects"]["legacy"] = {
-                        "repository": "owner/legacy",
-                        "adopted": True,
-                        "policyVersion": "v0.1.1",
-                        "vmTargets": [],
-                        "requiredChecks": ["Historical / Tests"],
-                    }
-                    self.write_records()
                 result = subprocess.run(
                     ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
                     cwd=root,

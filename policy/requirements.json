@@ -1,6 +1,5 @@
 {
   "schemaVersion": 1,
-  "systems": ["x86_64-linux", "aarch64-linux"],
   "ci": {
     "callerJobName": "Policy",
     "requiredChecks": ["Policy / Verify policy version and load shared pins"],
@@ -14,5 +13,6 @@
       "aarch64-linux": "ubuntu-24.04-arm"
     },
     "vmCheck": "Policy / VM tests (x86_64-linux)"
-  }
+  },
+  "policyRepository": "petohorvath/nixos-project-policy"
 }

@@ -14,16 +14,16 @@ Each root flake exposes its systems and applicable outputs. Local helpers supply
 
 ## Pins and enforcement
 
-| Source                  | Owns                                                                         |
-| ----------------------- | ---------------------------------------------------------------------------- |
-| Policy release          | Rules, checker code, workflows, and required checks                          |
-| Member caller           | Policy selection, required architectures, VM targets, and additional checks  |
-| Member lockfiles        | Selected dependencies                                                        |
-| Current central records | Shared pins, pin update batches, enrollment, retirements, and legacy records |
+| Source                  | Owns                                                                        |
+| ----------------------- | --------------------------------------------------------------------------- |
+| Policy release          | Rules, checker code, workflows, and required checks                         |
+| Member caller           | Policy selection, required architectures, VM targets, and additional checks |
+| Member lockfiles        | Selected dependencies                                                       |
+| Current central records | Shared pins, the stable update branch, and enrollment                       |
 
 Each CI run captures one member commit, checker commit, and record commit. Compatibility checks test shared pins through root input overrides. Separate checks test the committed lock. Candidate validation supplies evidence; human-reviewed merge approves pins.
 
-Checks before enrollment use the same requirements. Enrollment and policy compliance remain separate. Legacy records preserve the contracts of supported older checkers.
+Checks before enrollment use the same requirements. Enrollment and policy compliance remain separate. Supported selections start at v0.4.0.
 
 See [checker coverage](checker.md#implemented-coverage) for automatic checks and [review responsibilities](checker.md#review-responsibilities) for their limits. See [maintenance](maintenance.md) for procedures.
 
@@ -36,4 +36,4 @@ See [checker coverage](checker.md#implemented-coverage) for automatic checks and
 - [0005: External policy checks](adr/0005-external-policy-enforcement.md).
 - [0006: Separate selected dependencies from compatibility coverage](adr/0006-independent-selection-and-compatibility.md).
 - [0007: Member-owned policy selection](adr/0007-member-owned-policy-selection.md).
-- [0008: Validate pins before approval](adr/0008-validate-pin-updates-before-approval.md).
+- [0008: Review pin updates without member bookkeeping](adr/0008-validate-pin-updates-before-approval.md).

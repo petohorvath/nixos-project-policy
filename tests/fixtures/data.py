@@ -1,4 +1,4 @@
-"""Member locks, release identities, and support records used by scenarios."""
+"""Member locks, release identities, and pin records used by scenarios."""
 
 from tools import policy
 
@@ -26,11 +26,6 @@ REQUIRED_CHECKS = [
     "Policy / Compliance (aarch64-linux)",
     "Policy / Project tests (x86_64-linux)",
     "Policy / Project tests (aarch64-linux)",
-]
-LEGACY_REQUIRED_CHECKS = [
-    *REQUIRED_CHECKS,
-    "Policy / Formatting and lint (x86_64-linux)",
-    "Policy / Formatting and lint (aarch64-linux)",
 ]
 VM_CHECK = "Policy / VM tests (x86_64-linux)"
 
@@ -66,19 +61,4 @@ def lockfile():
             "arbitrary-node": nixpkgs(STABLE, "nixos-26.05"),
             "rolling": nixpkgs(UNSTABLE, "nixos-unstable"),
         },
-    }
-
-
-START = "2030-01-01T00:00:00Z"
-BEFORE = "2030-01-31T23:59:59Z"
-EFFECTIVE = "2030-02-01T00:00:00Z"
-AFTER = "2030-02-02T00:00:00Z"
-
-
-def retirement():
-    return {
-        "decision": "https://github.com/example/policy/pull/123",
-        "reason": "Reviewed fixture retirement after the announced migration period",
-        "migrationStartsAt": START,
-        "retiresAt": EFFECTIVE,
     }

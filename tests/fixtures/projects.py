@@ -10,7 +10,6 @@ from tests.fixtures.data import (
     PAIR,
     POLICY_REPO,
     RELEASE,
-    LEGACY_REQUIRED_CHECKS,
     lockfile,
 )
 from tools import policy
@@ -28,38 +27,23 @@ class ProjectFixture:
         self.resources.enter_context(self.temp)
         self.root = Path(self.temp.name) / "example"
         self.config = {
-            "schemaVersion": 2,
+            "schemaVersion": 1,
             "policyRepository": POLICY_REPO,
-            "systems": ["x86_64-linux", "aarch64-linux"],
             "ci": json.loads(
                 (policy.SOURCE_ROOT / "policy/requirements.json").read_text()
             )["ci"],
-            "projects": {
-                "example": {
-                    "repository": "owner/example",
-                    "adopted": True,
-                    "policyVersion": RELEASE,
-                    "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
-                    "vmTargets": [],
-                    "requiredChecks": list(LEGACY_REQUIRED_CHECKS),
-                }
-            },
         }
-        self.pins = {"schemaVersion": 1, "approved": PAIR, "batches": []}
+        self.pins = {
+            "stableBranch": "nixos-26.05",
+            "schemaVersion": 1,
+            "approved": PAIR,
+        }
         self.members = {"example": "owner/example"}
         self.config["_members"] = self.members
-        self.support = {"schemaVersion": 1, "retirements": {}}
-        self.config["_support"] = self.support
         self.write("flake.nix", "{}")
         self.write(".envrc", "use flake\n")
         self.write("LICENSE", "MIT")
-        # Transition fixtures also run immutable checkers that require these headings.
-        self.write(
-            "README.md",
-            "# Example\n\nPurpose.\n\n"
-            "## Support\n\n## Quickstart\n\n## Development\n\n"
-            "## Contributing\n\n## Documentation\n",
-        )
+        self.write("README.md", "# Example\n\nPurpose.\n")
         for file in ["CONTRIBUTING.md", "AGENTS.md"]:
             self.write(
                 file,
@@ -101,23 +85,10 @@ class ProjectFixture:
     def write_records(self):
         records = Path(self.temp.name) / "records"
         (records / "policy").mkdir(parents=True, exist_ok=True)
-        records_config = {
-            key: value
-            for key, value in self.config.items()
-            if key
-            not in {
-                "systems",
-                "ci",
-                "_members",
-                "_support",
-            }
-        }
-        (records / "policy/projects.json").write_text(json.dumps(records_config))
         (records / "policy/pins.json").write_text(json.dumps(self.pins))
         (records / "policy/members.json").write_text(
             json.dumps({"schemaVersion": 1, "members": self.members})
         )
-        (records / "policy/support.json").write_text(json.dumps(self.support))
         return records
 
     def run_policy(self, *args):

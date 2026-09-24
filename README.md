@@ -6,7 +6,7 @@ Shared development and maintenance rules for independent Nix and NixOS projects.
 
 Development and CI support `x86_64-linux` and `aarch64-linux`. This repository has no VM tests.
 
-[VERSION](VERSION) identifies the prepared release. Publish it through the [release procedure](docs/maintenance.md#releases) before members select it. Policy releases contain the rules and checker code. Current [records on `main`](docs/maintenance.md#records) contain shared pins, member enrollment, and release retirements.
+Support starts at v0.4.0. [VERSION](VERSION) identifies the current checker version. Publish new releases through the [release procedure](docs/maintenance.md#releases). Policy releases contain the rules and checker code. Current [records on `main`](docs/maintenance.md#records) contain shared pins, the stable update branch, and member enrollment.
 
 ## Quickstart
 
@@ -34,7 +34,7 @@ Follow [CONTRIBUTING.md](CONTRIBUTING.md) and the shared requirements in [POLICY
 
 - [Policy](POLICY.md): shared requirements.
 - [Checker](docs/checker.md): commands, records, results, and limits.
-- [Maintenance](docs/maintenance.md): pins, enrollment, releases, and migration.
+- [Maintenance](docs/maintenance.md): pins, enrollment, and releases.
 - [Design](docs/normalization-design.md): structure and decisions.
 - [Glossary](CONTEXT.md): shared terms.
 - [Changelog](CHANGELOG.md): release changes.

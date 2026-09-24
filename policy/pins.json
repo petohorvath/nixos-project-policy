@@ -4,17 +4,5 @@
     "stable": "c3eea5b2156db11c7eeeada3dc737711255b253e",
     "unstable": "ef34387ddd751e1ab8857adf4676492d32eb24ec"
   },
-  "batches": [
-    {
-      "id": "2026-09-16-cross-config-adoption",
-      "status": "complete",
-      "pins": {
-        "stable": "c3eea5b2156db11c7eeeada3dc737711255b253e",
-        "unstable": "ef34387ddd751e1ab8857adf4676492d32eb24ec"
-      },
-      "projects": {
-        "nixos-cross-config": "9958e7607ead1680f79a21a157f5ba8471f91ed0"
-      }
-    }
-  ]
+  "stableBranch": "nixos-26.05"
 }

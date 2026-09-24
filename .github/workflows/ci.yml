@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     name: Check (${{ matrix.system }})
@@ -26,13 +30,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-          fetch-depth: 0
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
         with:
           install_url: https://releases.nixos.org/nix/nix-2.34.6/install
-      - run: nix flake check --no-update-lock-file --print-build-logs
-      - name: Test real input overrides and lock preservation
-        run: nix develop --no-update-lock-file --command python -m unittest tests.nix_compatibility -v
-      - name: Test the packaged release transition
-        run: nix develop --no-update-lock-file --command python -m unittest tests.packaged_transition -v
-      - run: nix run --no-update-lock-file .# -- shell .
+      - name: Check formatting, lint, records, and behavior
+        run: nix flake check --no-update-lock-file --print-build-logs
+      - name: Test real Nix execution and the packaged checker
+        run: nix develop --no-update-lock-file --command python -m unittest tests.nix_compatibility tests.packaged_policy -v
+      - name: Smoke-test the development shell
+        run: nix run --no-update-lock-file .# -- shell .

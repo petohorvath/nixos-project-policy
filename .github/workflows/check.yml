@@ -139,10 +139,6 @@ jobs:
         run: |
           nix run --no-update-lock-file ./policy -- --policy-root ./policy-state host-checks ./project
           nix flake check ./project --no-update-lock-file --print-build-logs
-      - name: Recheck policy support after execution
-        env:
-          PROJECT: ${{ inputs.project }}
-        run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state ci ./project --project "$PROJECT" > support.json
   compatibility:
     name: ${{ matrix.check }}
     needs: records

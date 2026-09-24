@@ -2,41 +2,20 @@
 
 import copy
 import json
-from pathlib import Path
 import shutil
 import subprocess
 from unittest.mock import patch
 
 from tests.fixtures.cli import invoke
-from tests.fixtures.data import POLICY_REPO, RELEASE, LEGACY_REQUIRED_CHECKS, SOURCE
+from tests.fixtures.data import POLICY_REPO, SOURCE
 from tests.fixtures.projects import ProjectFixture
 from tests.fixtures.services import published
-from tools import policy, records, releases
+from tools import policy, releases
 
 
 def checked_process(command, **kwargs):
     arguments = command[command.index("--") + 1 :]
-    root = Path(arguments[arguments.index("check") + 1])
-    record_root = Path(arguments[arguments.index("--policy-root") + 1])
-    name = arguments[arguments.index("--project") + 1]
-    _, _, _, version = policy.declarations.discover(root, POLICY_REPO)
-    if version == RELEASE:
-        code, report = invoke(*arguments)
-    else:
-        config, pins = records.load(record_root)
-        report = {
-            "project": name,
-            "policyVersion": version,
-            "checkerVersion": version,
-            "revision": SOURCE,
-            "policyRecordsRevision": SOURCE,
-            "policyRecordsDigest": records.digest(config, pins, legacy=True),
-            "status": "pass",
-            "issues": [],
-            "dependencies": [],
-            "requiredChecks": config["projects"][name]["requiredChecks"],
-        }
-        code = 0
+    code, report = invoke(*arguments)
     return subprocess.CompletedProcess(
         command,
         code,
@@ -48,9 +27,6 @@ def checked_process(command, **kwargs):
 class AuditFixture(ProjectFixture):
     def prepare(self):
         super().prepare()
-        self.config["projects"]["example"]["requiredChecks"] = list(
-            LEGACY_REQUIRED_CHECKS
-        )
         self.release_requests = []
         self.commands = []
         self.process = checked_process
@@ -82,16 +58,11 @@ class AuditFixture(ProjectFixture):
         caller = workflow["jobs"]["policy"]
         caller["uses"] = f"{POLICY_REPO}/.github/workflows/check.yml@{version}"
         caller["with"] = {"project": name, "policy_version": version}
-        if releases.version_at_least(version, (0, 4, 0)):
-            caller["with"]["required_architectures"] = '["x86_64-linux"]'
+        caller["with"]["required_architectures"] = '["x86_64-linux"]'
         (root / ".github/workflows/policy.yml").write_text(json.dumps(workflow))
         self.members[name] = f"owner/{name}"
-        self.config["projects"][name] = {
-            "repository": f"owner/{name}",
-            "adopted": True,
-            "policyVersion": version,
-            "vmTargets": [],
-            "requiredArchitectures": ["x86_64-linux"],
-            "requiredChecks": ["Historical / Release-specific tests"],
-        }
+        for file in ("AGENTS.md", "CONTRIBUTING.md"):
+            (root / file).write_text(
+                f"[Rules](https://github.com/{POLICY_REPO}/blob/{version}/POLICY.md)\n"
+            )
         return root

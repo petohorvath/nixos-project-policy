@@ -9,13 +9,12 @@ import tempfile
 from urllib.parse import unquote, urlsplit
 
 if __package__:
-    from . import declarations, locks, records, releases, support
+    from . import declarations, locks, records, releases
 else:
     import declarations
     import locks
     import records
     import releases
-    import support
 
 
 GATE = "Integration / Policy agreement"
@@ -123,9 +122,6 @@ def member_repositories(config):
     members = {
         repository.lower(): name for name, repository in config["_members"].items()
     }
-    canonical = "petohorvath/nixos-nftzones"
-    if canonical in members:
-        members["petohorvath/nix-nftzones"] = members[canonical]
     return members
 
 
@@ -338,8 +334,7 @@ def inspect(root, project, config, pins, records_root, *, git_revision, git_dirt
                         caller_root, config["policyRepository"], member["project"]
                     )
                     member["policyVersion"] = selected
-                    member["support"] = support.assess(selected, config["_support"])
-                    member["selectionStatus"] = member["support"]["status"]
+                    member["selectionStatus"] = "supported"
                     member["status"] = "pass"
                     if selected != version:
                         member["issues"].append(
@@ -353,10 +348,6 @@ def inspect(root, project, config, pins, records_root, *, git_revision, git_dirt
                             config,
                             checker_version=version,
                         )
-                    if member["support"]["status"] == "retired":
-                        member["issues"].append(
-                            support.retirement_issue(member["support"])
-                        )
                 except ValueError as error:
                     member.update(status="fail", selectionStatus="invalid")
                     member["issues"].append(str(error))
@@ -365,21 +356,6 @@ def inspect(root, project, config, pins, records_root, *, git_revision, git_dirt
             except (ValueError, OSError, subprocess.SubprocessError) as error:
                 member["issues"].append(str(error))
             result["members"].append(member)
-    assessment_time = support.now()
-    for member in result["members"]:
-        if "support" in member:
-            current = support.assess(
-                member["policyVersion"], config["_support"], at=assessment_time
-            )
-            if current != member["support"]:
-                member["support"] = current
-                if member["selectionStatus"] in {"supported", "retired"}:
-                    member["selectionStatus"] = current["status"]
-                if current["status"] == "retired":
-                    member["status"] = (
-                        "fail" if member["status"] != "error" else "error"
-                    )
-                    member["issues"].append(support.retirement_issue(current))
     result["dependencySetDigest"] = hashlib.sha256(
         json.dumps(
             {

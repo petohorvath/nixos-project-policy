@@ -1,21 +1,19 @@
-"""Test-only external services for the packaged release-transition scenario.
+"""Test-only external services for the packaged policy scenario.
 
 Loaded by a temporary sitecustomize, never by production checker code. Real
-packaged entrypoints and immutable legacy sources execute all policy decisions.
+packaged entrypoints execute all policy decisions.
 """
 
-import base64
 import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 from urllib import request
 
 from tests.fixtures.github import GitHub, request_path
 
 
-CONFIG = json.loads(Path(os.environ["POLICY_TRANSITION_FIXTURE"]).read_text())
+CONFIG = json.loads(Path(os.environ["POLICY_PACKAGE_FIXTURE"]).read_text())
 REAL_RUN = subprocess.run
 REAL_OUTPUT = subprocess.check_output
 STATE = Path(CONFIG["state"])
@@ -42,53 +40,11 @@ class PackagedGitHub(GitHub):
                     "sha": CONFIG["releases"][path.rsplit("/", 1)[1]]["revision"],
                 }
             }
-        if "/contents/policy/requirements.json" in path:
-            revision = query.full_url.rsplit("ref=", 1)[1]
-            release = next(
-                value
-                for value in CONFIG["releases"].values()
-                if value["revision"] == revision
-            )
-            return {
-                "encoding": "base64",
-                "content": base64.b64encode(
-                    Path(release["requirements"]).read_bytes()
-                ).decode(),
-            }
-        if "/git/commits/" in path:
-            name, revision = path.split("/")[2], path.rsplit("/", 1)[1]
-            process = REAL_RUN(
-                [
-                    "git",
-                    "-C",
-                    CONFIG["members"][name],
-                    "cat-file",
-                    "-e",
-                    revision + "^{commit}",
-                ],
-                capture_output=True,
-            )
-            assert process.returncode == 0, path
-            return {"sha": revision}
-        if "/commits/" in path and path.endswith("/check-runs"):
-            return {
-                "check_runs": [
-                    {
-                        "name": "Member / Extra",
-                        "head_sha": path.split("/")[-2],
-                        "status": "completed",
-                        "conclusion": "success",
-                    }
-                ]
-            }
         return super().lookup(query)
 
 
 def transport(query, **kwargs):
-    github = PackagedGitHub.load(STATE)
-    response = github.transport(query, **kwargs)
-    github.save(STATE)
-    return response
+    return PackagedGitHub.load(STATE).transport(query, **kwargs)
 
 
 def run(command, **kwargs):
@@ -108,16 +64,7 @@ def run(command, **kwargs):
             if value["revision"] == revision
         )
         arguments = command[command.index("--") + 1 :]
-        if "program" in release:
-            return REAL_RUN([release["program"], *arguments], **kwargs)
-        bootstrap = (
-            "import runpy; runpy.run_path("
-            + repr(release["source"])
-            + ", run_name='__main__', init_globals={'PACKAGED_REVISION': "
-            + repr(revision)
-            + "})"
-        )
-        return REAL_RUN([sys.executable, "-c", bootstrap, *arguments], **kwargs)
+        return REAL_RUN([release["program"], *arguments], **kwargs)
     with Path(CONFIG["commands"]).open("a") as stream:
         stream.write(json.dumps(command) + "\n")
     output = ""
@@ -131,7 +78,7 @@ def run(command, **kwargs):
         output = json.dumps({"locks": graph})
     elif command[1] == "eval":
         output = (
-            os.environ.get("POLICY_TRANSITION_SYSTEM", CONFIG["system"])
+            os.environ.get("POLICY_PACKAGE_SYSTEM", CONFIG["system"])
             if "--impure" in command
             else '["behavior"]'
         )

@@ -16,6 +16,44 @@ from tools import policy
 
 
 class DeclarationTests(ProjectTestCase):
+    def test_release_tags_accept_current_and_future_versions_only(self):
+        for version in ["v0.4.0", "v0.4.1", "v0.10.0", "v1.0.0"]:
+            policy.declarations.require_policy_version(version)
+        for version in [
+            "main",
+            "v0.4",
+            "0.4.0",
+            "v00.4.0",
+            "v0.4.0-rc.1",
+            "v0.4.0+build",
+        ]:
+            with (
+                self.subTest(version=version),
+                self.assertRaisesRegex(ValueError, "release tags"),
+            ):
+                policy.declarations.require_policy_version(version)
+
+    def test_release_floor_rejects_old_selections_before_execution(self):
+        for version in ["v0.0.0", "v0.1.1", "v0.2.9", "v0.3.99"]:
+            self.workflow["jobs"]["policy"]["uses"] = (
+                f"{POLICY_REPO}/.github/workflows/check.yml@{version}"
+            )
+            self.declare(policy_version=version)
+            for command, options in [
+                ("ci", []),
+                ("check", ["--shell"]),
+                ("compatibility", ["--channel", "stable"]),
+                ("vm", []),
+                ("agreement", []),
+            ]:
+                with self.subTest(version=version, command=command):
+                    code, report = self.run_policy(
+                        command, str(self.root), "--project", "example", *options
+                    )
+                    self.assertEqual(code, 2, report)
+                    self.assertIn("v0.4.0 or later", report["error"])
+                    self.assertNotIn("matrix", report)
+
     def test_any_named_system_can_be_selected_and_planned(self):
         for systems in [
             ["riscv64-linux"],
@@ -121,7 +159,6 @@ class DeclarationTests(ProjectTestCase):
                     )
 
     def test_pre_enrollment_checks_and_planning_do_not_change_records(self):
-        self.config["projects"] = {}
         self.members.clear()
         for command in ["ci", "check", "vm"]:
             with self.subTest(command=command):
@@ -134,39 +171,11 @@ class DeclarationTests(ProjectTestCase):
                 self.assertEqual(report["memberSettings"]["vmTargets"], [])
                 records = Path(self.temp.name) / "records/policy"
                 self.assertEqual(
-                    json.loads((records / "projects.json").read_text())["projects"], {}
+                    json.loads((records / "members.json").read_text())["members"], {}
                 )
                 self.assertEqual(
                     json.loads((records / "pins.json").read_text()), self.pins
                 )
-
-    def test_legacy_selection_and_settings_do_not_control_new_members(self):
-        self.config["projects"]["example"].update(
-            policyVersion="v0.3.0",
-            adopted=False,
-            requiredArchitectures=["x86_64-linux"],
-            vmTargets=["legacy-vm"],
-            additionalRequiredChecks=["Legacy gate"],
-        )
-        project = self.config["projects"]["example"]
-        project["requiredChecks"] = [
-            *policy.ci_plan(project, self.config["ci"])["requiredChecks"],
-            "Policy / Formatting and lint (x86_64-linux)",
-        ]
-        for command in ["check", "ci", "vm"]:
-            code, report = self.run_policy(
-                command, str(self.root), "--project", "example"
-            )
-            self.assertEqual(code, 0, report)
-            self.assertEqual(report["policyVersion"], RELEASE)
-            self.assertEqual(
-                report["memberSettings"],
-                {
-                    "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
-                    "vmTargets": [],
-                    "additionalRequiredChecks": [],
-                },
-            )
 
     def test_hosted_defaults_and_local_literals_produce_the_same_plan(self):
         local_code, local = self.run_policy("ci", "--project", "example")
@@ -288,7 +297,6 @@ class DeclarationTests(ProjectTestCase):
                 self.assertTrue(any(document in issue for issue in report["issues"]))
 
     def test_vm_execution_and_gates_follow_the_same_arm_only_declaration(self):
-        self.config["projects"] = {}
         self.members.clear()
         self.declare(
             required_architectures='["aarch64-linux"]',

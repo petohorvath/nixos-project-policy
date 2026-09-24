@@ -48,7 +48,7 @@ _Avoid_: Policy repository
 A particular revision of a member project used by another project. Its policy selection is the one recorded at that revision.
 
 **Shared pins**:
-The approved pair of exact nixpkgs revisions, one stable and one unstable, required for member compatibility coverage. A member's selected root dependency can differ; earlier policy releases also require the shared pins in member locks.
+The approved pair of exact nixpkgs revisions, one stable and one unstable, required for member compatibility coverage. A member's selected root dependency can differ..
 _Avoid_: Same channels, latest versions
 
 **Selected dependency**:
@@ -56,7 +56,3 @@ The immutable nixpkgs revision a member chooses for its normal root development,
 
 **Pin candidate**:
 An exact stable and unstable nixpkgs revision pair proposed for shared-pin approval. Successful checks provide evidence for approval but do not approve the pair.
-
-**Pin update batch**:
-A coordinated change to the shared pins, tracked across affected member projects from candidate evaluation through approval and any required rollout, or withdrawal.
-_Avoid_: Independent pin updates

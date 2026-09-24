@@ -300,7 +300,10 @@ def member_project(root, name, config, *, hosted_inputs=None):
 
 
 def member_settings(project):
-    return {field: project[field] for field in declarations.INPUT_FIELDS.values()}
+    return {
+        **{field: project[field] for field in declarations.INPUT_FIELDS.values()},
+        "vmArchitecture": project["vmArchitecture"],
+    }
 
 
 def enrollment(config, name):
@@ -834,6 +837,9 @@ def audit_family(
                         field: json.loads(inputs.get(key, "[]"))
                         for key, field in declarations.INPUT_FIELDS.items()
                     }
+                    settings["vmArchitecture"] = inputs.get(
+                        "vm_architecture", "x86_64-linux"
+                    )
                     assessed = releases.check_member(
                         release,
                         root,

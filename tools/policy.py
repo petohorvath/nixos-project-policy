@@ -24,7 +24,6 @@ if __package__:
         pin_pr,
         records,
         releases,
-        support,
     )
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -36,7 +35,6 @@ else:
     import pin_pr
     import records
     import releases
-    import support
 
 ci_plan = declarations.ci_plan
 LockGraph = locks.LockGraph
@@ -186,7 +184,6 @@ def main(argv=None):
             return {"fail": 1, "error": 2}.get(result.get("status"), 0)
         config, pins = records.load(records_root)
         project = None
-        assessment = None
         if args.command in {"check", "ci", "compatibility", "vm", "agreement"}:
             project = member_project(
                 args.project_dir,
@@ -196,19 +193,7 @@ def main(argv=None):
                 if args.command == "ci" and args.inputs_json is not None
                 else None,
             )
-            assessment = support.assess(project["policyVersion"], config["_support"])
-        if assessment is not None and assessment["status"] == "retired":
-            records_revision = git_revision(records_root)
-            result = {
-                "status": "fail",
-                "project": args.project,
-                "policyVersion": project["policyVersion"],
-                "revision": git_revision(args.project_dir),
-                "memberSettings": member_settings(project),
-                "enrollment": enrollment(config, args.project),
-                "issues": [support.retirement_issue(assessment)],
-            }
-        elif args.command == "validate":
+        if args.command == "validate":
             result = {
                 "status": "valid",
                 "approvedPins": pins["approved"] is not None,
@@ -301,22 +286,8 @@ def main(argv=None):
                 args.github,
                 records_root=records_root,
             )
-        if assessment is not None:
-            current_support = support.assess(
-                project["policyVersion"], config["_support"]
-            )
-            if (
-                current_support["status"] == "retired"
-                and assessment["status"] != "retired"
-            ):
-                result["status"] = "error" if result["status"] == "error" else "fail"
-                result.setdefault("issues", []).append(
-                    support.retirement_issue(current_support)
-                )
-                result.pop("matrix", None)
-                result.pop("compatibilityMatrix", None)
-            result["support"] = current_support
-            result["selectionStatus"] = current_support["status"]
+        if project is not None:
+            result["selectionStatus"] = "supported"
         result["checkerVersion"] = f"v{version}"
         result["policyRecordsRevision"] = (
             records_revision
@@ -958,56 +929,49 @@ def audit_family(
                     report["selectionStatus"] = "invalid"
                     report["issues"].append(f"ci: {error}")
                 else:
-                    assessment = support.assess(version, config["_support"])
-                    report["support"] = assessment
-                    report["selectionStatus"] = assessment["status"]
-                    if assessment["status"] == "retired":
-                        report["assessment"] = "retired"
-                        report["issues"].append(support.retirement_issue(assessment))
-                    else:
-                        release = releases.inspect_release(
-                            config["policyRepository"], version
+                    report["selectionStatus"] = "supported"
+                    release = releases.inspect_release(
+                        config["policyRepository"], version
+                    )
+                    report["checkerRevision"] = release["revision"]
+                    settings = {
+                        field: json.loads(inputs.get(key, "[]"))
+                        for key, field in declarations.INPUT_FIELDS.items()
+                    }
+                    assessed = releases.check_member(
+                        release,
+                        root,
+                        name,
+                        repository,
+                        revision,
+                        records_root,
+                        snapshot,
+                        settings=settings,
+                    )
+                    report.update(assessed)
+                    # Checker reports cannot redefine trusted enrollment or identity.
+                    report.update(
+                        repository=repository,
+                        enrollment="enrolled",
+                        records=snapshot,
+                    )
+                    report["assessment"] = assessed["status"]
+                    if report["status"] == "candidate-ready":
+                        report["status"] = "fail"
+                        report["issues"].append(
+                            "Candidate validation does not establish approved-pin compliance"
                         )
-                        report["checkerRevision"] = release["revision"]
-                        settings = {
-                            field: json.loads(inputs.get(key, "[]"))
-                            for key, field in declarations.INPUT_FIELDS.items()
-                        }
-                        assessed = releases.check_member(
-                            release,
-                            root,
-                            name,
-                            repository,
-                            revision,
-                            records_root,
-                            snapshot,
-                            settings=settings,
-                            support_assessment=assessment,
+                    graph[name] = report["dependencies"]
+                    if github:
+                        report["issues"].extend(
+                            check_github(
+                                {"repository": repository},
+                                report["requiredChecks"],
+                                workflow=str(caller_path.relative_to(root)),
+                            )
                         )
-                        report.update(assessed)
-                        # Checker reports cannot redefine trusted enrollment or identity.
-                        report.update(
-                            repository=repository,
-                            enrollment="enrolled",
-                            records=snapshot,
-                        )
-                        report["assessment"] = assessed["status"]
-                        if report["status"] == "candidate-ready":
+                        if report["issues"]:
                             report["status"] = "fail"
-                            report["issues"].append(
-                                "Candidate validation does not establish approved-pin compliance"
-                            )
-                        graph[name] = report["dependencies"]
-                        if github:
-                            report["issues"].extend(
-                                check_github(
-                                    {"repository": repository},
-                                    report["requiredChecks"],
-                                    workflow=str(caller_path.relative_to(root)),
-                                )
-                            )
-                            if report["issues"]:
-                                report["status"] = "fail"
                 if git_revision(root) != revision or git_dirty(root):
                     raise ValueError("Member checkout changed during audit")
         except (
@@ -1036,21 +1000,6 @@ def audit_family(
         for report in reports:
             report["status"] = "error"
             report["issues"].append("Central records changed during audit")
-    # Later members can run past an earlier member's retirement deadline.
-    assessment_time = support.now()
-    for report in reports:
-        if "support" in report:
-            current_support = support.assess(
-                report["policyVersion"], config["_support"], at=assessment_time
-            )
-            if current_support != report["support"]:
-                report["support"] = current_support
-                report["selectionStatus"] = current_support["status"]
-                if current_support["status"] == "retired":
-                    report["status"] = (
-                        "error" if report["status"] == "error" else "fail"
-                    )
-                    report["issues"].append(support.retirement_issue(current_support))
     cycles = dependency_cycles(graph)
     return {
         "status": "error"

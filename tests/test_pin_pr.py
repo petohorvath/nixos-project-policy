@@ -17,17 +17,13 @@ from tests.fixtures.candidates import CandidateFixture, invalid_batch_plans
 from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.cli import invoke
 from tests.fixtures.data import (
-    RELEASE,
-    BEFORE,
-    EFFECTIVE,
     NEW_PAIR,
     PAIR,
     POLICY_REPO,
-    retirement,
 )
 from tests.fixtures.github import GitHub
 from tests.fixtures.services import Services
-from tools import candidates, policy, records, support
+from tools import candidates, policy, records
 
 
 class PinPRTests(CandidateFixture, ProjectTestCase):
@@ -237,13 +233,11 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
     ):
         for file, keys, value in (
             ("members.json", ("members",), {}),
-            ("config.json", ("policyRepository",), "attacker/policy"),
             (
-                "config.json",
+                "pins.json",
                 ("stableBranch",),
                 "nixos-unstable",
             ),
-            ("support.json", ("retirements",), {RELEASE: retirement()}),
             ("pins.json", ("batches", -1, "id"), "../next"),
             ("pins.json", ("batches", -1, "status"), "withdrawn"),
         ):
@@ -528,37 +522,6 @@ class PinPRTests(CandidateFixture, ProjectTestCase):
         self.assertEqual(self.hosted.checks[0]["conclusion"], "failure")
         self.assertEqual(result["invalidated"][0]["number"], 7)
         self.assertIn("base", result["invalidated"][0]["reason"])
-
-    def test_retirement_reassessed_after_artifact_reads_and_by_maintenance(self):
-        self.support["retirements"]["v0.4.0"] = retirement()
-        self.write_records()
-        self.commit(self.baseline)
-        shutil.copyfile(
-            self.baseline / "policy/support.json", self.proposal / "policy/support.json"
-        )
-        self.commit(self.proposal)
-        self.base, self.head = (
-            policy.git_revision(self.baseline),
-            policy.git_revision(self.proposal),
-        )
-        self.workflow_revision = self.base
-        self.hosted.pin_pr(POLICY_REPO, self.base, self.head)
-        with patch.object(support, "now", return_value=support.timestamp(BEFORE)):
-            _, captured, _ = self.call("capture")
-            self.evidence()
-            self.assertEqual(
-                self.call("finish", "--check", str(captured["check"]))[0], 0
-            )
-        self.hosted.responses[f"repos/{POLICY_REPO}/pulls"] = [
-            self.hosted.responses[f"repos/{POLICY_REPO}/pulls/7"]
-        ]
-        with patch.object(support, "now", return_value=support.timestamp(EFFECTIVE)):
-            code, result, _ = self.call("invalidate")
-            self.assertEqual(code, 0, result)
-            self.assertEqual(self.hosted.checks[0]["conclusion"], "failure")
-            code, result, _ = self.call("finish", "--check", str(captured["check"]))
-            self.assertNotEqual(code, 0, result)
-            self.assertIn("example", str(result["issues"]))
 
     def test_real_pr_workflow_shell_requires_complete_evidence_and_preserves_failures(
         self,

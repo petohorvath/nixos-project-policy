@@ -3,7 +3,6 @@
 import copy
 import json
 import shutil
-from unittest.mock import patch
 
 import yaml
 
@@ -12,16 +11,13 @@ from tests.fixtures.candidates import BatchFixture, invalid_batch_plans
 from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.cli import invoke
 from tests.fixtures.data import (
-    BEFORE,
     CHECKER,
-    EFFECTIVE,
     NEW_PAIR,
     PAIR,
     RELEASE,
-    retirement,
 )
 from tests.fixtures.services import BatchServices
-from tools import batches, candidates, policy, records, releases, support
+from tools import batches, candidates, policy, records
 
 
 def outcome(report):
@@ -331,7 +327,7 @@ class BatchTests(BatchFixture, ProjectTestCase):
             self.aggregate(plan, workers, "--execution-status", "failure")[0], 1
         )
 
-    def test_candidate_source_settings_roster_and_support_changes_invalidate_evidence(
+    def test_candidate_source_settings_and_roster_changes_invalidate_evidence(
         self,
     ):
         _, _, plan = self.plan()
@@ -348,10 +344,6 @@ class BatchTests(BatchFixture, ProjectTestCase):
             (
                 self.baseline / "policy/members.json",
                 lambda value: value["members"].pop("alpha"),
-            ),
-            (
-                self.baseline / "policy/support.json",
-                lambda value: value["retirements"].update({RELEASE: retirement()}),
             ),
             (
                 self.roots["alpha"] / ".github/workflows/policy.yml",
@@ -376,18 +368,6 @@ class BatchTests(BatchFixture, ProjectTestCase):
                     list((output / "evidence").glob("worker-*/result.json"))
                 )
             path.write_text(original)
-        self.support["retirements"][RELEASE] = retirement()
-        self.write_records()
-        shutil.copyfile(
-            self.baseline / "policy/support.json", self.proposal / "policy/support.json"
-        )
-        with patch.object(support, "now", return_value=support.timestamp(BEFORE)):
-            _, _, plan = self.plan()
-            workers = self.workers(plan)
-        with patch.object(support, "now", return_value=support.timestamp(EFFECTIVE)):
-            code, result, _ = self.aggregate(plan, workers)
-            self.assertNotEqual(code, 0, result)
-            self.assertFalse(result["eligible"])
 
     def test_locked_mismatch_remains_failed_despite_successful_member_heads(self):
         self.declaration("beta", "v0.5.0")
@@ -439,33 +419,6 @@ class BatchTests(BatchFixture, ProjectTestCase):
         self.assertEqual(captured["members"]["beta"]["status"], "error")
         self.assertEqual(captured["members"]["example"]["status"], "planned")
         self.assertTrue(list((output / "fetch/beta").glob("**/stderr.log")))
-
-    def test_final_assessment_rechecks_earlier_members_after_later_work(self):
-        self.support["retirements"][RELEASE] = retirement()
-        self.write_records()
-        shutil.copyfile(
-            self.baseline / "policy/support.json", self.proposal / "policy/support.json"
-        )
-        with patch.object(support, "now", return_value=support.timestamp(BEFORE)):
-            _, _, plan = self.plan()
-            workers = self.workers(plan)
-        instant = support.timestamp(BEFORE)
-
-        def lookup(path):
-            nonlocal instant
-            if "repos/owner/beta/git/commits/" in path:
-                instant = support.timestamp(EFFECTIVE)
-            return self.services.lookup(path)
-
-        with (
-            patch.object(support, "now", side_effect=lambda: instant),
-            patch.object(releases, "public_get", side_effect=lookup),
-        ):
-            code, result, _ = self.aggregate(plan, workers)
-        self.assertEqual(code, 1, outcome(result))
-        self.assertEqual(result["members"]["alpha"]["status"], "fail")
-        self.assertEqual(result["members"]["beta"]["status"], "fail")
-        self.assertIn("support changed", str(result["members"]["alpha"]["issues"]))
 
     def test_untrusted_coverage_and_checker_commands_cannot_replace_required_jobs(self):
         _, saved, plan = self.plan()

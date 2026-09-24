@@ -236,23 +236,18 @@ class NixCompatibilityTests(unittest.TestCase):
             )
             record_directory = workspace / "records/policy"
             record_directory.mkdir(parents=True)
-            (record_directory / "config.json").write_text(
+            (record_directory / "pins.json").write_text(
                 json.dumps(
                     {
                         "schemaVersion": 1,
-                        "policyRepository": "petohorvath/nixos-project-policy",
                         "stableBranch": "nixos-26.05",
+                        "approved": pins,
+                        "batches": [],
                     }
                 )
             )
-            (record_directory / "pins.json").write_text(
-                json.dumps({"schemaVersion": 1, "approved": pins, "batches": []})
-            )
             (record_directory / "members.json").write_text(
                 json.dumps({"schemaVersion": 1, "members": {}})
-            )
-            (record_directory / "support.json").write_text(
-                json.dumps({"schemaVersion": 1, "retirements": {}})
             )
             lock_before = (project / "flake.lock").read_bytes()
             caller_before = caller.read_bytes()
@@ -299,6 +294,7 @@ class NixCompatibilityTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schemaVersion": 1,
+                        "stableBranch": "nixos-26.05",
                         "approved": None,
                         "batches": [
                             {

@@ -60,7 +60,7 @@ Provide a root `README.md`. Its content and organization belong to the project. 
 
 Write direct explanations with clear subjects, useful examples, and concise paragraphs. Tag fenced code blocks with their language. Keep project instructions accurate and agent guidance concise, pointing to authoritative rules when needed. A contributor must not need this maintainer's global skills or workstation paths to understand the policy.
 
-Keep documentation focused on current usage, design, structure, and architectural decisions. Keep a changelog for release-facing changes and migration notes. Use Git commits, issues, PRs, and CI results for implementation history and validation evidence; do not duplicate them in dated progress logs, completed implementation plans, or separate review and validation reports. Central machine-readable enrollment, support, and pin records remain operational state.
+Keep documentation focused on current usage, design, structure, and architectural decisions. Keep a changelog for release-facing changes and migration notes. Use Git commits, issues, PRs, and CI results for implementation history and validation evidence; do not duplicate them in dated progress logs, completed implementation plans, or separate review and validation reports. Central machine-readable enrollment and pin records remain operational state.
 
 ## Changes, releases, and licenses
 
@@ -94,7 +94,7 @@ Capture one member commit, checker commit, and central-record commit for all job
 
 An integration project requires its exact consumed enrolled member revisions to select its own supported policy release. Inspect committed dependency graphs, including reachable transitive members, follows relationships, and independent lock scopes; current member branches do not describe those sources. Require the separate `Integration / Policy agreement` status through the existing additional-check declaration and matching agreement caller, using the primary Policy workflow's captured source and record revisions. Keep behavioral integration tests in ordinary root checks. A matching policy selection does not establish functional compatibility, and locked member dependencies must remain acyclic. Upgrade the integration selection and complete matching dependency set together when needed; independent member branches need not upgrade simultaneously.
 
-Support starts at v0.4.0. Releases below v0.4.0 are unsupported, and current records and tooling provide no compatibility adapters for them. All enrolled members and consumed member revisions must select v0.4.0 or later. For releases within that range, record retirement in `policy/support.json` with a reviewed decision, reason, migration start, and effective retirement time. Local checks, CI, and central audits share that assessment; an enrolled retired selection remains a visible compliance failure.
+Support starts at v0.4.0. Releases below v0.4.0 are unsupported, and current records and tooling provide no compatibility adapters for them. All enrolled members and consumed member revisions must select v0.4.0 or later.
 
 Change shared pins through a pin update batch without changing the policy version or member workflow references. Changes to rules, checker behavior, workflows, or their public interfaces require a new policy release before members use them. Keep current record schemas compatible with supported policy releases.
 

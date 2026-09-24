@@ -13,7 +13,7 @@ from tools import records
 
 
 # Fixed current-record digest, independent of the producer under test.
-FULL_DIGEST = "10979ea2f825aafc0e56686e19a990ef40e98dc839212f93137dba5bd62d68f5"
+FULL_DIGEST = "a5978370d4dc8a8160b6a68d981762ce39f7df02afaebb4ca688e71fd91dc90c"
 
 
 class RecordTests(unittest.TestCase):
@@ -38,12 +38,8 @@ class RecordTests(unittest.TestCase):
         self.workspace = Path(temporary.name)
         self.root = self.workspace / "source"
         self.documents = {
-            "config.json": {
-                "schemaVersion": 1,
-                "policyRepository": "owner/policy",
-                "stableBranch": "nixos-26.05",
-            },
             "pins.json": {
+                "stableBranch": "nixos-26.05",
                 "schemaVersion": 1,
                 "approved": {"stable": "1" * 40, "unstable": "2" * 40},
                 "batches": [],
@@ -52,7 +48,6 @@ class RecordTests(unittest.TestCase):
                 "schemaVersion": 1,
                 "members": {"member": "owner/member"},
             },
-            "support.json": {"schemaVersion": 1, "retirements": {}},
         }
         (self.root / "policy").mkdir(parents=True)
         for name, value in self.documents.items():
@@ -108,6 +103,30 @@ class RecordTests(unittest.TestCase):
         self.assertEqual((captured_config, captured_pins), before)
         self.assertEqual(identity["digest"], FULL_DIGEST)
 
+    def test_current_requirements_cannot_replace_release_identity_or_runners(self):
+        expected = records.load(self.root)
+        (self.root / "policy/requirements.json").write_text(
+            json.dumps(
+                {"schemaVersion": 1, "policyRepository": "attacker/policy", "ci": {}}
+            )
+        )
+        self.assertEqual(records.load(self.root), expected)
+        self.commit(self.root)
+        config, pins, _ = records.proposed_snapshot(self.root)
+        self.assertEqual((config, pins), expected)
+
+    def test_stable_update_branch_is_required_and_bound_to_record_identity(self):
+        config, pins = records.load(self.root)
+        original = records.digest(config, pins)
+        pins["stableBranch"] = "nixos-25.11"
+        self.assertNotEqual(records.digest(config, pins), original)
+        for invalid in [None, "", "nixos-unstable", "main", 1]:
+            with self.subTest(branch=invalid):
+                pins["stableBranch"] = invalid
+                (self.root / "policy/pins.json").write_text(json.dumps(pins))
+                with self.assertRaisesRegex(ValueError, "stable NixOS update branch"):
+                    records.load(self.root)
+
     def test_proposal_capture_rejects_indirection_and_missing_committed_records(self):
         for case in ["committed-symlink", "directory-symlink", "missing-record"]:
             with self.subTest(case=case):
@@ -118,7 +137,7 @@ class RecordTests(unittest.TestCase):
                     member_record.rename(proposal / "members.json")
                     member_record.symlink_to("../members.json")
                 elif case == "missing-record":
-                    (proposal / "policy/support.json").unlink()
+                    (proposal / "policy/members.json").unlink()
                 self.commit(proposal)
                 if case == "directory-symlink":
                     (proposal / "policy").rename(proposal / "actual-policy")

@@ -10,17 +10,16 @@ import subprocess
 import uuid
 
 if __package__:
-    from . import agreement, declarations, proposals, records, releases, support
+    from . import agreement, declarations, proposals, records, releases
 else:
     import agreement
     import declarations
     import proposals
     import records
     import releases
-    import support
 
 
-SYSTEMS = {"x86_64-linux": "ubuntu-24.04", "aarch64-linux": "ubuntu-24.04-arm"}
+SYSTEMS = records.load_requirements()["ci"]["runners"]
 ERRORS = (
     ValueError,
     OSError,
@@ -171,21 +170,11 @@ class Coordinator:
         _, _, _, version = declarations.read_identity(
             self.root, config["policyRepository"], name
         )
-        assessment = support.assess(version, config["_support"])
-        if assessment["status"] != "supported":
-            raise ValueError(support.retirement_issue(assessment))
         release = releases.inspect_release(config["policyRepository"], version)
         requirements = release_json(release, "policy/requirements.json")
-        if (
-            requirements.get("schemaVersion") != 1
-            or not isinstance(requirements.get("systems"), list)
-            or not requirements["systems"]
-            or not all(
-                declarations.valid_system(system) for system in requirements["systems"]
-            )
-            or len(set(requirements["systems"])) != len(requirements["systems"])
-        ):
-            raise ValueError("Unsupported selected release requirements")
+        records.validate_requirements(requirements)
+        if requirements["policyRepository"] != config["policyRepository"]:
+            raise ValueError("Selected release substituted policy repository")
         member = declarations.inspect(
             self.root,
             config["policyRepository"],
@@ -219,11 +208,8 @@ class Coordinator:
         if (
             report.get("memberSettings") != settings
             or report.get("revision") != before["revision"]
-            or report.get("support") != assessment
         ):
-            raise ValueError(
-                "Selected checker plan substituted member settings or support"
-            )
+            raise ValueError("Selected checker plan substituted member settings")
         required = list(expected_ci["requiredChecks"])
         mandatory = declarations.ci_plan(
             {**settings, "additionalRequiredChecks": []}, requirements["ci"]
@@ -282,7 +268,6 @@ class Coordinator:
             "repository": config["_members"][name],
             "source": before,
             "release": release,
-            "support": assessment,
             "memberSettings": settings,
             "baseline": baseline,
             "proposal": proposal,
@@ -331,7 +316,6 @@ class Coordinator:
             raise ValueError(
                 "Baseline or proposed records changed; renew candidate evidence"
             )
-        verify_support(plan, config)
 
     def verify_execution_records(self, root, plan):
         if self.snapshot(root)[2] != plan["executionRecords"]:
@@ -786,7 +770,6 @@ def validate_agreement_subject(report, plan):
         "revision": plan["source"]["revision"],
         "policyVersion": plan["release"]["version"],
         "memberSettings": plan["memberSettings"],
-        "support": plan["support"],
         "records": plan["executionRecords"],
         "behavioralIntegration": "not-run",
     }.items():
@@ -857,7 +840,6 @@ def validate_member_report(report, plan, kind, *, job=None):
         if report != plan.get("agreement") or any(
             member.get("status") != "pass"
             or member.get("policyVersion") != plan["release"]["version"]
-            or member.get("support", {}).get("status") != "supported"
             for member in report["members"]
         ):
             raise ValueError("Integration agreement changed or did not pass")
@@ -866,11 +848,8 @@ def validate_member_report(report, plan, kind, *, job=None):
         "compatibility",
         "vm",
     }:
-        if (
-            report.get("memberSettings") != plan["memberSettings"]
-            or report.get("support") != plan["support"]
-        ):
-            raise ValueError("Selected checker substituted member settings or support")
+        if report.get("memberSettings") != plan["memberSettings"]:
+            raise ValueError("Selected checker substituted member settings")
 
 
 def additional_evidence(repository, revision, gate):
@@ -931,23 +910,6 @@ def additional_evidence(repository, revision, gate):
 def require_attempt(args, plan):
     if args.attempt is not None and args.attempt != plan.get("attempt"):
         raise ValueError("Evidence belongs to a different expected attempt")
-
-
-def verify_support(plan, config, *, at=None):
-    if (
-        support.assess(plan["release"]["version"], config["_support"], at=at)
-        != plan["support"]
-    ):
-        raise ValueError("Selected release support changed; renew candidate evidence")
-    for member in plan.get("agreement", {}).get("members", []):
-        if (
-            "support" in member
-            and support.assess(member["policyVersion"], config["_support"], at=at)
-            != member["support"]
-        ):
-            raise ValueError(
-                "Locked member support changed; renew integration evidence"
-            )
 
 
 def run(args, **services):

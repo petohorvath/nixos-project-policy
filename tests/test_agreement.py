@@ -12,9 +12,9 @@ from unittest.mock import patch
 import yaml
 
 from tests.fixtures.cases import ProjectTestCase
-from tests.fixtures.data import BEFORE, EFFECTIVE, RELEASE, lockfile, retirement
+from tests.fixtures.data import RELEASE, lockfile
 from tests.fixtures.process import commit, git, initialize, isolated_git
-from tools import agreement, policy, support
+from tools import agreement, policy
 
 
 GATE = "Integration / Policy agreement"
@@ -236,37 +236,6 @@ class AgreementTests(ProjectTestCase):
             )
             self.assertEqual(member["selectionStatus"], "invalid")
 
-    def test_final_assessment_rechecks_members_after_later_fetches(self):
-        self.support["retirements"][RELEASE] = retirement()
-        instant = support.timestamp(BEFORE)
-        process = subprocess.run
-        fetches = 0
-
-        def advance_after_last_fetch(command, **kwargs):
-            nonlocal instant, fetches
-            result = process(command, **kwargs)
-            if "fetch" in command:
-                fetches += 1
-                if fetches == 2:
-                    instant = support.timestamp(EFFECTIVE)
-            return result
-
-        with (
-            patch.object(
-                agreement.subprocess, "run", side_effect=advance_after_last_fetch
-            ),
-            patch.object(support, "now", side_effect=lambda: instant),
-        ):
-            code, report = self.agreement()
-        self.assertEqual(code, 1, report)
-        self.assertTrue(
-            all(member["selectionStatus"] == "retired" for member in report["members"]),
-            report,
-        )
-        self.assertTrue(
-            all(member["status"] == "fail" for member in report["members"]), report
-        )
-
     def test_changed_trusted_records_invalidate_the_assessment(self):
         process = subprocess.run
 
@@ -281,29 +250,6 @@ class AgreementTests(ProjectTestCase):
             code, report = self.agreement()
         self.assertEqual(code, 2, report)
         self.assertIn("Central records changed", " ".join(report["issues"]))
-
-    def test_retirement_does_not_hide_an_unavailable_member_source(self):
-        self.support["retirements"][RELEASE] = retirement()
-        instant = support.timestamp(BEFORE)
-        execute = subprocess.run
-
-        def finish_failed_fetch(command, **kwargs):
-            nonlocal instant
-            response = execute(command, **kwargs)
-            if "fetch" in command and response.returncode:
-                instant = support.timestamp(EFFECTIVE)
-            return response
-
-        lock = self.locked_set()
-        lock["nodes"]["alpha"]["locked"]["rev"] = "0" * 40
-        with (
-            patch.object(agreement.subprocess, "run", side_effect=finish_failed_fetch),
-            patch.object(support, "now", side_effect=lambda: instant),
-        ):
-            code, report = self.agreement(lock)
-        self.assertEqual(code, 2, report)
-        self.assertEqual(report["status"], "error")
-        self.assertEqual(report["selectionStatus"], "retired")
 
     def test_independent_lock_scopes_count_and_vendor_locks_do_not(self):
         newer = self.member_revision("alpha", "v0.5.0")

@@ -84,7 +84,7 @@ jobs:
             stable_rev=$STABLE_REVISION
             unstable_rev=$UNSTABLE_REVISION
           else
-            stable_branch=$(jq -r .stableBranch policy/config.json)
+            stable_branch=$(jq -r .stableBranch policy/pins.json)
             stable_rev=$(git ls-remote https://github.com/NixOS/nixpkgs.git "refs/heads/$stable_branch" | cut -f1)
             unstable_rev=$(git ls-remote https://github.com/NixOS/nixpkgs.git refs/heads/nixos-unstable | cut -f1)
           fi

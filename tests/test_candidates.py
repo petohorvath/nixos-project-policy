@@ -1,7 +1,6 @@
 """Public candidate coordination with exact Git sources and supplied execution seams."""
 
 import copy
-from datetime import datetime, timezone
 import json
 import os
 import shutil
@@ -19,10 +18,9 @@ from tests.fixtures.data import (
     NEW_PAIR,
     PAIR,
     POLICY_REPO,
-    RELEASE,
 )
 from tests.fixtures.services import Services
-from tools import batches, candidates, policy, records, releases, support
+from tools import batches, candidates, policy, records, releases
 
 
 class CandidateTests(CandidateFixture, ProjectTestCase):
@@ -232,30 +230,10 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
         code, report, _ = self.plan()
         self.assertEqual(code, 0, report)
 
-    def test_proposals_cannot_change_roster_settings_support_or_policy_identity(self):
+    def test_proposals_cannot_change_roster_or_stable_branch(self):
         for file, change in [
             ("members.json", lambda data: data.update(members={})),
-            (
-                "config.json",
-                lambda data: data.update(policyRepository="attacker/policy"),
-            ),
-            (
-                "config.json",
-                lambda data: data.update(stableBranch="nixos-unstable"),
-            ),
-            (
-                "support.json",
-                lambda data: data.update(
-                    retirements={
-                        RELEASE: {
-                            "decision": "https://example.invalid/decision",
-                            "reason": "changed",
-                            "migrationStartsAt": "2030-01-01T00:00:00Z",
-                            "retiresAt": "2030-02-01T00:00:00Z",
-                        }
-                    }
-                ),
-            ),
+            ("pins.json", lambda data: data.update(stableBranch="nixos-25.11")),
         ]:
             with self.subTest(file=file):
                 path = self.proposal / "policy" / file
@@ -350,7 +328,7 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
         self.assertTrue(any(item["status"] == "fail" for item in result["results"]))
         self.assertTrue(list(output.glob("job-*/execution/stdout.log")))
 
-    def test_changed_plan_or_retirement_deadline_invalidates_execution(self):
+    def test_changed_plan_invalidates_execution(self):
         _, _, plan = self.plan()
         saved = records.read_json(plan / "plan.json")
         changed = copy.deepcopy(saved)
@@ -361,23 +339,6 @@ class CandidateTests(CandidateFixture, ProjectTestCase):
         candidates.write_json(plan / "plan.json", changed)
         self.assertEqual(self.worker(plan, "x86_64-linux")[0], 2)
         candidates.write_json(plan / "plan.json", saved)
-        self.support["retirements"][RELEASE] = {
-            "decision": "https://example.invalid/review",
-            "reason": "fixture",
-            "migrationStartsAt": "2030-01-01T00:00:00Z",
-            "retiresAt": "2030-02-01T00:00:00Z",
-        }
-        self.write_records()
-        candidates.write_json(self.proposal / "policy/support.json", self.support)
-        with patch.object(
-            support, "now", return_value=datetime(2030, 1, 15, tzinfo=timezone.utc)
-        ):
-            code, result, plan = self.plan()
-            self.assertEqual(code, 0, result)
-        with patch.object(
-            support, "now", return_value=datetime(2030, 2, 1, tzinfo=timezone.utc)
-        ):
-            self.assertEqual(self.worker(plan, "x86_64-linux")[0], 2)
 
     def test_wrong_release_reports_and_missing_compatibility_execution_fail(self):
         for field, value in [

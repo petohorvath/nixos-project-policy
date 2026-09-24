@@ -6,14 +6,13 @@ import shutil
 import uuid
 
 if __package__:
-    from . import candidates, declarations, proposals, records, releases, support
+    from . import candidates, declarations, proposals, records, releases
 else:
     import candidates
     import declarations
     import proposals
     import records
     import releases
-    import support
 
 
 def worker_id(project, system):
@@ -493,20 +492,6 @@ class Batch:
                 raise ValueError("Batch authority changed during aggregation")
         except candidates.ERRORS as error:
             self.result["issues"].append(str(error))
-        if self.args.policy_root.resolve() == self.args.proposal_root.resolve():
-            config, _, _ = records.proposed_snapshot(self.args.policy_root)
-        else:
-            config, _ = records.load(self.args.policy_root)
-        assessment_time = support.now()
-        for name, member in plan["members"].items():
-            if member["status"] == "planned":
-                try:
-                    candidates.verify_support(
-                        member["plan"], config, at=assessment_time
-                    )
-                except candidates.ERRORS as error:
-                    self.result["members"][name]["issues"].append(str(error))
-                    self.result["members"][name]["status"] = "fail"
         if self.result["issues"] or any(
             member["status"] != "candidate-pass"
             for member in self.result["members"].values()

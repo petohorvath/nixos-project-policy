@@ -14,12 +14,12 @@ Each root flake exposes its systems and applicable outputs. Local helpers supply
 
 ## Pins and enforcement
 
-| Source                  | Owns                                                                                |
-| ----------------------- | ----------------------------------------------------------------------------------- |
-| Policy release          | Rules, checker code, workflows, and required checks                                 |
-| Member caller           | Policy selection, required architectures, VM targets, and additional checks         |
-| Member lockfiles        | Selected dependencies                                                               |
-| Current central records | Shared pins, pin update batches, enrollment, retirements, and central configuration |
+| Source                  | Owns                                                                        |
+| ----------------------- | --------------------------------------------------------------------------- |
+| Policy release          | Rules, checker code, workflows, and required checks                         |
+| Member caller           | Policy selection, required architectures, VM targets, and additional checks |
+| Member lockfiles        | Selected dependencies                                                       |
+| Current central records | Shared pins, the stable update branch, pin update batches, and enrollment   |
 
 Each CI run captures one member commit, checker commit, and record commit. Compatibility checks test shared pins through root input overrides. Separate checks test the committed lock. Candidate validation supplies evidence; human-reviewed merge approves pins.
 

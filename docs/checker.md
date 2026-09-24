@@ -72,18 +72,18 @@ Compatibility checks deliberately use an overridden graph. `--override-input` im
 
 `pin-batch plan`, `execute`, and `aggregate` check enrolled members against an unmerged proposal. Select one member with `--project` or the full roster with `--all`.
 
-| Input                                 | Authority                                                     |
-| ------------------------------------- | ------------------------------------------------------------- |
-| `--policy-root BASELINE`              | Trusted enrollment, identities, support, and current approval |
-| Exact clean member commit             | Member declarations                                           |
-| `--proposal-root PROPOSAL --batch ID` | Candidate pair and registered member commits                  |
-| Selected published immutable release  | Member requirements and checker code                          |
+| Input                                 | Authority                                            |
+| ------------------------------------- | ---------------------------------------------------- |
+| `--policy-root BASELINE`              | Trusted enrollment, identities, and current approval |
+| Exact clean member commit             | Member declarations                                  |
+| `--proposal-root PROPOSAL --batch ID` | Candidate pair and registered member commits         |
+| Selected published immutable release  | Member requirements and checker code                 |
 
 The coordinator verifies each registered commit in its trusted repository. It resolves the selected release and executes its checker at the exact release commit.
 
 The proposal can include future approval and a routine batch's future `complete` state. Execution copies baseline records to a new evidence directory. It retains current approval and changes the selected batch to `candidate` in that copy. Approved and historical baseline batches cannot be reused.
 
-Proposals cannot change enrollment, support, policy identity, or unrelated rollout records. Proposed checker code and requirements never execute. All four proposed record files must be regular committed Git blobs that match working-tree bytes. The loader rejects symlinks and parses only verified blobs. Reports distinguish baseline, proposal, and execution-record identities.
+Proposals cannot change enrollment, the stable update branch, or unrelated rollout records. Proposed checker code and requirements never execute. Both proposed current-record files (`members.json` and `pins.json`) must be regular committed Git blobs that match working-tree bytes. The loader rejects symlinks and parses only verified blobs. Reports distinguish baseline, proposal, and execution-record identities.
 
 Run trusted coordinator code against the registered member commit. Use new output directories outside all input checkouts:
 
@@ -113,7 +113,7 @@ nix run --no-update-lock-file ./coordinator -- \
   --results ./results --output ./summary
 ```
 
-Planning and replay recheck trusted inputs and release support. Changed inputs or an effective retirement invalidate the plan. Aggregation requires all planned jobs. It rejects missing, substituted, conflicting, failed, or unreadable evidence. Reports and logs remain available after failure. Successful Nix builds can use cached results.
+Planning and replay recheck trusted inputs. Changed inputs invalidate the plan. Aggregation requires all planned jobs. It rejects missing, substituted, conflicting, failed, or unreadable evidence. Reports and logs remain available after failure. Successful Nix builds can use cached results.
 
 Single-member success returns `candidate-pass` with `eligible: false` for the enrolled batch. Digests identify content and freshness; they do not authenticate execution. Local aggregation requires trusted worker evidence.
 
@@ -162,7 +162,7 @@ nix run --no-update-lock-file ./coordinator -- \
 
 Aggregation rechecks all members and accounts for every worker and required child job. It retains inputs and member outcomes after failure. Missing, duplicate, conflicting, skipped, cancelled, failed, malformed, or foreign evidence prevents eligibility.
 
-Changes to sources, settings, checkers, enrollment, support, dependencies, records, or pins require a new plan and attempt. Aggregation does not combine attempts. Newly executed commands can still use the Nix build cache. Support is checked when consuming evidence and at completion, including retirements that take effect without a record edit.
+Changes to sources, settings, checkers, enrollment, dependencies, records, or pins require a new plan and attempt. Aggregation does not combine attempts. Newly executed commands can still use the Nix build cache.
 
 Only complete success returns `status: "candidate-pass"` and `eligible: true`. Plans, workers, and single-member summaries remain ineligible. Every summary retains `approval: "not-granted"`.
 
@@ -192,8 +192,8 @@ GitHub's [`GITHUB_WORKFLOW_SHA`](https://docs.github.com/en/actions/reference/wo
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `capture`    | Classify committed records and create a pending check on the proposal head. Candidate approval requires whole-batch evidence.                                             |
 | `collect`    | Check jobs and artifact metadata for the exact attempt. Download verified plan/worker archives and emit `worker-outcomes.json`. Retain available evidence after failures. |
-| `finish`     | Recheck jobs, artifacts, complete summary, source freshness, and release support. Update only the check bound to that head and attempt.                                   |
-| `invalidate` | Mark stale successful or pending checks failed after baseline changes or retirements. Do not rerun checks or modify PRs.                                                  |
+| `finish`     | Recheck jobs, artifacts, complete summary, source freshness, and captured records. Update only the check bound to that head and attempt.                                  |
+| `invalidate` | Mark stale successful or pending checks failed after baseline changes. Do not rerun checks or modify PRs.                                                                 |
 
 These operations use `GH_TOKEN`, falling back to `GITHUB_TOKEN`. Collection requires policy-repository Actions and PR metadata read access. Capture, reporting, and invalidation write Checks in that repository; run them only when reporting is intended.
 
@@ -287,13 +287,11 @@ The policy flake exposes its executable for every system in its pinned nixpkgs p
 
 ### Record ownership
 
-| File                       | Schema | Contents                                                                       |
-| -------------------------- | ------ | ------------------------------------------------------------------------------ |
-| `policy/members.json`      | 1      | `members` maps enrolled names to GitHub `owner/repository` identities          |
-| `policy/config.json`       | 1      | Policy repository identity and stable update branch                            |
-| `policy/pins.json`         | 1      | `approved` is null or an exact stable/unstable pair; `batches` records updates |
-| `policy/support.json`      | 1      | Explicit release [retirements](#release-support-and-retirement)                |
-| `policy/requirements.json` | 1      | Default runner systems and release-owned CI requirements                       |
+| File                       | Schema | Contents                                                                |
+| -------------------------- | ------ | ----------------------------------------------------------------------- |
+| `policy/members.json`      | 1      | `members` maps enrolled names to GitHub `owner/repository` identities   |
+| `policy/pins.json`         | 1      | Stable update branch, approved stable/unstable pair, and update batches |
+| `policy/requirements.json` | 1      | Policy repository identity and release-owned CI requirements            |
 
 The member roster contains no copied selections, settings, or adoption flags. Names and repository identities must be unique; repository comparison ignores case. Missing, malformed, or duplicate-key records fail inspection. An empty roster is valid and distinct from missing data.
 
@@ -301,7 +299,7 @@ Reviewed central changes control enrollment and removal. Ordinary upgrades and c
 
 ### Release requirements
 
-The checker reads `requirements.json` beside its own code, independently of `--policy-root`. Current records cannot replace release requirements.
+The checker reads `requirements.json` beside its own code, independently of `--policy-root`. Current records cannot replace release requirements or policy repository identity. Named runner systems come from `ci.runners`; there is no separate systems list.
 
 The `ci` fields define the caller name, common `requiredChecks`, per-architecture `architectureChecks`, `compatibilityChecks` templates, `runners`, and conditional VM status. Templates use `{architecture}`. The checker combines these fields with member settings to produce ordinary and compatibility matrices and the complete gate list. Additional gate names do not create workflow jobs.
 
@@ -309,9 +307,9 @@ The `ci` fields define the caller name, common `requiredChecks`, per-architectur
 
 The root bootstrap lock does not approve shared pins. Approval comes from current `pins.json`. Pin updates use new records with the same selected checker release.
 
-Completed and withdrawn batches retain member names and tested commits independently of current enrollment. Candidate coordination requires current enrolled identities.
+Active batches retain their member names and tested commits independently of current enrollment. Completed or withdrawn batches can be pruned in a separate reviewed cleanup; Git history and the original PR retain their evidence. Candidate coordination requires current enrolled identities.
 
-Each batch contains an ID, state, `pins`, optional `previous` pair, and `projects` mapping member names to tested commits. Pair values contain only exact stable and unstable commits. States are `candidate`, `approved`, `rolling`, `paused`, `complete`, and `withdrawn`.
+The `stableBranch` field names the stable NixOS branch used to prepare updates. Each batch contains an ID, state, `pins`, optional `previous` pair, and `projects` mapping member names to tested commits. Pair values contain only exact stable and unstable commits. States are `candidate`, `approved`, `rolling`, `paused`, `complete`, and `withdrawn`.
 
 The checker reports an automatically selected candidate as `candidateBatch`; `--batch` requests one explicitly. Callers cannot supply arbitrary approved pins. Active rollouts must remain tied to central approval.
 
@@ -339,36 +337,6 @@ The reusable workflow owns job matrices. The caller runs for every PR, including
 
 Hosted release verification requires a published immutable release that is not a prerelease. The workflow checks out the tag, verifies `VERSION`, and captures checker, member, and current record commits. All jobs use these commits. Missing or mutable releases, unavailable GitHub responses, and version mismatches stop execution. Local structural checks do not verify remote publication.
 
-## Release support and retirement
-
-`policy/support.json` uses schema version 1. Its `retirements` object maps exact release tags to decisions. Within the v0.4.0+ range, a release without a decision remains supported, regardless of age or newer releases. Releases below that floor are always rejected. Support does not establish valid declarations or remote publication.
-
-Each decision requires an HTTPS review reference, nonempty reason, and UTC timestamps in `YYYY-MM-DDTHH:MM:SSZ` format. Retirement must follow migration start. This example is not an actual decision:
-
-```json
-{
-  "schemaVersion": 1,
-  "retirements": {
-    "v9.9.0": {
-      "decision": "https://github.com/example/policy/pull/123",
-      "reason": "Example reviewed retirement",
-      "migrationStartsAt": "2030-01-01T00:00:00Z",
-      "retiresAt": "2030-02-01T00:00:00Z"
-    }
-  }
-}
-```
-
-Before `retiresAt`, support remains `supported` with the pending decision and migration period. At the deadline it becomes `retired`. `check`, `ci`, `compatibility`, `vm`, and audits share this assessment.
-
-Retired member commands return exit 1, `selectionStatus: "retired"`, the `support` decision, and a failure reason. They provide no usable CI matrix and start no shell, compatibility, or VM execution. Commands reassess support before returning. Hosted ordinary jobs repeat planning after execution to detect deadlines crossed during a run.
-
-Malformed or missing support records cause inspection errors with `selectionStatus: "unknown"`. Invalid declarations return `selectionStatus: "invalid"`.
-
-The `support` object contains `policyVersion`, effective `status`, and `retirement` or null. It has no observation timestamp. Its identity stays stable until the decision or effective status changes. Record digests include decision content. A retirement can take effect without a record edit. Evidence consumers must reassess support even when digests match.
-
-Audits retain retired enrolled selections as failures with the member revision and decision. They can reject a retired selection without executing its checker.
-
 ## Integration policy agreement
 
 `agreement PATH --project NAME` checks the integration project's exact consumed enrolled member revisions. Each must select the integration project's own supported release. Run its selected checker with explicit trusted records. The integration checkout must be clean, contain a root lock, and declare the agreement gate.
@@ -388,10 +356,10 @@ Each consumed member needs one valid caller with matching literal identity and `
 Reports identify:
 
 - Integration `revision`, central `records`, and committed `lockfiles`.
-- Each member's trusted identity, `revision`, `source`, lock-node `references`, `policyVersion`, support, and outcome.
+- Each member's trusted identity, `revision`, `source`, lock-node `references`, `policyVersion`, and outcome.
 - `dependencyGraph`, `cycles`, and `dependencySetDigest`.
 
-The digest binds lock contents and discovered sources/selections, without wall-clock seconds. Evidence consumers must reassess support. Agreement rechecks all consumed selections at completion and rejects changed integration sources or records. Invalid declarations are failures; unavailable sources are inspection errors. Both outcomes retain JSON on standard output.
+The digest binds lock contents and discovered sources and selections. Agreement rejects changed integration sources or records. Invalid declarations are failures; unavailable sources are inspection errors. Both outcomes retain JSON on standard output.
 
 Use the [integration caller template](../templates/integration-caller.yml). The ordinary Policy caller declares `additional_required_checks: '["Integration / Policy agreement"]'`. The separate `Integration` caller uses `agreement.yml` at the same release. It depends on Policy and passes exactly its `project_revision` and `records_revision` outputs. Custom conditions, matrices, alternate sources, and live record references fail validation.
 
@@ -411,10 +379,10 @@ A local development checker cannot replace an unpublished selected release. Each
 
 Each report identifies roster `repository`, member `revision`, `policyVersion`, verified `checkerRevision`, `checkerRepository`, and central `records`:
 
-| Field              | Meaning                                         |
-| ------------------ | ----------------------------------------------- |
-| `records.revision` | Git commit, when available                      |
-| `records.digest`   | Configuration, pin, roster, and support records |
+| Field              | Meaning                    |
+| ------------------ | -------------------------- |
+| `records.revision` | Git commit, when available |
+| `records.digest`   | Pin and roster records     |
 
 The dispatcher verifies returned identities, revisions, digests, report types, outcomes, and member settings. Substituted or malformed reports cause inspection errors. Changed central records fail the audit, even for an initially empty roster.
 

@@ -6,14 +6,12 @@ This guide covers v0.4.0 and later. Publish each immutable release before activa
 
 Current records live on `main`. Use one trusted snapshot for each operation.
 
-| Record                                                                                            | Purpose                                             |
-| ------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| [members.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/members.json) | Enrolled repository identities                      |
-| [pins.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/pins.json)       | Approved shared pins and pin update batches         |
-| [support.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/support.json) | Release retirements and migration periods           |
-| [config.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/config.json)   | Policy repository identity and stable update branch |
+| Record                                                                                            | Purpose                                                            |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| [members.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/members.json) | Enrolled repository identities                                     |
+| [pins.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/pins.json)       | Approved shared pins, stable update branch, and pin update batches |
 
-The selected release supplies the rules, checker code, and [requirements](../policy/requirements.json). Each v0.4.0 member selects its release and settings in its policy caller. See [record formats](checker.md#member-declarations-and-central-records) for fields and validation rules. Keep approval and test evidence in PRs and CI results.
+The selected release supplies the rules, checker code, repository identity, and CI [requirements](../policy/requirements.json). Each v0.4.0 member selects its release and settings in its policy caller. See [record formats](checker.md#member-declarations-and-central-records) for fields and validation rules. Keep approval and test evidence in PRs and CI results.
 
 ## Pin candidates and approval
 
@@ -23,12 +21,12 @@ Routine shared-pin updates use one central PR. The PR proposes an exact stable/u
 2. Capture clean member commits from the trusted roster. Keep integration projects at their intended committed dependency sets.
 3. Resolve source failures and required lock updates through separate member PRs. Use the lock procedure below.
 4. Add a new batch to `policy/pins.json`. Put the proposed pair in `approved`. For a routine update with no remaining member rollout, set the batch to `complete`. Record the current approved pair in `previous`.
-5. Open the central PR. Keep enrollment, support, policy versions, and checker changes separate. Commit records as regular files; symlinks and uncommitted edits fail validation.
+5. Open the central PR. Keep enrollment, the stable update branch, policy versions, and checker changes separate. Commit records as regular files; symlinks and uncommitted edits fail validation.
 6. Review `Pin batch / Complete candidate` on the current PR head. Verify the baseline, all member outcomes, every required architecture, both compatibility results, ordinary checks, and applicable VM and additional gates. For integration projects, verify agreement and behavioral checks at the locked dependency revisions.
 7. Retain the plan, worker artifacts, GitHub provenance, and complete summary with the PR. Retain evidence from failed workers too.
 8. Obtain human merge approval with current complete evidence. Merge changes the approved pair for subsequent checks.
 
-Retain completed batches. Do not reuse an approved or historical batch as a candidate. For an active rollout, use `approved`, `rolling`, or `paused` until the member changes are complete. State-only pause, resume, completion, and withdrawal changes use ordinary review; they do not require a new candidate.
+Retain active batches. Completed and withdrawn batches can be pruned in a separate reviewed cleanup; preserve their evidence in Git history and the original PR. Do not reuse an approved or historical batch as a candidate. For an active rollout, use `approved`, `rolling`, or `paused` until the member changes are complete. State-only pause, resume, completion, and withdrawal changes use ordinary review; they do not require a new candidate.
 
 The `Central pin proposal` workflow uses the current trusted default-branch workflow, coordinator, and baseline. It tests proposed records as candidate data. It does not execute proposed code or requirements. See [central PR checks](checker.md#central-pin-prs) for evidence and permissions.
 
@@ -57,9 +55,9 @@ Keep `VERSION` and member workflow references unchanged for pin updates. At comp
 
 ## Renewing PR evidence
 
-Renew validation when the candidate pair, proposal head, registered source, settings, integration dependencies, checker, enrollment, support, or captured records change. Start a fresh attempt. An unrelated member branch update does not change an exact registration. Replay checks captured evidence; it cannot renew a live PR check.
+Renew validation when the candidate pair, proposal head, registered source, settings, integration dependencies, checker, enrollment, or captured records change. Start a fresh attempt. An unrelated member branch update does not change an exact registration. Replay checks captured evidence; it cannot renew a live PR check.
 
-Maintenance invalidates stale proposal checks after pushes to `main`, scheduled runs, and manual dispatch. It checks baseline changes and effective retirements. After a baseline change, update/rebase the proposal or reopen the PR to start a fresh target event. Rerun an older workflow only while its original workflow revision and baseline remain current.
+Maintenance invalidates stale proposal checks after pushes to `main`, scheduled runs, and manual dispatch. It checks baseline changes. After a baseline change, update/rebase the proposal or reopen the PR to start a fresh target event. Rerun an older workflow only while its original workflow revision and baseline remain current.
 
 Before activating the central gate:
 
@@ -67,7 +65,7 @@ Before activating the central gate:
 2. Verify that `Pin batch / Complete candidate` appears on the reviewed head.
 3. Require the intended trusted workflow and issuer in merge protection.
 4. Require an up-to-date branch or equivalent validation at merge time.
-5. Verify current release support and human approval.
+5. Verify that selections are v0.4.0 or later and obtain human approval.
 
 Final GitHub checks and periodic invalidation are not atomic with a later merge. Local fixtures cannot verify hosted permissions, native ARM execution, or live merge protection. See GitHub's [target-trigger guidance](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target) and the [evidence contract](checker.md#central-pin-prs).
 
@@ -110,7 +108,7 @@ Drafts can prepare an unpublished release. Hosted checks require publication bef
 
 Removal also requires a reviewed central PR. Keep enrollment plans in issues. Ordinary policy upgrades do not change the roster.
 
-Before a new identity participates in pin batches, enroll it in `policy/members.json`. Completed and withdrawn batches retain their tested member names and commits after roster removal.
+Before a new identity participates in pin batches, enroll it in `policy/members.json`. Retained batches keep their tested member names and commits after roster removal.
 
 Run `audit WORKSPACE --fetch --github` for all enrolled identities. Retain its JSON report. See [audit behavior](checker.md#enrollment-audits) for release discovery and inspection failures.
 
@@ -128,13 +126,7 @@ Run `audit WORKSPACE --fetch --github` for all enrolled identities. Retain its J
 8. Publish with the exact version tag.
 9. Verify that GitHub reports an immutable release and that the tag resolves to the checked commit.
 
-Do not reuse a release tag. Ordinary PR merges and candidate generation do not authorize publication. Member upgrades use separate reviewed PRs. New releases do not retire other selections within the supported range.
-
-## Release retirement
-
-Support starts at v0.4.0. Record each reviewed retirement within the supported range in `policy/support.json`. Specify the exact release, decision reference, reason, migration start, and effective retirement time. Allow enough time for the agreed migrations; the checker requires a positive period but sets no universal duration.
-
-Members migrate through their own reviewed PRs. After the deadline, member commands reject the retired selection and audits retain it as a failed enrolled assessment. See the [support contract](checker.md#release-support-and-retirement).
+Do not reuse a release tag. Ordinary PR merges and candidate generation do not authorize publication. Member upgrades use separate reviewed PRs. Selections must remain at v0.4.0 or later.
 
 ## Integration project agreement
 
@@ -147,6 +139,6 @@ Creating or enrolling an integration project requires a separate decision. Keep 
 5. Run `agreement PATH --project NAME` with the selected checker and trusted records.
 6. Verify the actual GitHub status. Review merge-setting changes separately.
 
-Upgrade the integration selection and its complete matching dependency set together. Member branches can upgrade independently while the integration lock retains older supported revisions. Review reported lock scopes, source revisions, selections, and support decisions.
+Upgrade the integration selection and its complete matching dependency set together. Member branches can upgrade independently while the integration lock retains older supported revisions. Review reported lock scopes, source revisions, and selections.
 
 Policy agreement does not prove functional compatibility. Preserve committed-lock tests, both compatibility revisions on each required architecture, and applicable VM tests. See the [agreement contract](checker.md#integration-policy-agreement).

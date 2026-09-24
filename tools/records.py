@@ -9,25 +9,18 @@ import stat
 import subprocess
 import tempfile
 
-
 if __package__:
-    from . import support
+    from . import declarations
 else:
-    import support
+    import declarations
 
 
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
 ACTIVE_BATCH_STATES = {"approved", "rolling", "paused"}
 _REQUIREMENTS_PATH = Path(__file__).resolve().parents[1] / "policy/requirements.json"
-_REQUIREMENT_FIELDS = ("systems", "ci")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 PROJECT = re.compile(r"[a-z0-9-]+\Z")
-FILES = ("config.json", "pins.json", "members.json", "support.json")
-_RUNTIME_FIELDS = {
-    *_REQUIREMENT_FIELDS,
-    "_members",
-    "_support",
-}
+FILES = ("pins.json", "members.json")
 
 
 def unique_mapping(pairs):
@@ -45,36 +38,18 @@ def read_json(path):
 
 def load(root):
     """Read current records using the executing release's requirements."""
-    config = read_json(root / "policy/config.json")
     pins = read_json(root / "policy/pins.json")
-    if not isinstance(config, dict) or not isinstance(pins, dict):
+    if not isinstance(pins, dict):
         raise ValueError("Policy records must be JSON objects")
-    if config.get("schemaVersion") != 1 or pins.get("schemaVersion") != 1:
+    if type(pins.get("schemaVersion")) is not int or pins["schemaVersion"] != 1:
         raise ValueError("Unsupported policy record schema")
-    if set(config) != {"schemaVersion", "policyRepository", "stableBranch"}:
-        raise ValueError(
-            "Policy configuration requires only schemaVersion, policyRepository, and stableBranch"
-        )
-    config["_members"] = load_members(root)
-    config["_support"] = support.validate(read_json(root / "policy/support.json"))
-    requirements = read_json(_REQUIREMENTS_PATH)
-    if requirements.get("schemaVersion") != 1:
-        raise ValueError("Unsupported policy requirements schema")
-    # Requirements belong to the selected checker release, never the live records.
-    for field in _REQUIREMENT_FIELDS:
-        config[field] = requirements[field]
-    if not REPOSITORY.fullmatch(config["policyRepository"]):
-        raise ValueError("Invalid policy repository")
-    if (
-        not isinstance(config["systems"], list)
-        or not config["systems"]
-        or any(
-            not isinstance(system, str) or not system for system in config["systems"]
-        )
-        or len(set(config["systems"])) != len(config["systems"])
-        or set(config["ci"]["runners"]) != set(config["systems"])
+    if not isinstance(pins.get("stableBranch"), str) or not re.fullmatch(
+        r"nixos-[0-9]{2}\.[0-9]{2}", pins["stableBranch"]
     ):
-        raise ValueError("Supported systems need unique names and matching CI runners")
+        raise ValueError("Expected a stable NixOS update branch")
+    # Requirements belong to the selected checker release, never the live records.
+    config = load_requirements()
+    config["_members"] = load_members(root)
     if pins["approved"] is not None:
         validate_pair(pins["approved"])
     ids = set()
@@ -185,7 +160,7 @@ def load_members(root):
 
 
 def write(root, config, pins):
-    """Write the four records into a new policy directory, excluding runtime fields."""
+    """Write the current records into a new policy directory."""
     directory = root / "policy"
     directory.mkdir(parents=True)
     for name, value in _documents(config, pins).items():
@@ -210,15 +185,43 @@ def identity(config, pins, revision):
 
 
 def _documents(config, pins):
-    documents = {
-        "config.json": {
-            key: value for key, value in config.items() if key not in _RUNTIME_FIELDS
-        },
+    return {
         "pins.json": pins,
+        "members.json": {"schemaVersion": 1, "members": config["_members"]},
     }
-    documents["members.json"] = {"schemaVersion": 1, "members": config["_members"]}
-    documents["support.json"] = config["_support"]
-    return documents
+
+
+def load_requirements():
+    requirements = read_json(_REQUIREMENTS_PATH)
+    validate_requirements(requirements)
+    return requirements
+
+
+def validate_requirements(requirements):
+    if (
+        not isinstance(requirements, dict)
+        or type(requirements.get("schemaVersion")) is not int
+        or requirements["schemaVersion"] != 1
+    ):
+        raise ValueError("Unsupported policy requirements schema")
+    repository = requirements.get("policyRepository")
+    if not isinstance(repository, str) or not REPOSITORY.fullmatch(repository):
+        raise ValueError("Invalid policy repository")
+    ci = requirements.get("ci")
+    if not isinstance(ci, dict):
+        raise ValueError("Policy requirements need CI configuration")
+    runners = ci.get("runners")
+    if (
+        not isinstance(runners, dict)
+        or not runners
+        or any(
+            not declarations.valid_system(system)
+            or not isinstance(runner, str)
+            or not runner
+            for system, runner in runners.items()
+        )
+    ):
+        raise ValueError("Supported systems require named CI runners")
 
 
 def validate_pair(pair):

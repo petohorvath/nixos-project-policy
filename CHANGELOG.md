@@ -2,7 +2,7 @@
 
 ## 0.4.0
 
-- Require v0.4.0 or later for all member selections. Remove pre-v0.4.0 checker adapters, compatibility records, readiness and cleanup options, and old-release tests and guides. Central configuration now lives in `policy/config.json`; member identities come only from `policy/members.json`.
+- Require v0.4.0 or later for all member selections. Remove pre-v0.4.0 checker adapters, compatibility records, readiness and cleanup options, and old-release tests and guides. Reduce `policy/` to enrollment, pins, and release requirements. Store the stable update branch with pins and policy identity with release requirements; derive default systems from runner mappings.
 
 - Remove the policy-owned formatting/lint job and `lint` command. Members own formatting and lint enforcement.
 - Accept any nonempty selection of Nix systems for required architectures. Keep existing Linux runner mappings and use matching self-hosted runners for other systems in member CI and candidate batches.
@@ -19,7 +19,7 @@
 
 - Keep active enrollment in an identity-only roster. Audit exact member revisions with their discovered published immutable checkers and validated report identities; retain missing enforcement and inaccessible metadata as visible failures.
 
-- Add explicit retirement decisions with migration periods, shared enforcement in local commands, CI, and audits, and stable support assessments for evidence.
+- Remove scheduled release retirement handling and its tests. Prune the completed adoption batch; retain its history and evidence in Git and the original PR.
 - Add single-member candidate planning, native execution, and replayable aggregation against unmerged proposals. Keep baseline authority separate from proposed approval fields, use each selected immutable checker, and retain complete gate evidence without granting batch approval.
 - Check integration policy agreement at exact committed member dependency revisions, including reachable transitive members, follows, aliases, and independent lock scopes. Preserve behavioral integration tests and reject mixed selections, cycles, missing declarations, and unavailable sources.
 - Provide the separate `Integration / Policy agreement` gate and caller template with primary Policy source/record snapshot outputs. Keep member upgrades independent of the integration project's locked set.

@@ -28,18 +28,19 @@ class ProjectFixture:
         self.root = Path(self.temp.name) / "example"
         self.config = {
             "schemaVersion": 1,
-            "stableBranch": "nixos-26.05",
             "policyRepository": POLICY_REPO,
-            "systems": ["x86_64-linux", "aarch64-linux"],
             "ci": json.loads(
                 (policy.SOURCE_ROOT / "policy/requirements.json").read_text()
             )["ci"],
         }
-        self.pins = {"schemaVersion": 1, "approved": PAIR, "batches": []}
+        self.pins = {
+            "stableBranch": "nixos-26.05",
+            "schemaVersion": 1,
+            "approved": PAIR,
+            "batches": [],
+        }
         self.members = {"example": "owner/example"}
         self.config["_members"] = self.members
-        self.support = {"schemaVersion": 1, "retirements": {}}
-        self.config["_support"] = self.support
         self.write("flake.nix", "{}")
         self.write(".envrc", "use flake\n")
         self.write("LICENSE", "MIT")
@@ -85,23 +86,10 @@ class ProjectFixture:
     def write_records(self):
         records = Path(self.temp.name) / "records"
         (records / "policy").mkdir(parents=True, exist_ok=True)
-        records_config = {
-            key: value
-            for key, value in self.config.items()
-            if key
-            not in {
-                "systems",
-                "ci",
-                "_members",
-                "_support",
-            }
-        }
-        (records / "policy/config.json").write_text(json.dumps(records_config))
         (records / "policy/pins.json").write_text(json.dumps(self.pins))
         (records / "policy/members.json").write_text(
             json.dumps({"schemaVersion": 1, "members": self.members})
         )
-        (records / "policy/support.json").write_text(json.dumps(self.support))
         return records
 
     def run_policy(self, *args):

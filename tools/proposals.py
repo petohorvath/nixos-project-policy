@@ -26,9 +26,10 @@ class Proposal:
 
     def _validate_candidate(self, batch):
         # A proposal cannot replace the authority used to assess its candidate.
-        if {key: value for key, value in self.config.items() if key != "ci"} != {
-            key: value for key, value in self.proposed.items() if key != "ci"
-        }:
+        if (
+            self.config != self.proposed
+            or self.pins["stableBranch"] != self.proposed_pins["stableBranch"]
+        ):
             raise ValueError(
                 "Pin proposals cannot alter trusted enrollment or policy records"
             )

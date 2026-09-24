@@ -11,13 +11,12 @@ from urllib import parse, request
 import zipfile
 
 if __package__:
-    from . import batches, candidates, proposals, records, support
+    from . import batches, candidates, proposals, records
 else:
     import batches
     import candidates
     import proposals
     import records
-    import support
 
 GATE = "Pin batch / Complete candidate"
 WORKFLOW = ".github/workflows/pin-pr.yml"
@@ -407,7 +406,6 @@ class Review:
                     "Complete-batch summary lacks successful bound hosted evidence"
                 )
             self.result["members"] = {}
-            versions = set()
             for name, member in sorted(plan["members"].items()):
                 child = member["plan"]
                 if (
@@ -425,14 +423,7 @@ class Review:
                         "dependencySetDigest"
                     ),
                 }
-                versions.add(child["release"]["version"])
-                versions.update(
-                    member["policyVersion"]
-                    for member in child.get("agreement", {}).get("members", [])
-                    if "policyVersion" in member
-                )
-            self.result["selections"] = sorted(versions)
-        # Fetching later artifacts can outlive a support deadline or proposal update.
+        # Fetching later artifacts can outlive a proposal update.
         self.context()
         if (
             records.proposed_snapshot(self.args.policy_root)[2] != self.baseline
@@ -440,13 +431,6 @@ class Review:
             != self.result["proposal"]
         ):
             raise ValueError("Captured records changed during PR assessment")
-        if self.result["classification"] == "candidate":
-            instant = support.now()
-            for name, member in plan["members"].items():
-                try:
-                    candidates.verify_support(member["plan"], self.config, at=instant)
-                except candidates.ERRORS as error:
-                    self.result["issues"].append(f"{name}: {error}")
         self.result["status"] = "fail" if self.result["issues"] else "pass"
         self.result["eligible"] = (
             self.result["status"] == "pass"
@@ -518,16 +502,6 @@ class Review:
                     != self.result["proposal"]
                 ):
                     raise ValueError("Record inputs changed before publication")
-                instant = support.now()
-                for name, member in (
-                    getattr(self, "plan", {}).get("members", {}).items()
-                ):
-                    try:
-                        candidates.verify_support(
-                            member["plan"], self.config, at=instant
-                        )
-                    except candidates.ERRORS as error:
-                        raise ValueError(f"{name}: {error}") from error
             except candidates.ERRORS as error:
                 self.result.update(status="fail", eligible=False)
                 self.result["issues"].append(str(error))
@@ -539,7 +513,6 @@ class Review:
             "head": self.args.head,
             "classification": self.result.get("classification"),
             "planDigest": self.result.get("planDigest"),
-            "selections": self.result.get("selections", []),
         }
         response = api(
             f"{self.prefix}/check-runs/{self.args.check}",
@@ -610,19 +583,8 @@ class Review:
                                 saved["baseline"] != self.baseline["revision"]
                                 or saved["head"] != head
                                 or saved["number"] != number
-                                or not isinstance(saved["selections"], list)
                             ):
                                 raise ValueError("Invalid saved gate identity")
-                            retired = [
-                                version
-                                for version in saved["selections"]
-                                if support.assess(version, self.config["_support"])[
-                                    "status"
-                                ]
-                                != "supported"
-                            ]
-                            if retired:
-                                reason = f"Selected release support changed: {', '.join(retired)}; renew affected member validation"
                         except candidates.ERRORS:
                             reason = "Saved validation identity is unavailable; renew candidate evidence"
                     if reason:

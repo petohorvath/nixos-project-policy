@@ -296,7 +296,8 @@ class ProjectTests(ProjectTestCase):
             json.dumps(
                 {
                     "schemaVersion": 1,
-                    "systems": [],
+                    "policyRepository": "attacker/policy",
+                    "ci": {},
                 }
             )
         )
@@ -304,19 +305,8 @@ class ProjectTests(ProjectTestCase):
         requirements = json.loads(
             (policy.SOURCE_ROOT / "policy/requirements.json").read_text()
         )
-        for field in ["systems", "ci"]:
+        for field in ["policyRepository", "ci"]:
             self.assertEqual(config[field], requirements[field])
-            path = root / "policy/config.json"
-            project_records = json.loads(path.read_text())
-            project_records[field] = []
-            path.write_text(json.dumps(project_records))
-            with (
-                self.subTest(field=field),
-                self.assertRaisesRegex(ValueError, "Policy configuration requires"),
-            ):
-                records.load(root)
-            del project_records[field]
-            path.write_text(json.dumps(project_records))
 
     def test_enrolled_members_derive_checks_without_recording_mandatory_names(self):
         self.assertEqual(self.run_policy("validate")[0], 0)
@@ -546,7 +536,7 @@ class ProjectTests(ProjectTestCase):
                 )
 
     def test_unknown_record_schema_is_rejected(self):
-        self.config["schemaVersion"] = 0
+        self.pins["schemaVersion"] = 0
         status, report = self.run_policy("validate")
         self.assertEqual(status, 2)
         self.assertIn("Unsupported policy record schema", report["error"])
@@ -1642,16 +1632,15 @@ class RecordTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "policy").mkdir()
-            (root / "policy/config.json").write_text(
-                (source / "policy/config.json").read_text()
-            )
             (root / "policy/members.json").write_text(
                 (source / "policy/members.json").read_text()
             )
-            (root / "policy/support.json").write_text(
-                (source / "policy/support.json").read_text()
-            )
-            pins = {"schemaVersion": 1, "approved": PAIR, "batches": []}
+            pins = {
+                "schemaVersion": 1,
+                "stableBranch": "nixos-26.05",
+                "approved": PAIR,
+                "batches": [],
+            }
             (root / "policy/pins.json").write_text(json.dumps(pins))
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
@@ -1666,17 +1655,12 @@ class RecordTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "policy").mkdir()
-            (root / "policy/config.json").write_text(
-                (source / "policy/config.json").read_text()
-            )
             (root / "policy/members.json").write_text(
                 (source / "policy/members.json").read_text()
             )
-            (root / "policy/support.json").write_text(
-                (source / "policy/support.json").read_text()
-            )
             pins = {
                 "schemaVersion": 1,
+                "stableBranch": "nixos-26.05",
                 "approved": None,
                 "batches": [
                     {
@@ -1708,7 +1692,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("needs", caller)
         self.assertNotIn("strategy", caller)
         plan = policy.ci_plan(
-            {"requiredArchitectures": requirements["systems"], "vmTargets": []},
+            {
+                "requiredArchitectures": list(requirements["ci"]["runners"]),
+                "vmTargets": [],
+            },
             requirements["ci"],
         )
         names = {f"{caller['name']} / {jobs['records']['name']}"}
@@ -1777,13 +1764,17 @@ class WorkflowTests(unittest.TestCase):
             records = root / "policy-state/policy"
             records.mkdir(parents=True)
             (records / "pins.json").write_text(
-                json.dumps({"schemaVersion": 1, "approved": PAIR, "batches": []})
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "stableBranch": "nixos-26.05",
+                        "approved": PAIR,
+                        "batches": [],
+                    }
+                )
             )
             (records / "members.json").write_text(
                 json.dumps({"schemaVersion": 1, "members": {}})
-            )
-            (records / "support.json").write_text(
-                json.dumps({"schemaVersion": 1, "retirements": {}})
             )
             stub = root / "nix"
             stub.write_text(
@@ -1801,15 +1792,6 @@ class WorkflowTests(unittest.TestCase):
                 ["unsupported"],
             ]:
                 with self.subTest(architectures=architectures):
-                    (records / "config.json").write_text(
-                        json.dumps(
-                            {
-                                "schemaVersion": 1,
-                                "policyRepository": POLICY_REPO,
-                                "stableBranch": "nixos-26.05",
-                            }
-                        )
-                    )
                     caller = yaml.load(
                         (
                             policy.SOURCE_ROOT / "templates/policy-caller.yml"

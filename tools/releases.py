@@ -112,7 +112,6 @@ def check_member(
     snapshot,
     *,
     settings,
-    support_assessment,
 ):
     process = subprocess.run(
         checker_command(
@@ -155,7 +154,6 @@ def check_member(
         or not report.get("requiredChecks")
         or not declarations.valid_check_names(report["requiredChecks"])
         or (report.get("memberSettings") != settings)
-        or (report.get("support") != support_assessment)
     ):
         raise ValueError(
             "Released checker returned an incompatible report or substituted identity"

@@ -6,7 +6,13 @@ from pathlib import Path
 import tempfile
 
 from tests.fixtures.cli import invoke
-from tests.fixtures.data import PAIR, POLICY_REPO, RELEASE, REQUIRED_CHECKS, lockfile
+from tests.fixtures.data import (
+    PAIR,
+    POLICY_REPO,
+    RELEASE,
+    LEGACY_REQUIRED_CHECKS,
+    lockfile,
+)
 from tools import policy
 
 
@@ -35,7 +41,7 @@ class ProjectFixture:
                     "policyVersion": RELEASE,
                     "requiredArchitectures": ["x86_64-linux", "aarch64-linux"],
                     "vmTargets": [],
-                    "requiredChecks": list(REQUIRED_CHECKS),
+                    "requiredChecks": list(LEGACY_REQUIRED_CHECKS),
                 }
             },
         }

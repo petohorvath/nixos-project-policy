@@ -5,7 +5,13 @@ import json
 from pathlib import Path
 import shutil
 
-from tests.fixtures.data import NEW_PAIR, PAIR, POLICY_REPO, RELEASE
+from tests.fixtures.data import (
+    LEGACY_REQUIRED_CHECKS,
+    NEW_PAIR,
+    PAIR,
+    POLICY_REPO,
+    RELEASE,
+)
 from tests.fixtures.process import commit, git, isolated_git
 from tests.fixtures.projects import ProjectFixture
 from tools import agreement, candidates, policy, records
@@ -147,6 +153,9 @@ class BatchFixture(CandidateFixture):
             )
         self.declaration("legacy", "v0.3.0")
         self.config["projects"]["legacy"]["policyVersion"] = "v0.3.0"
+        self.config["projects"]["legacy"]["requiredChecks"] = list(
+            LEGACY_REQUIRED_CHECKS
+        )
         self.commit(self.roots["legacy"])
         self.declaration(
             "alpha",

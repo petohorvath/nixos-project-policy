@@ -24,7 +24,6 @@ nix run .# -- --policy-root . COMMAND
 | `check PATH --project NAME --batch ID`                          | Check a registered candidate at its exact clean member commit.                                                   |
 | `compatibility PATH --project NAME --channel stable`            | Verify the stable override and run full root host checks. Use `unstable` for the other revision.                 |
 | `compatibility PATH --project NAME --channel stable --batch ID` | Run compatibility checks for an exact registered candidate.                                                      |
-| `lint PATH`                                                     | Run statix, deadnix, and root formatting in a temporary source copy.                                             |
 | `host-checks PATH`                                              | Require nonempty `checks.<host-system>` under the committed lock, without building checks.                       |
 | `audit WORKSPACE`                                               | Inspect each enrolled checkout with its selected published checker; report failures and dependency cycles.       |
 | `audit WORKSPACE --fetch --github`                              | Also clone missing public checkouts and inspect GitHub enforcement. Leave existing checkouts unchanged.          |
@@ -104,7 +103,7 @@ nix run --no-update-lock-file ./coordinator -- \
 
 Repeat execution on every native system in the plan. Keep the same member, checker, baseline, proposal, and plan. ARM jobs require an ARM host. VM targets require an x86_64 KVM host, even with ARM-only ordinary coverage.
 
-Each worker independently runs compliance/shell, lint, committed-lock checks, and both candidate compatibility revisions. A failed category does not suppress other runnable categories. Additional gates use GitHub check runs or commit statuses at the exact member commit. Gate names neither create jobs nor become commands. Every required gate must complete successfully.
+Each worker independently runs compliance/shell, committed-lock checks, and both candidate compatibility revisions. Workers selecting older releases also run those releases’ required lint gates. A failed category does not suppress other runnable categories. Additional gates use GitHub check runs or commit statuses at the exact member commit. Gate names neither create jobs nor become commands. Every required gate must complete successfully.
 
 For v0.2.0 and later, compatibility verifies root overrides, nonempty native checks, and lock preservation. The v0.1.x adapter retains whole-project committed-pin requirements. Both candidate revisions must occur in its effective committed root graph, with nonempty native root checks. Missing coverage and pin-bound locks require actual member changes.
 
@@ -486,7 +485,6 @@ The first job captures the checker, member, and current record commits. All late
 | ----------------------------------------------------- | -------------------------- |
 | `Policy / Verify policy version and load shared pins` | Every enrolled member      |
 | `Policy / Compliance (<architecture>)`                | Each required architecture |
-| `Policy / Formatting and lint (<architecture>)`       | Each required architecture |
 | `Policy / Project tests (<architecture>)`             | Each required architecture |
 | `Policy / Compatibility (stable, <architecture>)`     | Each required architecture |
 | `Policy / Compatibility (unstable, <architecture>)`   | Each required architecture |
@@ -494,7 +492,7 @@ The first job captures the checker, member, and current record commits. All late
 
 The first job verifies the release and generates matrices once on x86_64. This metadata job does not add x86_64 to the member's required architectures or publish a release.
 
-Compliance runs structural, pin, caller, and shell checks. Formatting/lint runs `lint` in the member shell and formats a disposable copy. Project tests first run `host-checks` to require nonempty host checks with `--no-update-lock-file`, then run full committed-lock root checks. Candidate execution and replay enforce the same sequence for v0.4.0 and later; older selected releases retain their existing behavior. Compatibility runs both shared revisions.
+Compliance runs structural, pin, caller, and shell checks. Members own formatting and lint enforcement. Project tests first run `host-checks` to require nonempty host checks with `--no-update-lock-file`, then run full committed-lock root checks. Candidate execution and replay enforce the same sequence for v0.4.0 and later; older selected releases retain their existing behavior. Compatibility runs both shared revisions.
 
 Each category runs independently on every required architecture with `fail-fast: false`. They and the VM job depend only on the first job. A failure does not suppress other categories. Declared VM targets require the x86_64 gate even with ARM-only ordinary coverage. Without targets, VM reports `not-applicable` and its status need not be required.
 

@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -125,10 +124,6 @@ def main(argv=None):
     compatibility.add_argument(
         "--output", type=Path, help="New evidence directory outside the project"
     )
-    lint = commands.add_parser(
-        "lint", help="Run Nix lint and formatting in a temporary copy"
-    )
-    lint.add_argument("project_dir", type=Path)
     shell = commands.add_parser(
         "shell", help="Smoke-test the default development shell and root formatter"
     )
@@ -281,9 +276,6 @@ def main(argv=None):
             result = {"schemaVersion": 1, "status": "proposal", "pins": pair}
         elif args.command == "shell":
             issues = check_shell(args.project_dir)
-            result = {"status": "fail" if issues else "pass", "issues": issues}
-        elif args.command == "lint":
-            issues = check_lint(args.project_dir)
             result = {"status": "fail" if issues else "pass", "issues": issues}
         elif args.command == "host-checks":
             result = check_host_checks(args.project_dir)
@@ -947,59 +939,6 @@ def check_shell(root):
         return []
     except (subprocess.SubprocessError, OSError) as error:
         return [f"development: shell or formatter probe failed: {error}"]
-
-
-def check_lint(root):
-    with tempfile.TemporaryDirectory(prefix="nixos-policy-lint-") as temporary:
-        source = Path(temporary) / "source"
-        shutil.copytree(
-            root,
-            source,
-            ignore=shutil.ignore_patterns(
-                ".git", ".direnv", "result", "result-*", "__pycache__", ".ruff_cache"
-            ),
-        )
-        paths = [
-            f"./{path.relative_to(source)}" for path in source_files(source, "*.nix")
-        ]
-        script = 'set -eu; for source in "$@"; do statix check "$source"; deadnix --fail "$source"; done'
-        before = fingerprints(source)
-        try:
-            subprocess.run(
-                [
-                    "nix",
-                    "develop",
-                    "--no-update-lock-file",
-                    "--ignore-environment",
-                    f"path:{source}",
-                    "--command",
-                    "bash",
-                    "-c",
-                    script,
-                    "policy-lint",
-                    *paths,
-                ],
-                cwd=source,
-                check=True,
-                timeout=900,
-                stdout=sys.stderr,
-            )
-            subprocess.run(
-                ["nix", "fmt", "--no-update-lock-file"],
-                cwd=source,
-                check=True,
-                timeout=900,
-                stdout=sys.stderr,
-            )
-        except (OSError, subprocess.SubprocessError) as error:
-            return [f"lint: execution failed: {error}"]
-        after = fingerprints(source)
-        changed = sorted(
-            path
-            for path in before.keys() | after.keys()
-            if before.get(path) != after.get(path)
-        )
-        return [f"formatting: changes required in {path}" for path in changed]
 
 
 def fingerprints(root):

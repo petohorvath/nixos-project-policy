@@ -647,7 +647,7 @@ class BatchTests(BatchFixture, ProjectTestCase):
             "execute",
             PROJECT="example",
             SYSTEM="x86_64-linux",
-            BATCH_FIXTURE_FAILURE="lint",
+            BATCH_FIXTURE_FAILURE="tests",
             BATCH_FIXTURE_FAILED_MEMBER="example",
         )
         self.assertEqual(process.returncode, 1, process.stderr)

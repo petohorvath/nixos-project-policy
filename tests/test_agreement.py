@@ -525,7 +525,7 @@ class AgreementTests(ProjectTestCase):
         self.assertIn(GATE, plan["requiredChecks"])
         self.assertEqual(
             {entry["check"] for entry in plan["matrix"]["include"]},
-            {"Compliance", "Formatting and lint", "Project tests"},
+            {"Compliance", "Project tests"},
         )
         workspace = Path(self.temp.name) / "hosted"
         workspace.mkdir()

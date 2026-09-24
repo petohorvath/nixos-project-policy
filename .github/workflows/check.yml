@@ -134,9 +134,6 @@ jobs:
           PROJECT: ${{ inputs.project }}
         run: |
           nix run --no-update-lock-file ./policy -- --policy-root ./policy-state check ./project --project "$PROJECT" --shell
-      - name: Run formatting and Nix lint outside the member flake
-        if: matrix.check == 'Formatting and lint'
-        run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state lint ./project
       - name: Run project tests
         if: matrix.check == 'Project tests'
         run: |

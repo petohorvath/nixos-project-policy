@@ -8,7 +8,7 @@
       "stable": "Compatibility (stable, {architecture})",
       "unstable": "Compatibility (unstable, {architecture})"
     },
-    "architectureChecks": ["Compliance", "Formatting and lint", "Project tests"],
+    "architectureChecks": ["Compliance", "Project tests"],
     "runners": {
       "x86_64-linux": "ubuntu-24.04",
       "aarch64-linux": "ubuntu-24.04-arm"

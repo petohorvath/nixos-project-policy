@@ -6,7 +6,7 @@ This document defines the shared requirements. The [design](docs/normalization-d
 
 Each member remains independently usable and releases separately. Each owns its root flake, shell, formatter, tests, and lockfiles. Keep the policy repository out of member flake inputs, Nix imports, development shells, and builds. A small member GitHub Actions workflow may call a pinned policy workflow. Keep project-specific contribution and agent instructions local and link to the approved shared rules.
 
-The rules for tools, pins, entrypoints, lint, and CI apply to enrolled projects as a whole. Coding and documentation style applies to new and changed first-party material. Preserve vendored code, generated output, upstream package metadata, and third-party notices. Declare exclusions and technical overrides with their reason and scope; review them as part of adoption.
+The rules for tools, pins, entrypoints, and CI apply to enrolled projects as a whole. Coding and documentation style applies to new and changed first-party material. Preserve vendored code, generated output, upstream package metadata, and third-party notices. Declare exclusions and technical overrides with their reason and scope; review them as part of adoption.
 
 ## Development
 
@@ -50,9 +50,9 @@ Register meaningful tests for behavior changes and keep their organization align
 
 Benchmarks are optional and require a concrete project need; policy adoption does not require a benchmark suite or a `dev/` directory. Add or retain performance tooling only when it serves the project's agreed scope.
 
-Fix real statix and deadnix findings before requiring their gates. Narrow, documented suppressions may cover intentional code or false positives. Broad disabling is not compliance.
+Members own formatting and lint enforcement, including tool selection and CI gates. The policy checker does not run formatters or linters. Member-owned checks may include them in root `nix flake check`.
 
-Root `nix flake check` runs applicable non-VM checks for the host platform. Provide nonempty host checks under the committed lock as well as under the shared compatibility pins. Keep VM execution and its build dependencies outside default checks. Provide explicit VM commands where applicable. Each member declares at least one Nix system in its `required_architectures` policy caller input. Required CI covers formatting/lint and relevant evaluation/unit/integration checks on every recorded architecture, with pinned stable and unstable compatibility where relevant. Applicable VM suites gate merges on x86_64 Linux independently of that selection. Documentation-only PRs may use relevant documentation, formatting, and policy checks.
+Root `nix flake check` runs applicable non-VM checks for the host platform. Provide nonempty host checks under the committed lock as well as under the shared compatibility pins. Keep VM execution and its build dependencies outside default checks. Provide explicit VM commands where applicable. Each member declares at least one Nix system in its `required_architectures` policy caller input. Required policy CI covers relevant evaluation/unit/integration checks on every recorded architecture, with pinned stable and unstable compatibility where relevant. Applicable VM suites gate merges on x86_64 Linux independently of that selection. Documentation-only PRs may use relevant documentation, formatting, and policy checks.
 
 ## Documentation and agent guidance
 
@@ -80,7 +80,7 @@ Use MIT for the original code in nix-nftypes, nixos-cross-config, nixos-nftzones
 
 Keep checking code and the approved pin record here. Run common checks locally from this repository and in member CI through an immutable reusable-workflow reference. Require the relevant results in GitHub merge gates and audit pins, policy references, documentation structure, dependency direction, and CI configuration for drift.
 
-Name the member caller job `Policy`. The selected release defines mandatory status names and architecture-specific job names in `policy/requirements.json`: verification of the policy release and shared pins, plus separate compliance, formatting/lint, committed-lock project tests, and stable/unstable compatibility jobs on every declared required architecture. Derive matrices and required names from the same validated member settings. Applicable VM targets require a separate x86_64 status, including for ARM-only ordinary coverage. Keep these jobs independent after the shared source, release, and record snapshots. Additional project gates supplement the minimum and do not create jobs. The [checker reference](docs/checker.md#ci-integration) lists the names.
+Name the member caller job `Policy`. The selected release defines mandatory status names and architecture-specific job names in `policy/requirements.json`: verification of the policy release and shared pins, plus separate compliance, committed-lock project tests, and stable/unstable compatibility jobs on every declared required architecture. Derive matrices and required names from the same validated member settings. Applicable VM targets require a separate x86_64 status, including for ARM-only ordinary coverage. Keep these jobs independent after the shared source, release, and record snapshots. Additional project gates supplement the minimum and do not create jobs. The [checker reference](docs/checker.md#ci-integration) lists the names.
 
 Select policy releases through exact published immutable `vMAJOR.MINOR.PATCH` tags. Declare exactly one reusable-workflow caller; its `uses` reference, `policy_version` input, documentation links, and executing checker must agree. Branches, abbreviated versions, prereleases, and bare commit references do not select a release. Publish releases with GitHub release immutability enabled; never move or reuse a released version.
 

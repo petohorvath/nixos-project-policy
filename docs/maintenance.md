@@ -99,7 +99,7 @@ A repair that changes either nixpkgs revision creates a revised candidate. Rerun
 ## Enrollment
 
 1. Select the member migration explicitly.
-2. Prepare its shell, tools, formatter, documentation, dependency selection, and checks. Preserve public contracts and specialized host requirements. Resolve lint findings.
+2. Prepare its shell, tools, formatter, documentation, dependency selection, and checks. Preserve public contracts and specialized host requirements.
 3. Use the selected release's caller template. Match its release reference, `policy_version`, and documentation links. Declare [member settings](checker.md#member-declarations-and-central-records) in the caller.
 4. Run `nix run .# -- --policy-root . check PATH --project NAME --shell` from a trusted current records checkout.
 5. Run committed-lock checks, both compatibility revisions on every required architecture, and applicable VM suites.
@@ -170,9 +170,9 @@ Publish the immutable release before activating callers. Select each member migr
 2. Copy the intended architectures into `required_architectures` as a literal JSON string.
 3. Copy VM targets and additional gates into `vm_targets` and `additional_required_checks`. Omit these optional inputs when empty.
 4. Run `ci PATH --project NAME`. Verify generated names against PR statuses and merge gates.
-5. Run compliance/shell, formatting/lint, committed-lock, both compatibility revisions, and applicable VM checks.
+5. Run compliance/shell, committed-lock, both compatibility revisions, and applicable VM checks.
 
-Do not add a settings file or pin override inputs. Preserve required coverage unless review explicitly justifies a reduction. Equivalent settings retain v0.3.0 status names. VM gates stay on x86_64 even when ordinary jobs use ARM only. Additional status names require jobs that produce them; see [integration setup](#integration-project-agreement).
+Do not add a settings file or pin override inputs. Preserve required coverage unless review explicitly justifies a reduction. The remaining policy gates retain v0.3.0 status names. The policy no longer requires the formatting/lint gate; members own any replacement enforcement. VM gates stay on x86_64 even when ordinary jobs use ARM only. Additional status names require jobs that produce them; see [integration setup](#integration-project-agreement).
 
 Retain the member's selected root nixpkgs revision. Leave central legacy selections, settings, and adoption fields unchanged. Retain their complete check lists and historical batch references until [cleanup review](#retirement-and-legacy-cleanup) permits removal. This upgrade neither enrolls a member nor approves pins or retires releases.
 

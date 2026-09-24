@@ -6,9 +6,10 @@ import shutil
 import uuid
 
 if __package__:
-    from . import candidates, proposals, records, releases, support
+    from . import candidates, declarations, proposals, records, releases, support
 else:
     import candidates
+    import declarations
     import proposals
     import records
     import releases
@@ -29,8 +30,9 @@ def matrix(members):
         for row in plan["matrix"]["include"]:
             worker = worker_id(name, row["system"])
             if (
-                row["system"] not in candidates.SYSTEMS
-                or row["runner"] != candidates.SYSTEMS[row["system"]]
+                not declarations.valid_system(row["system"])
+                or row["runner"]
+                != declarations.runner_for(row["system"], candidates.SYSTEMS)
                 or worker in seen
             ):
                 raise ValueError("Unsafe or conflicting whole-batch native workers")

@@ -10,7 +10,8 @@ POLICY_VERSION = re.compile(
     r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z"
 )
 PROJECT_NAME = re.compile(r"[a-z0-9-]+\Z")
-PR_ACTIVITIES = {"opened", "synchronize", "reopened", "edited"}
+SYSTEM_NAME = re.compile(r"[A-Za-z0-9_]+-[A-Za-z0-9_-]+\Z")
+PR_ACTIVITIES = {"opened", "synchronize", "reopened"}
 INPUT_FIELDS = {
     "required_architectures": "requiredArchitectures",
     "vm_targets": "vmTargets",
@@ -86,9 +87,9 @@ def inspect(
             f"Project {name} selects policy {version}; run that release instead of checker {checker_version}"
         )
     require_execution(workflow, job, requirements["ci"]["callerJobName"])
-    member = parse_inputs(job.get("with"), name, version, requirements["systems"])
+    member = parse_inputs(job.get("with"), name, version)
     if hosted_inputs is not None:
-        hosted = parse_inputs(hosted_inputs, name, version, requirements["systems"])
+        hosted = parse_inputs(hosted_inputs, name, version)
         if hosted != member:
             raise ValueError(
                 "Hosted workflow inputs disagree with the inspected member declaration"
@@ -117,15 +118,15 @@ def require_execution(workflow, job, caller_name, *, needs=None):
         and set(trigger) == {"types"}
         and isinstance(trigger["types"], list)
         and all(isinstance(item, str) for item in trigger["types"])
-        and len(trigger["types"]) == len(PR_ACTIVITIES)
-        and set(trigger["types"]) == PR_ACTIVITIES
+        and len(trigger["types"]) == len(set(trigger["types"]))
+        and PR_ACTIVITIES <= set(trigger["types"]) <= PR_ACTIVITIES | {"edited"}
     ):
         raise ValueError(
-            "Policy PR trigger must declare exactly opened, synchronize, reopened, edited activities without other filters"
+            "Policy PR trigger must declare opened, synchronize, reopened activities, optionally edited, without other filters"
         )
 
 
-def parse_inputs(inputs, name, version, systems):
+def parse_inputs(inputs, name, version):
     allowed = {"project", "policy_version", *INPUT_FIELDS}
     required = {"project", "policy_version", "required_architectures"}
     if (
@@ -159,10 +160,9 @@ def parse_inputs(inputs, name, version, systems):
             )
         settings[field] = values
     architectures = settings["requiredArchitectures"]
-    if not architectures or set(architectures) - set(systems):
+    if not architectures or not all(valid_system(system) for system in architectures):
         raise ValueError(
-            "required_architectures must be a nonempty subset of the supported systems: "
-            + ", ".join(systems)
+            "required_architectures must be a nonempty list of Nix system names"
         )
     if any(not PROJECT_NAME.fullmatch(target) for target in settings["vmTargets"]):
         raise ValueError("vm_targets must contain simple lowercase target names")
@@ -191,12 +191,22 @@ def require_policy_version(value):
         raise ValueError("Policy versions must be exact release tags such as v0.1.0")
 
 
+def valid_system(system):
+    return isinstance(system, str) and SYSTEM_NAME.fullmatch(system) is not None
+
+
+def runner_for(system, runners):
+    if not valid_system(system):
+        raise ValueError(f"Invalid Nix system name: {system!r}")
+    return runners.get(system, ["self-hosted", system])
+
+
 def ci_plan(project, requirements):
     jobs = [
         {
             "check": check,
             "system": architecture,
-            "runner": requirements["runners"][architecture],
+            "runner": runner_for(architecture, requirements["runners"]),
         }
         for check in requirements["architectureChecks"]
         for architecture in project["requiredArchitectures"]
@@ -206,7 +216,7 @@ def ci_plan(project, requirements):
             "check": check.format(architecture=architecture),
             "channel": channel,
             "system": architecture,
-            "runner": requirements["runners"][architecture],
+            "runner": runner_for(architecture, requirements["runners"]),
         }
         for channel, check in requirements["compatibilityChecks"].items()
         for architecture in project["requiredArchitectures"]

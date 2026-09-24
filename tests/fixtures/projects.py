@@ -25,17 +25,9 @@ class ProjectFixture:
             "schemaVersion": 2,
             "policyRepository": POLICY_REPO,
             "systems": ["x86_64-linux", "aarch64-linux"],
-            "requiredTools": [],
             "ci": json.loads(
                 (policy.SOURCE_ROOT / "policy/requirements.json").read_text()
             )["ci"],
-            "readmeSections": [
-                "Support",
-                "Quickstart",
-                "Development",
-                "Contributing",
-                "Documentation",
-            ],
             "projects": {
                 "example": {
                     "repository": "owner/example",
@@ -55,10 +47,12 @@ class ProjectFixture:
         self.write("flake.nix", "{}")
         self.write(".envrc", "use flake\n")
         self.write("LICENSE", "MIT")
+        # Transition fixtures also run immutable checkers that require these headings.
         self.write(
             "README.md",
-            "# Example\n\nPurpose.\n"
-            + "\n".join(f"## {section}\n" for section in self.config["readmeSections"]),
+            "# Example\n\nPurpose.\n\n"
+            "## Support\n\n## Quickstart\n\n## Development\n\n"
+            "## Contributing\n\n## Documentation\n",
         )
         for file in ["CONTRIBUTING.md", "AGENTS.md"]:
             self.write(
@@ -107,8 +101,6 @@ class ProjectFixture:
             if key
             not in {
                 "systems",
-                "requiredTools",
-                "readmeSections",
                 "ci",
                 "_members",
                 "_support",

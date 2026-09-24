@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
   workflow_dispatch:
@@ -36,8 +36,3 @@ jobs:
       - name: Test the packaged release transition
         run: nix develop --no-update-lock-file --command python -m unittest tests.packaged_transition -v
       - run: nix run --no-update-lock-file .# -- shell .
-      - name: Check PR title
-        if: github.event_name == 'pull_request'
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: nix run --no-update-lock-file .# -- title "$PR_TITLE"

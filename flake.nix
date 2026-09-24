@@ -14,7 +14,8 @@
         "aarch64-linux"
       ];
       forSystems = nixpkgs.lib.genAttrs systems;
-      project = forSystems (
+      forCheckerSystems = nixpkgs.lib.genAttrs (builtins.attrNames nixpkgs.legacyPackages);
+      project = forCheckerSystems (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
@@ -105,11 +106,11 @@
       });
       formatter = forSystems (system: project.${system}.formatter);
       checks = forSystems (system: project.${system}.checks);
-      packages = forSystems (system: {
+      packages = forCheckerSystems (system: {
         default = project.${system}.checker;
         policy-check = project.${system}.checker;
       });
-      apps = forSystems (system: {
+      apps = forCheckerSystems (system: {
         default = {
           type = "app";
           program = "${project.${system}.checker}/bin/nixos-project-policy";

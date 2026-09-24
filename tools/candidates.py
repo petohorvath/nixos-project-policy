@@ -89,7 +89,7 @@ def add_commands(commands):
             parser.add_argument("--all", action="store_true")
         if operation == "execute":
             parser.add_argument("--project")
-            parser.add_argument("--system", required=True, choices=SYSTEMS)
+            parser.add_argument("--system", required=True)
         else:
             parser.add_argument("--fetch", action="store_true")
         if operation == "aggregate":
@@ -183,7 +183,11 @@ class Coordinator:
         if (
             requirements.get("schemaVersion") != 1
             or not isinstance(requirements.get("systems"), list)
-            or not set(requirements["systems"]) <= SYSTEMS.keys()
+            or not requirements["systems"]
+            or not all(
+                declarations.valid_system(system) for system in requirements["systems"]
+            )
+            or len(set(requirements["systems"])) != len(requirements["systems"])
         ):
             raise ValueError("Unsupported selected release requirements")
         modern = releases.version_at_least(version, (0, 4, 0))
@@ -350,8 +354,13 @@ class Coordinator:
             "jobs": jobs,
             "matrix": {
                 "include": [
-                    {"system": system, "runner": SYSTEMS[system]}
-                    for system in SYSTEMS
+                    {
+                        "system": system,
+                        "runner": declarations.runner_for(system, SYSTEMS),
+                    }
+                    for system in dict.fromkeys(
+                        [*SYSTEMS, *(job["system"] for job in jobs)]
+                    )
                     if any(job["system"] == system for job in jobs)
                 ]
             },

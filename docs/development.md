@@ -6,7 +6,7 @@ Install Nix with `nix-command` and `flakes` enabled. CI uses Nix 2.34.6 to enter
 
 For automatic shell activation, install direnv with `use flake` support. Enable direnv in the interactive shell. [Nix-direnv](https://github.com/nix-community/nix-direnv#installation) can supply flake support if needed. The repository's `.envrc` reports missing prerequisites.
 
-Review `.envrc`, then run `direnv allow`. Alternatively, run `nix develop`. Host Nix is required for both methods; the development shell then supplies its pinned Nix executable.
+Review `.envrc`, then run `direnv allow`. Alternatively, run `nix develop --no-update-lock-file`. Host Nix is required for both methods; the development shell then supplies its pinned Nix executable.
 
 ## Tools and checks
 
@@ -26,10 +26,10 @@ The formatter covers Nix, shell, Markdown, YAML, JSON, and Python. It preserves 
 ### Focused tests
 
 ```bash
-nix develop --command python -m unittest discover -s tests -v
-nix fmt -- --ci
-nix run .# -- --policy-root . validate
-nix run .# -- --version
+nix develop --no-update-lock-file --command python -m unittest discover -s tests -v
+nix fmt --no-update-lock-file -- --ci
+nix run --no-update-lock-file .# -- --policy-root . validate
+nix run --no-update-lock-file .# -- --version
 ```
 
 ### Host tests
@@ -57,7 +57,7 @@ nix run --no-update-lock-file .# -- shell .
 When the member selects the version in this checkout's `VERSION`, run the local checker with explicit trusted records:
 
 ```bash
-nix run .# -- --policy-root . check ../PROJECT --project PROJECT
+nix run --no-update-lock-file .# -- --policy-root . check ../PROJECT --project PROJECT
 ```
 
 For another selected release, use that release's checker with a separate current record checkout, as shown in the [checker reference](checker.md#commands). Add `--shell` to smoke-test the member's development environment and evaluate its formatter. The default check reads files; compatibility execution uses the separate `compatibility` command. Checks and audits do not update member sources or lockfiles, though shell and compatibility commands execute member code. See the [checker reference](checker.md) for results and limits.

@@ -14,11 +14,11 @@ Install the [host prerequisites](docs/development.md#host-prerequisites), then r
 
 ```bash
 direnv allow
-nix flake check
-nix run .# -- --policy-root . validate
+nix flake check --no-update-lock-file --print-build-logs
+nix run --no-update-lock-file .# -- --policy-root . validate
 ```
 
-Use `nix develop` to enter the shell without direnv. `nix flake check` runs checker tests, record validation, formatting, and lint checks for the host architecture. `validate` checks the selected record checkout and reports whether it contains an approved pin pair; it does not check member compliance or approve pins.
+Use `nix develop --no-update-lock-file` to enter the shell without direnv. `nix flake check` runs checker tests, record validation, formatting, and lint checks for the host architecture. `validate` checks the selected record checkout and reports whether it contains an approved pin pair; it does not check member compliance or approve pins.
 
 ## Member projects
 
@@ -40,7 +40,7 @@ The checker also plans CI gates, audits enrolled members, checks integration pol
 
 ## Development
 
-Run `nix fmt` and `nix flake check` before submitting changes. CI also runs real-Nix and packaged-checker host tests on both supported Linux architectures and smoke-tests the development shell. See [development](docs/development.md) for tools, focused tests, and host test commands.
+Run the formatter and flake checks listed under [tools and checks](docs/development.md#tools-and-checks) before submitting changes. CI also runs real-Nix and packaged-checker host tests on both supported Linux architectures and smoke-tests the development shell. See [development](docs/development.md) for tools, focused tests, and host test commands.
 
 ## Contributing
 

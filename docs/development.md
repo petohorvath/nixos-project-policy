@@ -13,7 +13,7 @@ Review `.envrc`, then run `direnv allow`. Alternatively, run `nix develop`. Host
 The root lock supplies Nix, nil, nixfmt, statix, deadnix, treefmt, shfmt, Prettier, Git, jq, Python/PyYAML, Ruff, and actionlint. `policy/pins.json` separately records the approved shared pins.
 
 ```bash
-nix fmt
+nix fmt --no-update-lock-file
 nix flake check --no-update-lock-file --print-build-logs
 ```
 

@@ -4,7 +4,7 @@ Follow [POLICY.md](POLICY.md) for shared requirements. See [development](docs/de
 
 1. Make changes on a branch.
 2. Add behavioral tests for checker changes. Include invalid records, unsupported inputs, and transition states where applicable.
-3. Run `nix fmt` and `nix flake check`.
+3. Run the formatter and flake checks listed under [tools and checks](docs/development.md#tools-and-checks).
 4. Open a PR. Describe the change, test results, validation limits, and compatibility effects.
 5. Squash merge after required checks pass and a human approves the merge.
 

@@ -11,7 +11,7 @@ Run the checker from its selected policy release or packaged `nixos-project-poli
 Use this prefix with the commands below:
 
 ```bash
-nix run .# -- --policy-root . COMMAND
+nix run --no-update-lock-file .# -- --policy-root . COMMAND
 ```
 
 | Command                                              | Behavior                                                                                                   |
@@ -28,7 +28,7 @@ nix run .# -- --policy-root . COMMAND
 | `vm PATH --project NAME`                             | Execute declared VM targets on a suitable builder. Return `not-applicable` if none exist.                  |
 | `candidate --stable COMMIT --unstable COMMIT`        | Emit an unapproved pair. Do not write locks or approve pins.                                               |
 
-For a shell-only probe, run `nix run .# -- shell PATH`. This first evaluates `devShells.<host-system>.default.drvPath`, enters the development shell with the inherited environment cleared, and executes `bash -c ':'`. It also evaluates the root formatter without asserting compliance. A default package or non-default shell cannot satisfy the development-shell requirement. Policy CI uses it as a host smoke test. The probe checks startup and command execution, not a fixed tool list or project-specific development tasks.
+For a shell-only probe, run `nix run --no-update-lock-file .# -- shell PATH`. This first evaluates `devShells.<host-system>.default.drvPath`, enters the development shell with the inherited environment cleared, and executes `bash -c ':'`. It also evaluates the root formatter without asserting compliance. A default package or non-default shell cannot satisfy the development-shell requirement. Policy CI uses it as a host smoke test. The probe checks startup and command execution, not a fixed tool list or project-specific development tasks.
 
 Use a selected release with current records:
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Reject member Markdown that passes `..` or a `../` path to `--policy-root`. Clone records for local commands into a `mktemp -d` directory, as the README and checker reference now show.
+
+### Migration
+
+Before selecting this release, replace sibling record paths such as `--policy-root ../nixos-project-policy-records` in member Markdown with a temporary directory from `mktemp -d`.
+
 ## 0.4.0
 
 - Allow members to select a Linux VM execution system with `vm_architecture`. Derive its worker and required status together; preserve x86_64 Linux as the default. Other VM systems require matching self-hosted runners with KVM. Members opting in must update their required VM status after selecting a release that includes this input.

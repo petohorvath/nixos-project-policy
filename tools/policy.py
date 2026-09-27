@@ -38,6 +38,7 @@ dependency_cycles = locks.dependency_cycles
 
 REVISION = records.REVISION
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
+PARENT_POLICY_ROOT = re.compile(r"--policy-root(?:[\s=]|\\\n)+[\"']?\.\.(?![^/\s\"'])")
 EXCLUDED_DIRS = {
     ".git",
     ".direnv",
@@ -484,6 +485,12 @@ def check_structure(root, config, version):
         ):
             issues.append(
                 f"documentation: {file} needs only the selected policy release's POLICY.md links"
+            )
+    for path in source_files(root, "*.md"):
+        if PARENT_POLICY_ROOT.search(path.read_text()):
+            issues.append(
+                f"documentation: {path.relative_to(root)} passes a ../ path to --policy-root; "
+                "clone records into a mktemp -d directory"
             )
     return issues
 

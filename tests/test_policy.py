@@ -1181,6 +1181,38 @@ class ProjectTests(ProjectTestCase):
         )
         self.assertTrue(any("AGENTS.md" in issue for issue in self.inspect()["issues"]))
 
+    def test_parent_policy_root_in_markdown_fails(self):
+        for command in [
+            "--policy-root ../nixos-project-policy-records check .",
+            "--policy-root=../records check .",
+            '--policy-root "../records" check .',
+            "--policy-root \\\n  ../records \\\n  check .",
+            "--policy-root .. check .",
+        ]:
+            with self.subTest(command=command):
+                self.write(
+                    "docs/development.md", f"```sh\nnix run .# -- {command}\n```\n"
+                )
+                self.assertIn(
+                    "documentation: docs/development.md passes a ../ path to "
+                    "--policy-root; clone records into a mktemp -d directory",
+                    self.inspect()["issues"],
+                )
+
+    def test_other_policy_roots_in_markdown_pass(self):
+        for command in [
+            '--policy-root "$RECORDS_DIR" check ../member',
+            "--policy-root ./records check ../member",
+            "--policy-root ..records check .",
+        ]:
+            with self.subTest(command=command):
+                self.write(
+                    "docs/development.md", f"```sh\nnix run .# -- {command}\n```\n"
+                )
+                self.assertFalse(
+                    any("--policy-root" in issue for issue in self.inspect()["issues"])
+                )
+
     def test_wrong_project_cannot_select_other_vm_requirements(self):
         self.workflow["jobs"]["policy"]["with"]["project"] = "another-project"
         self.write(".github/workflows/policy.yml", json.dumps(self.workflow))

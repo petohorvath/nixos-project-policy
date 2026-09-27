@@ -30,15 +30,19 @@ nix run --no-update-lock-file .# -- --policy-root . COMMAND
 
 For a shell-only probe, run `nix run --no-update-lock-file .# -- shell PATH`. This first evaluates `devShells.<host-system>.default.drvPath`, enters the development shell with the inherited environment cleared, and executes `bash -c ':'`. It also evaluates the root formatter without asserting compliance. A default package or non-default shell cannot satisfy the development-shell requirement. Policy CI uses it as a host smoke test. The probe checks startup and command execution, not a fixed tool list or project-specific development tasks.
 
-Use a selected release with current records:
+Use a selected release with current records cloned from `main` into a temporary directory:
 
 ```bash
+MEMBER_RECORDS_DIR=$(mktemp -d)
+git clone --branch main --single-branch \
+  https://github.com/petohorvath/nixos-project-policy.git "$MEMBER_RECORDS_DIR"
 nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
-  --policy-root ../nixos-project-policy-records \
+  --policy-root "$MEMBER_RECORDS_DIR" \
   check ../member --project member --shell
+rm -rf "${MEMBER_RECORDS_DIR:?}"
 ```
 
-Update the trusted records checkout from `main` before a current check. Use captured snapshots for replay. Local commands neither fetch records nor prove that a checkout is current.
+Name the variable after the member, such as `NIXOS_REGISTRY_RECORDS_DIR`. Run every command that uses it in the same shell, before the cleanup command. Use captured snapshots for replay. Local commands neither fetch records nor prove that a checkout is current.
 
 `check`, `ci`, `compatibility`, and `vm` require one member caller selecting the executing checker release. The caller's `policy_version` must match its immutable workflow reference. Enrollment does not change this requirement.
 
@@ -161,7 +165,7 @@ Root `nixpkgs` must resolve to an immutable `NixOS/nixpkgs` flake. Its revision 
 
 Additional root inputs, distinct transitive nodes, and independently locked examples require one allowed pair across the project. In these scopes, first-party stable inputs use `nixpkgs`; unstable inputs use `nixpkgs-unstable`. An absent input need not be added. Transitive input names and lock node identifiers are unrestricted. Branch declarations identify stable/unstable selections; exact revisions can identify them when they match one allowed value uniquely.
 
-Structural checks inspect the root development entrypoint, required files, and links to the selected release's `POLICY.md`. The checker requires a root `README.md` without inspecting its content or headings.
+Structural checks inspect the root development entrypoint, required files, links to the selected release's `POLICY.md`, and `--policy-root` paths in Markdown files. A `--policy-root` value of `..` or one starting with `../` fails, because it places a record checkout beside the member. The checker requires a root `README.md` without inspecting its content or headings.
 
 Caller validation requires:
 

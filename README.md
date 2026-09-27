@@ -26,15 +26,19 @@ Use the [policy caller template](templates/policy-caller.yml) to select a publis
 
 Members choose their root `nixpkgs` revision independently. Policy CI runs separate compliance, committed-lock project tests, and stable/unstable compatibility jobs on every required architecture. Compatibility jobs override the root input with the approved shared pins and run full root checks. Other nixpkgs lock scopes remain subject to shared-pin requirements. Declared VM tests run separately.
 
-For local checks, run the member's selected checker release with an explicit trusted checkout of current records:
+For local checks, run the member's selected checker release with an explicit trusted checkout of current records. Clone the records from `main` into a temporary directory, and remove it after the last command that uses it:
 
 ```bash
+PROJECT_RECORDS_DIR=$(mktemp -d)
+git clone --branch main --single-branch \
+  https://github.com/petohorvath/nixos-project-policy.git "$PROJECT_RECORDS_DIR"
 nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
-  --policy-root ../nixos-project-policy-records \
+  --policy-root "$PROJECT_RECORDS_DIR" \
   check ../PROJECT --project PROJECT --shell
+rm -rf "${PROJECT_RECORDS_DIR:?}"
 ```
 
-Replace the tag with the member's selected release and `PROJECT` with its name. Update the records checkout from `main` before checking current approval; the command does not fetch records. `check` inspects structure, locks, and the policy caller. `--shell` also smoke-tests the default development shell and evaluates the formatter. Compatibility execution requires separate `compatibility` commands for `stable` and `unstable`.
+Replace the tag with the member's selected release and `PROJECT` with its name. In the variable name, write the name in upper case with underscores, such as `NIXOS_REGISTRY_RECORDS_DIR`. The command does not fetch records, so clone them again for each check of current approval. Keep the records out of sibling directories: `check` rejects member Markdown that passes a `../` path to `--policy-root`. `check` inspects structure, locks, and the policy caller. `--shell` also smoke-tests the default development shell and evaluates the formatter. Compatibility execution requires separate `compatibility` commands for `stable` and `unstable`.
 
 The checker also plans CI gates, audits enrolled members, checks integration policy agreement at locked member revisions, and executes declared VM targets. See the [checker reference](docs/checker.md#commands) for commands, JSON results, and validation limits.
 

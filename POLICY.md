@@ -58,7 +58,7 @@ Root `nix flake check` runs applicable non-VM checks for the host platform. Prov
 
 Provide a root `README.md`. Its content and organization belong to the project. Detailed guides and reference material follow the project's needs. Create glossaries and ADRs when meaningful terminology or architectural decisions need recording.
 
-Write direct explanations with clear subjects, useful examples, and concise paragraphs. Tag fenced code blocks with their language. Keep project instructions accurate and agent guidance concise, pointing to authoritative rules when needed. A contributor must not need this maintainer's global skills or workstation paths to understand the policy.
+Write direct explanations with clear subjects, useful examples, and concise paragraphs. Tag fenced code blocks with their language. Keep project instructions accurate and agent guidance concise, pointing to authoritative rules when needed. A contributor must not need this maintainer's global skills or workstation paths to understand the policy. Clone policy records for local commands into a temporary directory, not a sibling of the member checkout; the checker rejects Markdown that passes a `../` path to `--policy-root`.
 
 Keep documentation focused on current usage, design, structure, and architectural decisions. Keep a changelog for release-facing changes and migration notes. Use Git commits, issues, PRs, and CI results for implementation history and validation evidence; do not duplicate them in dated progress logs, completed implementation plans, or separate review and validation reports. Central machine-readable enrollment and pin records remain operational state.
 

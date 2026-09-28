@@ -6,15 +6,15 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 
 if __package__:
-    from . import declarations, locks, records
+    from . import declarations, inputs, locks, records
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import declarations
+    import inputs
     import locks
     import records
 
@@ -50,11 +50,8 @@ def main(argv=None):
         "--inputs-json",
         help="Hosted workflow inputs to compare with local declarations",
     )
-    check = commands.add_parser(
-        "check", help="Check one project; missing approval fails"
-    )
+    check = commands.add_parser("check", help="Check a repo's inputs")
     check.add_argument("project_dir", type=Path)
-    check.add_argument("--project", required=True)
     check.add_argument(
         "--shell", action="store_true", help="Execute the project's Nix shell"
     )
@@ -90,7 +87,7 @@ def main(argv=None):
         data = records.load()
         config = records.load_requirements()
         project = None
-        if args.command in {"check", "ci", "compatibility", "vm"}:
+        if args.command in {"ci", "compatibility", "vm"}:
             project = member_project(
                 args.project_dir,
                 args.project,
@@ -151,17 +148,9 @@ def main(argv=None):
                 "enrollment": enrollment(data.repos, args.project),
             }
         else:
-            result = inspect_project(
-                args.project_dir,
-                args.project,
-                config,
-                data,
-                project=project,
+            result = check_repo(
+                args.project_dir, data, config["policyRepository"], shell=args.shell
             )
-            if args.shell:
-                result["issues"].extend(check_shell(args.project_dir))
-                if result["issues"]:
-                    result["status"] = "fail"
         if project is not None:
             result["selectionStatus"] = "supported"
         result["checkerVersion"] = f"v{version}"
@@ -223,180 +212,41 @@ def enrollment(repos, name):
     return "enrolled" if name.lower() in listed else "not-enrolled"
 
 
-def inspect_project(root, name, config, data, *, project):
+def check_repo(root, data, policy_repository, *, shell):
+    """Apply the check rules to one repo and report each rule by its id."""
     root = root.resolve()
-    issues = check_structure(root, config, project["policyVersion"])
-    revision = git_revision(root)
-    pairs = [{channel: data.pins[channel] for channel in ("stable", "unstable")}]
-    observations = []
-    shared_observations = []
-    dependencies = set()
-    locks = source_files(root, "flake.lock")
-    if root / "flake.lock" not in locks:
-        issues.append("pins: missing root flake.lock")
-    known_repos = {
-        repository.lower(): repo_name(repository) for repository in data.repos
-    }
-    for path in locks:
-        lock = LockGraph(records.read_json(path))
-        independent_node = None
-        if path == root / "flake.lock":
-            try:
-                independent_node = selected_nixpkgs(lock)
-            except ValueError as error:
-                issues.append(f"flake.lock: {error}")
-        lock_pins = []
-        channels = {}
-        for node_id, node in lock.reachable().items():
-            identity = repository_identity(node)
-            if identity == config["policyRepository"].lower():
-                issues.append(
-                    f"{path.relative_to(root)}: policy repository is a flake dependency"
-                )
-            if identity in known_repos and known_repos[identity] != name:
-                dependencies.add(known_repos[identity])
-            if identity != "nixos/nixpkgs":
-                continue
-            selected = node.get("locked", {}).get("rev")
-            channel = nixpkgs_channel(node)
-            if channel is None:
-                matches = {
-                    channel
-                    for pair in pairs
-                    for channel, rev in pair.items()
-                    if rev == selected
-                }
-                if len(matches) == 1:
-                    channel = matches.pop()
-            channels[node_id] = channel
-            observation = {
-                "lockfile": str(path.relative_to(root)),
-                "node": node_id,
-                "channel": channel,
-                "rev": selected,
-                "selection": "independent" if node_id == independent_node else "shared",
-            }
-            observations.append(observation)
-            if node_id == independent_node:
-                continue
-            shared_observations.append(observation)
-            if (
-                channel is None
-                or not isinstance(selected, str)
-                or not REVISION.fullmatch(selected)
-            ):
-                issues.append(
-                    f"{path.relative_to(root)}:{node_id}: unclassified or non-immutable nixpkgs input"
-                )
-            else:
-                lock_pins.append(observation)
-        for input_name, reference in lock.nodes[lock.root].get("inputs", {}).items():
-            if input_name == "nixpkgs" and lock.resolve(reference) == independent_node:
-                continue
-            channel = channels.get(lock.resolve(reference))
-            expected_name = {"stable": "nixpkgs", "unstable": "nixpkgs-unstable"}.get(
-                channel
-            )
-            if expected_name is not None and input_name != expected_name:
-                issues.append(
-                    f"{path.relative_to(root)}: {channel} nixpkgs input "
-                    f"{input_name!r} must be named {expected_name!r}"
-                )
-        if (
-            lock_pins
-            and pairs
-            and not any(pins_match(lock_pins, pair) for pair in pairs)
-        ):
-            issues.append(
-                f"{path.relative_to(root)}: nixpkgs revisions do not match one allowed pin pair"
-            )
-    if (
-        shared_observations
-        and pairs
-        and not any(pins_match(shared_observations, pair) for pair in pairs)
-    ):
-        issues.append("pins: project lockfiles do not share one allowed pair")
-    if issues:
-        status = "fail"
-    else:
-        status = "pass"
+    findings, siblings = inputs.check(root, data.repos, policy_repository)
+    rules = inputs.summarize(findings)
+    # Public-output rules add their findings and rule ids here.
+    if shell:
+        problems = check_shell(root)
+        findings.extend(
+            inputs.finding("shell", None, "fail", problem) for problem in problems
+        )
+        rules["shell"] = "fail" if problems else "pass"
     return {
-        "project": name,
-        "policyVersion": project["policyVersion"],
-        "revision": revision,
-        "status": status,
-        "compatibility": "not-run",
-        "enrollment": enrollment(data.repos, name),
-        "issues": issues,
-        "pins": observations,
-        "dependencies": sorted(dependencies),
-        "requiredChecks": ci_plan(project, config["ci"])["requiredChecks"],
-        "memberSettings": member_settings(project),
+        "status": "fail" if "fail" in rules.values() else "pass",
+        "revision": git_revision(root),
+        "rules": rules,
+        "issues": report_findings(findings, "fail"),
+        "notices": report_findings(findings, "notice"),
+        "siblings": siblings,
     }
+
+
+def report_findings(findings, level):
+    return [
+        {key: value for key, value in item.items() if key != "level"}
+        for item in findings
+        if item["level"] == level
+    ]
 
 
 def selected_nixpkgs(lock):
-    inputs = lock.nodes[lock.root].get("inputs", {})
-    if "nixpkgs" not in inputs:
-        raise ValueError("missing root nixpkgs input")
-    node_id = lock.resolve(inputs["nixpkgs"])
-    node = lock.nodes[node_id]
-    locked = node.get("locked", {})
-    if (
-        repository_identity({"locked": locked}) != "nixos/nixpkgs"
-        or locked.get("type") not in {"github", "git"}
-        or locked.get("dir")
-        or node.get("flake") is False
-    ):
-        raise ValueError("root nixpkgs must identify the NixOS/nixpkgs flake")
-    records.require_revision(locked.get("rev"))
+    node_id, problem = inputs.root_nixpkgs(lock)
+    if problem is not None:
+        raise ValueError(problem)
     return node_id
-
-
-def check_structure(root, config, version):
-    issues = []
-    for file in [
-        "flake.nix",
-        ".envrc",
-        "README.md",
-        "CONTRIBUTING.md",
-        "AGENTS.md",
-        "LICENSE",
-    ]:
-        if not (root / file).is_file():
-            issues.append(f"structure: missing {file}")
-    envrc = root / ".envrc"
-    if envrc.exists() and not re.search(
-        r"^\s*use flake(?:\s+\.)?\s*(?:#.*)?$", envrc.read_text(), re.M
-    ):
-        issues.append("development: .envrc must activate the root flake")
-    rule_link = re.compile(
-        r"https://github\.com/"
-        + re.escape(config["policyRepository"])
-        + "/blob/"
-        + re.escape(version)
-        + r"/POLICY\.md(?:[)#\s]|$)"
-    )
-    for file in ["CONTRIBUTING.md", "AGENTS.md"]:
-        path = root / file
-        if path.exists() and (
-            not rule_link.search(path.read_text())
-            or (
-                any(
-                    linked != version
-                    for linked in re.findall(
-                        r"https://github\.com/"
-                        + re.escape(config["policyRepository"])
-                        + r"/blob/([^/\s]+)/POLICY\.md(?:[)#\s]|$)",
-                        path.read_text(),
-                    )
-                )
-            )
-        ):
-            issues.append(
-                f"documentation: {file} needs only the selected policy release's POLICY.md links"
-            )
-    return issues
 
 
 def check_compatibility(root, name, config, data, channel, *, project=None):
@@ -669,22 +519,6 @@ def source_files(root, filename, include_vendor=False):
                 raise ValueError("Source file escapes the project directory")
             result.append(path)
     return sorted(result)
-
-
-def nixpkgs_channel(node):
-    ref = node.get("original", {}).get("ref", "")
-    if ref in {"nixos-unstable", "nixpkgs-unstable", "nixos-unstable-small"}:
-        return "unstable"
-    if re.fullmatch(r"nixos-\d{2}\.\d{2}(?:-small)?", ref):
-        return "stable"
-    return None
-
-
-def pins_match(observations, pair):
-    return all(
-        item["channel"] in pair and item["rev"] == pair[item["channel"]]
-        for item in observations
-    )
 
 
 def git_revision(root):

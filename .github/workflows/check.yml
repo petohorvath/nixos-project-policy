@@ -108,10 +108,8 @@ jobs:
           git -C policy rev-parse HEAD
       - name: Check shared requirements
         if: matrix.check == 'Compliance'
-        env:
-          PROJECT: ${{ inputs.project }}
         run: |
-          nix run --no-update-lock-file ./policy -- check ./project --project "$PROJECT" --shell
+          nix run --no-update-lock-file ./policy -- check ./project --shell
       - name: Run project tests
         if: matrix.check == 'Project tests'
         run: |

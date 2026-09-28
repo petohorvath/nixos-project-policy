@@ -57,10 +57,10 @@ nix run --no-update-lock-file .# -- shell .
 When the member selects the version in this checkout's `VERSION`, run the local checker:
 
 ```bash
-nix run --no-update-lock-file .# -- check ../PROJECT --project PROJECT
+nix run --no-update-lock-file .# -- check ../PROJECT
 ```
 
-For another selected release, use that release's checker, as shown in the [checker reference](checker.md#commands). Add `--shell` to smoke-test the member's development environment and evaluate its formatter. The default check reads files; compatibility execution uses the separate `compatibility` command. Checks do not update member sources or lockfiles, though shell and compatibility commands execute member code. See the [checker reference](checker.md) for results and limits.
+For another selected release, use that release's checker, as shown in the [checker reference](checker.md#commands). Add `--shell` to smoke-test the member's development environment and evaluate its formatter. The default check reads the root `flake.lock`; compatibility execution uses the separate `compatibility` command. Checks do not update member sources or lockfiles, though shell and compatibility commands execute member code. See the [checker reference](checker.md) for results and limits.
 
 ## Nix conventions
 

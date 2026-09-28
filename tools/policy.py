@@ -11,12 +11,13 @@ import subprocess
 import sys
 
 if __package__:
-    from . import declarations, locks, records
+    from . import declarations, locks, records, tests_runner
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import declarations
     import locks
     import records
+    import tests_runner
 
 ci_plan = declarations.ci_plan
 LockGraph = locks.LockGraph
@@ -58,22 +59,15 @@ def main(argv=None):
     check.add_argument(
         "--shell", action="store_true", help="Execute the project's Nix shell"
     )
-    compatibility = commands.add_parser(
-        "compatibility", help="Run root checks with a recorded shared pin"
+    test = commands.add_parser(
+        "test", help="Run nix flake check with the locked, stable, or unstable nixpkgs"
     )
-    compatibility.add_argument("project_dir", type=Path)
-    compatibility.add_argument("--project", required=True)
-    compatibility.add_argument(
-        "--channel", required=True, choices=["stable", "unstable"]
-    )
+    test.add_argument("project_dir", type=Path)
+    test.add_argument("--nixpkgs", required=True, choices=tests_runner.MODES)
     shell = commands.add_parser(
         "shell", help="Smoke-test the default development shell and root formatter"
     )
     shell.add_argument("project_dir", type=Path)
-    host_checks = commands.add_parser(
-        "host-checks", help="Require nonempty host checks with the committed lock"
-    )
-    host_checks.add_argument("project_dir", type=Path)
     vm = commands.add_parser(
         "vm", help="Run member-declared VM targets on a suitable host"
     )
@@ -118,16 +112,9 @@ def main(argv=None):
         elif args.command == "shell":
             issues = check_shell(args.project_dir)
             result = {"status": "fail" if issues else "pass", "issues": issues}
-        elif args.command == "host-checks":
-            result = check_host_checks(args.project_dir)
-        elif args.command == "compatibility":
-            result = check_compatibility(
-                args.project_dir,
-                args.project,
-                config,
-                data,
-                args.channel,
-                project=project,
+        elif args.command == "test":
+            result = tests_runner.run(
+                args.project_dir, args.nixpkgs, data.pins, fingerprints=fingerprints
             )
         elif args.command == "vm":
             targets = project["vmTargets"]
@@ -397,195 +384,6 @@ def check_structure(root, config, version):
                 f"documentation: {file} needs only the selected policy release's POLICY.md links"
             )
     return issues
-
-
-def check_compatibility(root, name, config, data, channel, *, project=None):
-    root = root.resolve()
-    project = project or member_project(root, name, config)
-    result = {
-        "project": name,
-        "policyVersion": project["policyVersion"],
-        "memberSettings": member_settings(project),
-        "enrollment": enrollment(data.repos, name),
-        "revision": git_revision(root),
-        "channel": channel,
-        "system": None,
-        "expectedRevision": None,
-        "resolvedRevision": None,
-        "pinStatus": None,
-        "status": "error",
-        "commands": [],
-        "issues": [],
-    }
-    before = None
-    source_before = None
-    try:
-        records.require_revision(result["revision"])
-        source_before = fingerprints(root)
-        before = (root / "flake.lock").read_bytes()
-        committed_lock = subprocess.check_output(
-            ["git", "-C", str(root), "show", "HEAD:flake.lock"],
-            stderr=subprocess.DEVNULL,
-        )
-        if before != committed_lock:
-            raise ValueError("Compatibility requires the committed root lock")
-        selected_nixpkgs(LockGraph(json.loads(before)))
-        result["pinStatus"] = "approved"
-        revision = data.pins[channel]
-        result["expectedRevision"] = revision
-        result["system"] = compatibility_command(
-            result,
-            [
-                "nix",
-                "eval",
-                "--raw",
-                "--impure",
-                "--expr",
-                "builtins.currentSystem",
-            ],
-            capture=True,
-        ).strip()
-        if not declarations.valid_system(result["system"]):
-            raise ValueError(f"Invalid compatibility host: {result['system']}")
-        override = ["--override-input", "nixpkgs", f"github:NixOS/nixpkgs/{revision}"]
-        metadata = compatibility_command(
-            result,
-            [
-                "nix",
-                "flake",
-                "metadata",
-                str(root),
-                "--json",
-                *override,
-            ],
-            capture=True,
-        )
-        lock = LockGraph(json.loads(metadata)["locks"])
-        node = selected_nixpkgs(lock)
-        result["resolvedRevision"] = lock.nodes[node]["locked"]["rev"]
-        if result["resolvedRevision"] != revision:
-            raise ValueError(
-                "Resolved root nixpkgs does not match the selected shared pin"
-            )
-        checks = json.loads(
-            compatibility_command(
-                result,
-                [
-                    "nix",
-                    "eval",
-                    "--json",
-                    f"{root}#checks.{result['system']}",
-                    "--apply",
-                    "builtins.attrNames",
-                    *override,
-                ],
-                capture=True,
-            )
-        )
-        if (
-            not isinstance(checks, list)
-            or not checks
-            or not all(isinstance(check, str) for check in checks)
-        ):
-            raise ValueError("Compatibility requires nonempty host checks")
-        result["checks"] = checks
-        compatibility_command(
-            result,
-            [
-                "nix",
-                "flake",
-                "check",
-                str(root),
-                "--print-build-logs",
-                *override,
-            ],
-        )
-        result["status"] = "pass"
-    except (
-        ValueError,
-        OSError,
-        KeyError,
-        TypeError,
-        subprocess.SubprocessError,
-    ) as error:
-        result["status"] = "fail"
-        result["issues"].append(str(error))
-    finally:
-        try:
-            if before is not None and (
-                not (root / "flake.lock").is_file()
-                or (root / "flake.lock").read_bytes() != before
-            ):
-                result["status"] = "fail"
-                result["issues"].append("Compatibility changed the project lockfile")
-            if source_before is not None and fingerprints(root) != source_before:
-                result["status"] = "fail"
-                result["issues"].append(
-                    "Project sources changed during compatibility checks"
-                )
-        except (OSError, ValueError) as error:
-            result["status"] = "fail"
-            result["issues"].append(
-                f"Source inspection after compatibility failed: {error}"
-            )
-    return result
-
-
-def compatibility_command(result, command, *, capture=False):
-    outcome = {"command": command, "returncode": None}
-    result["commands"].append(outcome)
-    try:
-        process = subprocess.run(
-            command,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE if capture else sys.stderr,
-        )
-        outcome["returncode"] = process.returncode
-        if process.returncode:
-            raise subprocess.CalledProcessError(process.returncode, command)
-        return process.stdout
-    except (OSError, subprocess.SubprocessError) as error:
-        outcome["error"] = str(error)
-        raise
-
-
-def check_host_checks(root):
-    result = {"status": "fail", "system": None, "checks": [], "issues": []}
-    try:
-        result["system"] = subprocess.check_output(
-            ["nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem"],
-            text=True,
-            timeout=30,
-        ).strip()
-        process = subprocess.run(
-            [
-                "nix",
-                "eval",
-                "--json",
-                "--no-update-lock-file",
-                f"path:{root.resolve()}#checks.{result['system']}",
-                "--apply",
-                "builtins.attrNames",
-            ],
-            check=True,
-            text=True,
-            stdout=subprocess.PIPE,
-            timeout=120,
-        )
-        checks = json.loads(process.stdout)
-        if (
-            not isinstance(checks, list)
-            or not checks
-            or not all(isinstance(check, str) for check in checks)
-        ):
-            raise ValueError(
-                "Committed-lock project tests require nonempty host checks"
-            )
-        result.update(status="pass", checks=checks)
-    except (ValueError, subprocess.SubprocessError, OSError) as error:
-        result["issues"].append(f"project tests: host check probe failed: {error}")
-    return result
 
 
 def check_shell(root):

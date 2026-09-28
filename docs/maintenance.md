@@ -35,10 +35,11 @@ For example, test the proposed pins with a checkout `./proposed` of the proposed
 
 ```bash
 nix run --no-update-lock-file ./proposed -- \
-  compatibility ./member --project MEMBER --channel stable
+  test ./member --nixpkgs stable
 nix run --no-update-lock-file ./proposed -- \
-  compatibility ./member --project MEMBER --channel unstable
-nix flake check ./member --no-update-lock-file --print-build-logs
+  test ./member --nixpkgs unstable
+nix run --no-update-lock-file ./proposed -- \
+  test ./member --nixpkgs locked
 ```
 
 Repeat on every required architecture and run the remaining member gates. These results establish behavior against the proposed pins; they do not approve them. No batch registration, central copy of member revisions, or separate pin-approval workflow is required.

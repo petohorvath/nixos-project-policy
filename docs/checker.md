@@ -14,16 +14,16 @@ Use this prefix with the commands below:
 nix run --no-update-lock-file .# -- COMMAND
 ```
 
-| Command                                              | Behavior                                                                                         |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `validate`                                           | Check the bundled pins and repo list and print them.                                             |
-| `ci PATH --project NAME`                             | Report CI matrices and required status names. Do not execute checks.                             |
-| `check PATH --project NAME`                          | Inspect a member checkout against its selected policy and approved pins.                         |
-| `check PATH --project NAME --shell`                  | Also smoke-test the member shell and evaluate its root formatter.                                |
-| `compatibility PATH --project NAME --channel stable` | Verify the stable override and run full root host checks. Use `unstable` for the other revision. |
-| `host-checks PATH`                                   | Require nonempty `checks.<host-system>` under the committed lock, without building checks.       |
-| `vm PATH --project NAME`                             | Execute declared VM targets on a suitable builder. Return `not-applicable` if none exist.        |
-| `candidate --stable COMMIT --unstable COMMIT`        | Emit an unapproved pair. Do not write locks or approve pins.                                     |
+| Command                                       | Behavior                                                                                          |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `validate`                                    | Check the bundled pins and repo list and print them.                                              |
+| `ci PATH --project NAME`                      | Report CI matrices and required status names. Do not execute checks.                              |
+| `check PATH --project NAME`                   | Inspect a member checkout against its selected policy and approved pins.                          |
+| `check PATH --project NAME --shell`           | Also smoke-test the member shell and evaluate its root formatter.                                 |
+| `test PATH --nixpkgs locked`                  | Run `nix flake check` with the committed lock. Require nonempty `checks.<host-system>`.           |
+| `test PATH --nixpkgs stable`                  | Verify the stable pin override, then run `nix flake check` with it. Use `unstable` for the other. |
+| `vm PATH --project NAME`                      | Execute declared VM targets on a suitable builder. Return `not-applicable` if none exist.         |
+| `candidate --stable COMMIT --unstable COMMIT` | Emit an unapproved pair. Do not write locks or approve pins.                                      |
 
 For a shell-only probe, run `nix run --no-update-lock-file .# -- shell PATH`. This first evaluates `devShells.<host-system>.default.drvPath`, enters the development shell with the inherited environment cleared, and executes `bash -c ':'`. It also evaluates the root formatter without asserting compliance. A default package or non-default shell cannot satisfy the development-shell requirement. Policy CI uses it as a host smoke test. The probe checks startup and command execution, not a fixed tool list or project-specific development tasks.
 
@@ -34,7 +34,7 @@ nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
   check ../member --project member --shell
 ```
 
-`check`, `ci`, `compatibility`, and `vm` require one member caller selecting the executing checker release. The caller's `policy_version` must match its immutable workflow reference. Enrollment does not change this requirement.
+`check`, `ci`, and `vm` require one member caller selecting the executing checker release. The caller's `policy_version` must match its immutable workflow reference. Enrollment does not change this requirement.
 
 ### Results
 
@@ -54,29 +54,20 @@ A normal `check` can return `pass` before enrollment. Its separate `enrollment` 
 
 Default checks and shell probes use `--no-update-lock-file` alone to reject required lock updates. Do not add `--no-write-lock-file`. In Nix 2.34.6, disabling writes also bypasses update rejection and permits an in-memory replacement lock. See the [locking implementation](https://github.com/NixOS/nix/blob/2.34.6/src/libflake/flake.cc#L749-L825).
 
-Compatibility checks deliberately use an overridden graph. `--override-input` implies `--no-write-lock-file`. Adding `--no-update-lock-file` does not make an override check test the committed selection.
+`test --nixpkgs stable|unstable` deliberately uses an overridden graph. `--override-input` implies `--no-write-lock-file`. Adding `--no-update-lock-file` does not make an override check test the committed selection.
 
-## Compatibility execution
+## Test execution
 
-`compatibility` uses the same runner locally and in CI. It requires:
+`test PATH --nixpkgs locked|stable|unstable` runs the same way locally and in CI. It needs no member caller and no `--project`. It requires a `flake.lock` whose root `nixpkgs` is a locked `NixOS/nixpkgs` revision and a Nix host with a valid system name.
 
-- A member caller selecting the executing checker release.
-- A Git checkout whose root lock matches its committed copy.
-- A native Nix host whose system name passes declaration validation and whose package set can build the checker and member checks. The runner has no Linux-only restriction.
-- A non-null approved pair in the supplied trusted records.
+- `locked` expects the committed root `nixpkgs` revision and passes `--no-update-lock-file` to every Nix command.
+- `stable` and `unstable` expect the pin from the checker's bundled `data/pins.json` and pass `--override-input nixpkgs github:NixOS/nixpkgs/REVISION` to every Nix command.
 
-The runner resolves the root input through `LockGraph`, including renamed nodes and `follows`. It verifies the repository and revision from `nix flake metadata --json`. A missing input, ignored override, wrong source, or wrong revision fails before execution.
-
-The runner requires nonempty `checks.<host-system>` under the same override. It then executes:
-
-```bash
-nix flake check PATH --print-build-logs \
-  --override-input nixpkgs github:NixOS/nixpkgs/REVISION
-```
+The runner resolves root `nixpkgs` in `nix flake metadata --json` through `LockGraph`, including renamed nodes and `follows`. A missing input, ignored override, wrong source, or wrong revision fails before any build. It then requires nonempty `checks.<host-system>` and runs `nix flake check PATH --print-build-logs` with the same flags. Every mode fails when the repo's `flake.lock` or sources change during the run.
 
 It does not use `--no-build`. Nix can satisfy builds from its cache; success does not prove every test process ran again. See the Nix [check options](https://nix.dev/manual/nix/2.34/command-ref/new-cli/nix3-flake-check.html) and [metadata output](https://nix.dev/manual/nix/2.34/command-ref/new-cli/nix3-flake-metadata.html).
 
-The runner tests the exact pin from the checker's bundled `data/pins.json`. Success returns `pass` with `pinStatus: "approved"`.
+The report holds `status` (`pass` or `fail`), `nixpkgs` (the mode), `system`, `expectedRevision`, `resolvedRevision`, `checks`, `commands` (each Nix command with its `returncode`), and `issues`.
 
 Reports include:
 
@@ -183,7 +174,7 @@ The first job captures the checker, member, and current record commits. All late
 
 The first job verifies the release version and generates matrices once on x86_64. This metadata job does not add x86_64 to the member's required architectures or publish a release.
 
-Compliance runs structural, pin, caller, and shell checks. Members own formatting and lint enforcement. Project tests first run `host-checks` to require nonempty host checks with `--no-update-lock-file`, then run full committed-lock root checks. Compatibility runs both shared revisions.
+Compliance runs structural, pin, caller, and shell checks. Members own formatting and lint enforcement. Project tests run `test --nixpkgs locked`. Compatibility runs `test` with the stable and unstable pins.
 
 Each category runs independently on every required architecture with `fail-fast: false`. They and the VM job depend only on the first job. A failure does not suppress other categories. Declared VM targets require the gate for the selected VM architecture. Changing that selection requires updating the member's required merge status; review must justify any coverage reduction. Without targets, CI skips the VM job without allocating a worker, the local `vm` command reports `not-applicable`, and the VM status need not be required.
 

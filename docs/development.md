@@ -40,7 +40,7 @@ These tests run outside Nix build sandboxes because they invoke Nix themselves. 
 nix develop --no-update-lock-file --command python -m unittest tests.nix_compatibility tests.packaged_policy -v
 ```
 
-`tests.nix_compatibility` runs real metadata queries and root checks with both exact nixpkgs overrides. It checks lock preservation, rejection of required default-lock updates, nonempty host checks under the committed lock, and the explicit default development-shell requirement.
+`tests.nix_compatibility` runs `test` against real fixture flakes in every nixpkgs mode. It checks that the overrides replace root `nixpkgs`, lock preservation, rejection of required lock updates, nonempty host checks, and the explicit default development-shell requirement.
 
 `tests.packaged_policy` builds the checker from a controlled clean repository whose bundled pins differ from the committed ones. It runs the packaged commands without any data checkout and asserts that reports use the bundled pins, for member checks and checks before enrollment.
 
@@ -60,7 +60,7 @@ When the member selects the version in this checkout's `VERSION`, run the local 
 nix run --no-update-lock-file .# -- check ../PROJECT --project PROJECT
 ```
 
-For another selected release, use that release's checker, as shown in the [checker reference](checker.md#commands). Add `--shell` to smoke-test the member's development environment and evaluate its formatter. The default check reads files; compatibility execution uses the separate `compatibility` command. Checks do not update member sources or lockfiles, though shell and compatibility commands execute member code. See the [checker reference](checker.md) for results and limits.
+For another selected release, use that release's checker, as shown in the [checker reference](checker.md#commands). Add `--shell` to smoke-test the member's development environment and evaluate its formatter. The default check reads files; tests run with the separate `test` command. Checks do not update member sources or lockfiles, though shell and `test` commands execute member code. See the [checker reference](checker.md) for results and limits.
 
 ## Nix conventions
 

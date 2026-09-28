@@ -5,6 +5,7 @@
 - Remove the `audit` and `agreement` commands, the Member audit and agreement workflows, and the integration caller template. The checker no longer calls the GitHub API or inspects published releases, and the reusable workflow no longer verifies release immutability or exports source and record snapshot outputs.
 - Remove record digests, checker and source digests, and replay data from reports. `compatibility` no longer accepts `--output` or writes evidence directories.
 - Bundle the pins and the listed repos with the checker in `data/pins.json` and `data/repos.json`, and remove `--policy-root`. Every command reads the bundled data; `validate` checks both files. The reusable workflow no longer checks out `main` for records. `policy/pins.json` and `policy/members.json` stay unchanged for v0.4.0 callers.
+- Replace `compatibility` and `host-checks` with `test PATH --nixpkgs locked|stable|unstable`. Every mode runs `nix flake check`, requires nonempty `checks.<system>`, and fails when the repo's lock or sources change. `stable` and `unstable` first verify the pin override through Nix metadata. `test` needs no caller workflow or `--project`.
 
 ## 0.4.0
 

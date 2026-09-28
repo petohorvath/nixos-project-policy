@@ -42,7 +42,6 @@ class DeclarationTests(ProjectTestCase):
             for command, options in [
                 ("ci", []),
                 ("check", ["--shell"]),
-                ("compatibility", ["--channel", "stable"]),
                 ("vm", []),
             ]:
                 with self.subTest(version=version, command=command):
@@ -253,14 +252,11 @@ class DeclarationTests(ProjectTestCase):
         for field, value in cases:
             self.workflow = copy.deepcopy(original)
             self.declare(**{field: value})
-            for command in ["ci", "check", "vm", "compatibility"]:
+            for command in ["ci", "check", "vm"]:
                 with self.subTest(field=field, value=value, command=command):
-                    options = (
-                        ["--channel", "stable"] if command == "compatibility" else []
-                    )
                     with patch.object(policy.subprocess, "run") as execute:
                         code, report = self.run_policy(
-                            command, str(self.root), "--project", "example", *options
+                            command, str(self.root), "--project", "example"
                         )
                     self.assertEqual(code, 2, report)
                     self.assertNotIn("matrix", report)

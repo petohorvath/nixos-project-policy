@@ -33,7 +33,7 @@ nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
   check ../PROJECT --project PROJECT --shell
 ```
 
-Replace the tag with the member's selected release and `PROJECT` with its name. `check` inspects structure, locks, and the policy caller. `--shell` also smoke-tests the default development shell and evaluates the formatter. Compatibility execution requires separate `compatibility` commands for `stable` and `unstable`.
+Replace the tag with the member's selected release and `PROJECT` with its name. `check` inspects structure, locks, and the policy caller. `--shell` also smoke-tests the default development shell and evaluates the formatter. Run the tests with `test ../PROJECT --nixpkgs locked`, `stable`, or `unstable`.
 
 The checker also plans CI gates and executes declared VM targets. See the [checker reference](docs/checker.md#commands) for commands, JSON results, and validation limits.
 

@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import yaml
 
-from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.cases import RepoTestCase
 from tools import policy
 
 
@@ -33,7 +33,7 @@ def load(path):
     return yaml.load((policy.SOURCE_ROOT / path).read_text(), Loader=yaml.BaseLoader)
 
 
-class CiTests(ProjectTestCase):
+class CiTests(RepoTestCase):
     def setUp(self):
         super().setUp()
         self.vm_tests = []
@@ -148,8 +148,7 @@ class CiTests(ProjectTestCase):
         self.assertEqual(code, 2, report)
         self.assertNotIn("requiredChecks", report)
 
-    def test_ci_reads_no_caller_workflow(self):
-        (self.root / ".github/workflows/policy.yml").unlink()
+    def test_ci_takes_no_caller_settings(self):
         code, report = self.ci()
         self.assertEqual(code, 0, report)
         for field in ["project", "policyVersion", "enrollment", "memberSettings"]:
@@ -187,13 +186,13 @@ class WorkflowTests(unittest.TestCase):
                     for step in job["steps"]
                     if step.get("uses", "").startswith("actions/checkout@")
                 }
-                self.assertEqual(set(checkouts), {"policy", "project"})
+                self.assertEqual(set(checkouts), {"policy", "repo"})
                 self.assertEqual(
                     checkouts["policy"]["repository"], "${{ job.workflow_repository }}"
                 )
                 self.assertEqual(checkouts["policy"]["ref"], "${{ job.workflow_sha }}")
-                self.assertNotIn("repository", checkouts["project"])
-                self.assertNotIn("ref", checkouts["project"])
+                self.assertNotIn("repository", checkouts["repo"])
+                self.assertNotIn("ref", checkouts["repo"])
                 runs = [step["run"] for step in job["steps"] if "run" in step]
                 self.assertTrue(runs)
                 for run in runs:
@@ -206,8 +205,19 @@ class WorkflowTests(unittest.TestCase):
             step["run"] for step in self.jobs["check"]["steps"] if "run" in step
         )
         self.assertEqual(
-            check.strip(), "nix run --no-update-lock-file ./policy -- check ./project"
+            check.strip(), "nix run --no-update-lock-file ./policy -- check ./repo"
         )
+
+    def test_check_job_fetches_the_full_history_of_the_repo(self):
+        # Reason: a shallow checkout has no release tag, so check could not
+        # compare public outputs with the last release.
+        [checkout] = [
+            step["with"]
+            for step in self.jobs["check"]["steps"]
+            if step.get("uses", "").startswith("actions/checkout@")
+            and step["with"]["path"] == "repo"
+        ]
+        self.assertEqual(checkout["fetch-depth"], "0")
 
     def test_job_matrices_and_vm_gate_come_from_the_plan_job(self):
         outputs = self.jobs["plan"]["outputs"]
@@ -244,7 +254,7 @@ class WorkflowTests(unittest.TestCase):
         default = self.workflow["on"]["workflow_call"]["inputs"]["systems"]["default"]
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
-            (workspace / "project").mkdir()
+            (workspace / "repo").mkdir()
             stub = workspace / "nix"
             stub.write_text(
                 f"#!{sys.executable}\nimport json, os, sys\n"
@@ -329,7 +339,7 @@ class WorkflowTests(unittest.TestCase):
             names.append(self.jobs["vm"]["name"])
         return [f"{caller} / {name}" for name in names]
 
-    def test_caller_template_is_the_minimal_caller_in_policy_md(self):
+    def test_caller_template_is_the_minimal_caller_in_the_readme(self):
         caller = load("templates/policy-caller.yml")["jobs"]["policy"]
         self.assertEqual(
             caller,
@@ -338,7 +348,7 @@ class WorkflowTests(unittest.TestCase):
                 "uses": "petohorvath/nixos-project-policy/.github/workflows/check.yml@v0.5",
             },
         )
-        document = (policy.SOURCE_ROOT / "POLICY.md").read_text()
+        document = (policy.SOURCE_ROOT / "README.md").read_text()
         example = re.search(r"```yaml\n(.*?)```", document, re.DOTALL)[1]
         self.assertEqual(
             yaml.load(example, Loader=yaml.BaseLoader)["jobs"]["policy"], caller

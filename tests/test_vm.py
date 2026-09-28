@@ -9,11 +9,11 @@ from unittest.mock import patch
 
 import yaml
 
-from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.cases import RepoTestCase
 from tools import policy
 
 
-class VmTests(ProjectTestCase):
+class VmTests(RepoTestCase):
     def setUp(self):
         super().setUp()
         self.system = "x86_64-linux"
@@ -87,8 +87,7 @@ class VmTests(ProjectTestCase):
         self.assertEqual(report["status"], "error")
         self.assertEqual(self.builds(), [])
 
-    def test_vm_needs_no_project_name_or_caller_workflow(self):
-        (self.root / ".github/workflows/policy.yml").unlink()
+    def test_vm_takes_no_project_name(self):
         self.vm_tests = ["boot"]
         code, report = self.vm()
         self.assertEqual(code, 0, report)
@@ -101,8 +100,8 @@ class VmTests(ProjectTestCase):
         self.assertEqual(raised.exception.code, 2)
 
 
-class VmWorkflowTests(ProjectTestCase):
-    def test_workflow_vm_job_runs_the_checker_on_the_project_checkout(self):
+class VmWorkflowTests(RepoTestCase):
+    def test_workflow_vm_job_runs_the_checker_on_the_repo_checkout(self):
         workflow = yaml.load(
             (policy.SOURCE_ROOT / ".github/workflows/check.yml").read_text(),
             Loader=yaml.BaseLoader,
@@ -117,7 +116,7 @@ class VmWorkflowTests(ProjectTestCase):
             if step.get("name") == "Build discovered VM tests"
         )
         workspace = Path(self.temp.name)
-        (workspace / "project").symlink_to(self.root, target_is_directory=True)
+        (workspace / "repo").symlink_to(self.root, target_is_directory=True)
         stub = workspace / "nix"
         stub.write_text(
             f"#!{sys.executable}\nimport json, os, sys\n"

@@ -5,7 +5,8 @@ and `formatter`. `tools/outputs.nix` names and evaluates them.
 
 The removal comparison uses the highest `vMAJOR.MINOR.PATCH` Git tag reachable
 from HEAD. The tag's tree is exported with `git archive` into a temporary
-directory and evaluated as a `path:` flake, so the repo is never fetched.
+directory and evaluated as a `path:` flake, so the repo is never fetched. A
+shallow clone may lack that tag, so the comparison fails there instead.
 """
 
 import io
@@ -16,6 +17,12 @@ import re
 import subprocess
 import tarfile
 import tempfile
+
+if __package__:
+    from . import findings as rule_findings, releases
+else:
+    import findings as rule_findings
+    import releases
 
 
 # Stable rule ids, in report order. Each id is one column in a survey table.
@@ -34,11 +41,9 @@ import (/. + getEnv "EXPRESSION") {{
   output = getEnv "OUTPUT";
 }}
 """
-NUMBER = r"(0|[1-9][0-9]*)"
-TAG = re.compile(rf"v{NUMBER}\.{NUMBER}\.{NUMBER}\Z")
 # A release heading names a version first: `0.5.0`, `v0.5.0`, `[0.5.0] - date`.
 RELEASE_HEADING = re.compile(
-    rf"#{{1,6}}\s+\[?v?{NUMBER}\.{NUMBER}\.{NUMBER}(?:[-+][0-9A-Za-z.+-]*)?\]?(?:\s|$)"
+    rf"#{{1,6}}\s+\[?v?{releases.CORE}(?:[-+][0-9A-Za-z.+-]*)?\]?(?:\s|$)"
 )
 
 
@@ -100,8 +105,9 @@ def check(root, system):
         )
     removal, release = compare_release(root, system, names, unknown)
     findings.extend(removal)
-    rules = summarize(findings)
-    if release["tag"] is None:
+    rules = rule_findings.summarize(findings, RULES)
+    if rules["outputs-removal"] == "notice":
+        # Only a missing release tag yields a removal notice.
         rules["outputs-removal"] = "not-run"
     return findings, rules, release
 
@@ -112,8 +118,18 @@ def compare_release(root, system, names, unknown):
     Names under an output in UNKNOWN count as present: that output failed to
     evaluate, and the outputs-evaluate rule reports it.
     """
-    tag = last_release_tag(root)
     version = changelog_version(root)
+    if shallow(root):
+        return [
+            finding(
+                "outputs-removal",
+                None,
+                "fail",
+                "shallow clone, so the last release tag cannot be found; "
+                "fetch the full history and tags",
+            )
+        ], {"tag": None, "version": version}
+    tag = last_release_tag(root)
     release = {"tag": tag, "version": version}
     if tag is None:
         return [
@@ -160,25 +176,30 @@ def compare_release(root, system, names, unknown):
 def bumped(tag, version):
     if version is None:
         return False
-    old = [int(part) for part in TAG.fullmatch(tag).groups()]
+    old = [int(part) for part in releases.TAG.fullmatch(tag).groups()]
     new = [int(part) for part in version.split(".")]
     return new[0] > old[0] or (new[0] == old[0] and new[1] > old[1])
 
 
+def shallow(root):
+    """Return whether ROOT is a shallow Git clone; False outside Git."""
+    try:
+        return (
+            releases.git(root, "rev-parse", "--is-shallow-repository").strip() == "true"
+        )
+    except subprocess.CalledProcessError:
+        return False
+
+
 def last_release_tag(root):
     """Return the highest `vMAJOR.MINOR.PATCH` tag reachable from HEAD."""
-    result = subprocess.run(
-        ["git", "-C", str(root), "tag", "--merged", "HEAD"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
+    try:
+        listed = releases.git(root, "tag", "--merged", "HEAD")
+    except subprocess.CalledProcessError:
         return None
     tags = [
         (tuple(int(part) for part in match.groups()), match.string)
-        for match in map(TAG.fullmatch, result.stdout.split())
+        for match in map(releases.TAG.fullmatch, listed.split())
         if match
     ]
     return max(tags)[1] if tags else None
@@ -199,8 +220,10 @@ def changelog_version(root):
 
 def tagged_names(root, system, tag):
     """Return the public output names of the flake at TAG."""
-    prefix = git(root, "rev-parse", "--show-prefix").strip()
-    archive = git(root, "archive", "--format=tar", f"{tag}:{prefix}", text=False)
+    prefix = releases.git(root, "rev-parse", "--show-prefix").strip()
+    archive = releases.git(
+        root, "archive", "--format=tar", f"{tag}:{prefix}", text=False
+    )
     with tempfile.TemporaryDirectory(prefix="policy-release-") as directory:
         with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
             tar.extractall(directory, filter="data")
@@ -208,16 +231,6 @@ def tagged_names(root, system, tag):
             return set()
         described = evaluate(Path(directory), system, "names")
     return {name for output in described.values() for name in output["names"]}
-
-
-def git(root, *arguments, text=True):
-    return subprocess.run(
-        ["git", "-C", str(root), *arguments],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=text,
-        check=True,
-    ).stdout
 
 
 def evaluate(root, system, mode, output=""):
@@ -266,12 +279,4 @@ def error_summary(stderr):
 
 
 def finding(rule, output, level, message):
-    return {"rule": rule, "output": output, "level": level, "message": message}
-
-
-def summarize(findings):
-    status = dict.fromkeys(RULES, "pass")
-    for item in findings:
-        if item["level"] == "fail" or status[item["rule"]] == "pass":
-            status[item["rule"]] = item["level"]
-    return status
+    return rule_findings.finding(rule, level, message, output=output)

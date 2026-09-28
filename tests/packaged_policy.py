@@ -12,17 +12,30 @@ import sys
 import unittest
 
 
-from tests.fixtures.family import FamilyFixture, write_json
 from tests.fixtures.data import PAIR
-from tests.fixtures.process import REAL_RUN
-from tools import ci, policy, records
+from tests.fixtures.process import REAL_RUN, commit, isolated_git
+from tests.fixtures.repos import RepoFixture
+from tools import ci, data, policy
+
+
+def write_json(path, value):
+    path.write_text(json.dumps(value, indent=2) + "\n")
 
 
 class PackagedPolicyTests(unittest.TestCase):
     def setUp(self):
-        self.fixture = self.enterContext(FamilyFixture().prepared())
+        self.fixture = self.enterContext(RepoFixture().prepared())
         fixture = self.fixture
-        self.workspace = fixture.workspace.parent
+        # The checked repo, alpha, is a listed repo in a workspace of repos.
+        self.workspace = Path(fixture.temp.name)
+        self.repos_dir = self.workspace / "repos"
+        self.repos_dir.mkdir()
+        self.alpha = self.repos_dir / "alpha"
+        fixture.root.rename(self.alpha)
+        fixture.root = self.alpha
+        fixture.repos.append("owner/alpha")
+        self.enterContext(isolated_git(self.workspace))
+        commit(self.alpha)
         authority = self.workspace / "authority"
         shutil.copytree(
             policy.SOURCE_ROOT,
@@ -31,11 +44,11 @@ class PackagedPolicyTests(unittest.TestCase):
                 ".git", ".direnv", "__pycache__", ".ruff_cache"
             ),
         )
-        committed = records.read_json(policy.SOURCE_ROOT / "data/pins.json")
+        committed = data.read_json(policy.SOURCE_ROOT / "data/pins.json")
         self.assertNotEqual({channel: committed[channel] for channel in PAIR}, PAIR)
         fixture.write_data(authority / "data")
         self.authority = authority
-        fixture.commit(authority)
+        commit(authority)
         built = json.loads(
             self.command(
                 [
@@ -98,7 +111,7 @@ class PackagedPolicyTests(unittest.TestCase):
                 [self.program, *map(str, arguments)],
                 environment={**self.environment, "POLICY_PACKAGE_SYSTEM": system},
                 # No checkout of the policy repository is reachable from here.
-                cwd=self.fixture.workspace,
+                cwd=self.repos_dir,
             )
         )
         self.assertNotIn(result.get("status"), {"error", "fail"}, result)
@@ -143,6 +156,5 @@ class PackagedPolicyTests(unittest.TestCase):
         self.assertEqual(report["pins"], fixture.pins)
         self.assertEqual(report["repos"], ["owner/example", "owner/alpha"])
         baseline = policy.fingerprints(self.authority)
-        alpha = fixture.roots["alpha"]
-        self.gates(alpha)
+        self.gates(self.alpha)
         self.assertEqual(policy.fingerprints(self.authority), baseline)

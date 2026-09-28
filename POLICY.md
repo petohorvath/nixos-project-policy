@@ -5,14 +5,14 @@ Each repo in devnix-labs that follows this policy makes three guarantees: about 
 ## Inputs
 
 - Root `nixpkgs` is a locked `NixOS/nixpkgs` revision that the repo chooses. A second nixpkgs input is permitted when `flake.nix` states the reason; review checks the reason.
-- An input that is another repo references a release tag, appears at one revision in the lock graph, and follows root `nixpkgs`. A commit reference is permitted temporarily during a change that spans repos; state the reason in the PR.
+- An input that is another repo references a release tag, appears at one revision in the lock graph, and follows root `nixpkgs`. Another repo is any repository under the GitHub owner of the listed repos, currently `petohorvath`, except the policy repository. A commit reference is permitted temporarily during a change that spans repos; state the reason in the PR.
 - The policy repository is never an input.
 - Third-party inputs and independently locked examples are unrestricted.
 
 ## Public outputs
 
 - Every public output evaluates. Avoid empty output namespaces; the check reports them without failing.
-- After the first release tag, removing a public output requires a minor or major version bump over the last release tag. The last release tag is the highest `vMAJOR.MINOR.PATCH` tag reachable from the checked commit. The new version is the topmost release heading in `CHANGELOG.md`, such as `## [0.5.0] - 2026-10-01`; an `Unreleased` heading does not count.
+- After the first release tag, removing a public output requires a minor or major version bump over the last release tag: the highest `vMAJOR.MINOR.PATCH` tag reachable from the checked commit. The new version is the topmost release heading in `CHANGELOG.md`, such as `## [0.5.0] - 2026-10-01`; an `Unreleased` heading does not count. The check fails on a shallow clone, which can lack the tag.
 - Without a release tag, the removal comparison is skipped. Tag a first release, such as `v0.1.0`, to turn it on.
 
 ## Tests
@@ -22,25 +22,7 @@ Each repo in devnix-labs that follows this policy makes three guarantees: about 
 
 ## Caller
 
-Call the reusable workflow through the moving minor-series tag:
-
-```yaml
-jobs:
-  policy:
-    name: Policy
-    uses: petohorvath/nixos-project-policy/.github/workflows/check.yml@v0.5
-    # Optional; defaults to both Linux systems.
-    # with:
-    #   systems: '["x86_64-linux"]'
-```
-
-Patch releases carry pin bumps and fixes and move `v0.5`. Breaking rule changes start a new minor series.
-
-Require these statuses:
-
-- `Policy / Check (<system>)`: input rules, public outputs, the default development shell, and the formatter.
-- `Policy / Tests (locked, <system>)`, `Policy / Tests (stable, <system>)`, and `Policy / Tests (unstable, <system>)`.
-- `Policy / VM tests`, when the repo provides `vmTests`.
+A job named `Policy` calls `petohorvath/nixos-project-policy/.github/workflows/check.yml@v0.5`, as [templates/policy-caller.yml](templates/policy-caller.yml) does. Require `Policy / Check (<system>)`, which also starts the default development shell and evaluates the formatter, and `Policy / Tests (locked|stable|unstable, <system>)` on each system, and `Policy / VM tests` when the repo provides `vmTests`. Without `vmTests`, `Policy / VM tests` appears as a skipped job that is not required; GitHub cannot omit a job of a reusable workflow. Patch releases carry pin bumps and fixes and move `v0.5`; breaking rule changes start a new minor series.
 
 ## Conventions
 

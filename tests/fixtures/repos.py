@@ -1,4 +1,4 @@
-"""Member files and bundled checker data, independent of unittest lifecycles."""
+"""A repo and bundled checker data, independent of unittest lifecycles."""
 
 import contextlib
 import json
@@ -8,16 +8,11 @@ from unittest.mock import patch
 
 from tests.fixtures.check_nix import CheckNix
 from tests.fixtures.cli import invoke
-from tests.fixtures.data import (
-    PAIR,
-    POLICY_REPO,
-    RELEASE,
-    lockfile,
-)
-from tools import policy, records
+from tests.fixtures.data import PAIR, lockfile
+from tools import data, policy
 
 
-class ProjectFixture:
+class RepoFixture:
     @contextlib.contextmanager
     def prepared(self):
         with contextlib.ExitStack() as self.resources:
@@ -31,24 +26,6 @@ class ProjectFixture:
         self.pins = {"stableBranch": "nixos-26.05", **PAIR}
         self.repos = ["owner/example"]
         self.write("flake.nix", "{}")
-        self.write(".envrc", "use flake\n")
-        self.write("LICENSE", "MIT")
-        self.write("README.md", "# Example\n\nPurpose.\n")
-        for file in ["CONTRIBUTING.md", "AGENTS.md"]:
-            self.write(
-                file,
-                f"[Rules](https://github.com/{POLICY_REPO}/blob/{RELEASE}/POLICY.md)\n",
-            )
-        self.workflow = {
-            "on": {"pull_request": {"types": ["opened", "synchronize", "reopened"]}},
-            "jobs": {
-                "policy": {
-                    "name": "Policy",
-                    "uses": f"{POLICY_REPO}/.github/workflows/check.yml@v0.5",
-                }
-            },
-        }
-        self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
         self.write("flake.lock", json.dumps(lockfile()))
         # `check` always evaluates outputs and probes the shell; answer those
         # Nix calls unless a scenario installs its own process fake.
@@ -62,9 +39,6 @@ class ProjectFixture:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 
-    def inspect(self):
-        return self.run_policy("check", str(self.root))[1]
-
     def write_data(self, directory=None):
         """Write the fixture's pins and repo list in the bundled data layout."""
         directory = directory or Path(self.temp.name) / "data"
@@ -75,5 +49,5 @@ class ProjectFixture:
 
     def run_policy(self, *args):
         """Invoke the CLI with the fixture's data in place of the bundled files."""
-        with patch.object(records, "DATA_ROOT", self.write_data()):
+        with patch.object(data, "DATA_ROOT", self.write_data()):
             return invoke(*args)

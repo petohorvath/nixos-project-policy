@@ -15,8 +15,8 @@ def invoke(*arguments):
     return code, json.loads(output.getvalue() or errors.getvalue())
 
 
-def checker_command(data):
-    """Return argv that runs the checker script with DATA_ROOT set to data.
+def checker_command(data_root):
+    """Return argv that runs the checker script with DATA_ROOT set to DATA_ROOT.
 
     Use it where the checker must run as a separate process, for example when
     Nix output goes to the real standard error.
@@ -25,8 +25,8 @@ def checker_command(data):
     script = (
         "import pathlib, runpy, sys\n"
         f"sys.path.insert(0, {str(tools)!r})\n"
-        "import records\n"
-        f"records.DATA_ROOT = pathlib.Path({str(data)!r})\n"
+        "import data\n"
+        f"data.DATA_ROOT = pathlib.Path({str(data_root)!r})\n"
         f"runpy.run_path({str(tools / 'policy.py')!r}, run_name='__main__')\n"
     )
     return [sys.executable, "-c", script]

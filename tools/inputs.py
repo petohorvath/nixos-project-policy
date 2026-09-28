@@ -8,9 +8,11 @@ import json
 import re
 
 if __package__:
-    from . import locks
+    from . import findings as rule_findings, locks, releases
 else:
+    import findings as rule_findings
     import locks
+    import releases
 
 
 # Stable rule ids, in report order. Each id is one column in a survey table.
@@ -24,14 +26,11 @@ RULES = (
     "no-policy-input",
 )
 NIXPKGS = "nixos/nixpkgs"
-COMMIT = re.compile(r"[0-9a-f]{40}\Z")
-RELEASE_TAG = re.compile(
-    r"(?:refs/tags/)?v?(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
-    r"(?:[-+][0-9A-Za-z.+-]+)?\Z"
-)
+# A sibling reference to a release tag, such as `v1.2.0` or `refs/tags/1.2.0-rc.1`.
+RELEASE_REF = re.compile(rf"(?:refs/tags/)?v?{releases.CORE}(?:[-+][0-9A-Za-z.+-]+)?\Z")
 
 
-class Family:
+class Siblings:
     """Sibling repos: every GitHub repository under an owner of a listed repo.
 
     The policy repository is not a sibling; the no-policy-input rule covers it.
@@ -68,7 +67,9 @@ def root_nixpkgs(lock):
         or node.get("flake") is False
     ):
         return node_id, "root nixpkgs must identify the NixOS/nixpkgs flake"
-    if not isinstance(locked.get("rev"), str) or not COMMIT.fullmatch(locked["rev"]):
+    if not isinstance(locked.get("rev"), str) or not locks.REVISION.fullmatch(
+        locked["rev"]
+    ):
         return node_id, "root nixpkgs must be locked to an exact commit"
     return node_id, None
 
@@ -87,7 +88,7 @@ def check(root, repos, policy_repository):
         return [finding("lock", "flake.lock", "fail", "missing root flake.lock")], []
     except (ValueError, KeyError, TypeError) as error:
         return [finding("lock", "flake.lock", "fail", str(error))], []
-    family = Family(repos, policy_repository)
+    sibling_repos = Siblings(repos, policy_repository)
     findings = []
     nixpkgs, problem = root_nixpkgs(lock)
     if problem is not None:
@@ -108,7 +109,7 @@ def check(root, repos, policy_repository):
                 )
             )
         identity = locks.repository_identity(lock.nodes[node_id])
-        if identity in family:
+        if identity in sibling_repos:
             findings.extend(reference_findings(name, lock.nodes[node_id]))
     siblings = []
     revisions = {}
@@ -124,7 +125,7 @@ def check(root, repos, policy_repository):
                     "the policy repository is a flake input",
                 )
             )
-        if identity not in family:
+        if identity not in sibling_repos:
             continue
         revision = node.get("locked", {}).get("rev") or node.get("locked", {}).get(
             "narHash"
@@ -172,7 +173,7 @@ def check(root, repos, policy_repository):
 def reference_kind(node):
     original = node.get("original", {})
     ref = original.get("ref")
-    if isinstance(ref, str) and RELEASE_TAG.fullmatch(ref):
+    if isinstance(ref, str) and RELEASE_REF.fullmatch(ref):
         return "tag"
     if "rev" in original:
         return "commit"
@@ -219,18 +220,15 @@ def input_paths(lock):
 
 
 def finding(rule, input_name, level, message):
-    return {"rule": rule, "input": input_name, "level": level, "message": message}
+    return rule_findings.finding(rule, level, message, input=input_name)
 
 
-def summarize(findings, rules=RULES):
+def summarize(findings):
     """Return each rule's status: fail, notice, pass, or not-run.
 
     Without a readable root lock, only the lock rule runs.
     """
-    status = dict.fromkeys(rules, "pass")
-    if any(item["rule"] == "lock" for item in findings):
-        status = {rule: "not-run" for rule in rules}
-    for item in findings:
-        if item["level"] == "fail" or status[item["rule"]] == "pass":
-            status[item["rule"]] = item["level"]
+    status = rule_findings.summarize(findings, RULES)
+    if status["lock"] == "fail":
+        status = {rule: "not-run" for rule in RULES} | {"lock": "fail"}
     return status

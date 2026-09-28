@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from tests.fixtures.cli import invoke
-from tools import records
+from tools import data
 
 
 PINS = {"stable": "1" * 40, "unstable": "2" * 40, "stableBranch": "nixos-26.05"}
@@ -18,12 +18,14 @@ class BundledDataTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.data = Path(temporary.name)
-        self.enterContext(patch.object(records, "DATA_ROOT", self.data))
+        self.data_root = Path(temporary.name)
+        self.enterContext(patch.object(data, "DATA_ROOT", self.data_root))
 
     def validate(self, pins=PINS, repos=REPOS, *, raw=None):
-        (self.data / "pins.json").write_text(json.dumps(pins))
-        (self.data / "repos.json").write_text(json.dumps(repos) if raw is None else raw)
+        (self.data_root / "pins.json").write_text(json.dumps(pins))
+        (self.data_root / "repos.json").write_text(
+            json.dumps(repos) if raw is None else raw
+        )
         return invoke("validate")
 
     def test_valid_data_is_reported(self):

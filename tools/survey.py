@@ -11,10 +11,10 @@ else:
 REPO_ERRORS = (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError)
 
 
-def run(workspace, repos, rules, check):
+def run(workspace, repos, rules, check_repo):
     """Survey the Git repos directly under WORKSPACE.
 
-    CHECK(root) returns one repo's `check` report; RULES orders its rule ids.
+    CHECK_REPO(root) returns one repo's `check` report; RULES orders its rule ids.
     Hidden directories and directories without `.git` are skipped. A missing
     or unreadable WORKSPACE raises.
     """
@@ -39,7 +39,7 @@ def run(workspace, repos, rules, check):
             entry["status"] = "not-a-flake"
         else:
             try:
-                report = check(root)
+                report = check_repo(root)
             except REPO_ERRORS as error:
                 entry.update(status="error", error=str(error))
             else:

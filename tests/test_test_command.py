@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 import unittest
 
-from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.cases import RepoTestCase
 from tests.fixtures.data import NEW_PAIR, STABLE, lockfile
 from tests.fixtures.nix_runs import NixRunFixture
 from tools import policy
@@ -16,7 +16,7 @@ from tools import policy
 OVERRIDE = "--override-input"
 
 
-class TestCommandTests(NixRunFixture, ProjectTestCase):
+class TestCommandTests(NixRunFixture, RepoTestCase):
     def setUp(self):
         super().setUp()
         # Pins differ from the locked root nixpkgs, so every report shows
@@ -73,8 +73,7 @@ class TestCommandTests(NixRunFixture, ProjectTestCase):
                     STABLE if mode == "locked" else NEW_PAIR["stable"],
                 )
 
-    def test_test_needs_no_caller_workflow_or_project_name(self):
-        (self.root / ".github/workflows/policy.yml").unlink()
+    def test_test_takes_no_project_name(self):
         code, report = self.run_test("stable")
         self.assertEqual(code, 0, report)
         for options in [["--project", "example"], ["--nixpkgs", "other"], []]:

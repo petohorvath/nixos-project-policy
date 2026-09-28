@@ -3,14 +3,14 @@
 import contextlib
 import json
 
-from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.cases import RepoTestCase
 from tests.fixtures.process import commit, git, isolated_git
 
 HELLO = "packages.x86_64-linux.hello"
 TOOL = "packages.x86_64-linux.tool"
 
 
-class PublicOutputTests(ProjectTestCase):
+class PublicOutputTests(RepoTestCase):
     def setUp(self):
         super().setUp()
         self.enterContext(isolated_git(self.root.parent))
@@ -144,6 +144,29 @@ class PublicOutputTests(ProjectTestCase):
         self.assertEqual(code, 0, report)
         self.assertEqual(report["release"]["tag"], "v1.10.0")
 
+    def test_a_shallow_clone_fails_the_removal_comparison(self):
+        # Reason: CI checked out the repo shallow, so no release tag was
+        # reachable and the removal comparison never ran.
+        self.release("v1.2.0", packages={"names": [HELLO, TOOL]})
+        self.publish(packages={"names": [HELLO]})
+        commit(self.root)
+        clone = self.root.parent / "clone"
+        git(
+            self.root.parent,
+            "clone",
+            "--quiet",
+            "--depth",
+            "1",
+            f"file://{self.root}",
+            str(clone),
+        )
+        code, report = self.run_policy("check", str(clone))
+        self.assertEqual(code, 1, report)
+        self.assertEqual(report["rules"]["outputs-removal"], "fail")
+        self.assertEqual(report["release"]["tag"], None)
+        [issue] = self.issues(report, "outputs-removal")
+        self.assertIn("shallow", issue["message"])
+
     def test_a_failing_output_does_not_count_as_removed(self):
         self.release("v1.2.0", packages={"names": [HELLO]})
         self.publish(packages="infinite recursion encountered")
@@ -153,7 +176,7 @@ class PublicOutputTests(ProjectTestCase):
         self.assertEqual(report["rules"]["outputs-removal"], "pass")
 
 
-class ShellAndFormatterTests(ProjectTestCase):
+class ShellAndFormatterTests(RepoTestCase):
     def test_check_probes_the_default_shell_and_the_formatter(self):
         code, report = self.run_policy("check", str(self.root))
         self.assertEqual(code, 0, report)

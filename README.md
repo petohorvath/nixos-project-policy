@@ -4,7 +4,19 @@ Shared rules for the Nix flake repos in devnix-labs. [POLICY.md](POLICY.md) stat
 
 ## Caller workflow
 
-Copy [templates/policy-caller.yml](templates/policy-caller.yml) into the repo's `.github/workflows/`. It calls `check.yml@v0.5` with one optional input, `systems`: a JSON list in a string that defaults to `'["x86_64-linux", "aarch64-linux"]'`. [POLICY.md](POLICY.md#caller) lists the statuses to require; the workflow's `Plan` job also writes them to its step summary.
+Copy [templates/policy-caller.yml](templates/policy-caller.yml) into the repo's `.github/workflows/`. Its job calls `check.yml@v0.5` with one optional input, `systems`: a JSON list in a string that defaults to `'["x86_64-linux", "aarch64-linux"]'`.
+
+```yaml
+jobs:
+  policy:
+    name: Policy
+    uses: petohorvath/nixos-project-policy/.github/workflows/check.yml@v0.5
+    # Optional; defaults to both Linux systems.
+    # with:
+    #   systems: '["x86_64-linux"]'
+```
+
+[POLICY.md](POLICY.md#caller) lists the statuses to require; the workflow's `Plan` job also writes them to its step summary.
 
 `v0.5` moves to every patch release, so pin bumps and fixes reach the repo without a change to its caller. Breaking rule changes start a new minor series, such as `v0.6`.
 

@@ -6,11 +6,11 @@ import subprocess
 from unittest.mock import patch
 
 from tests.fixtures.data import nixpkgs
-from tests.fixtures.projects import ProjectFixture
+from tests.fixtures.repos import RepoFixture
 from tools import policy
 
 
-class NixRunFixture(ProjectFixture):
+class NixRunFixture(RepoFixture):
     """A repo whose Nix commands are answered by knobs instead of Nix.
 
     `metadata` is None to echo the repo's lock with any nixpkgs override

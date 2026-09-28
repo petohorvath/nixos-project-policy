@@ -111,7 +111,7 @@
         default = {
           type = "app";
           program = "${project.${system}.checker}/bin/nixos-project-policy";
-          meta.description = "Inspect project compliance and pin proposals";
+          meta.description = "Check a repo against the policy";
         };
       });
     };

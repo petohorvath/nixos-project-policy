@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          path: project
+          path: repo
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -40,7 +40,7 @@ jobs:
         env:
           SYSTEMS: ${{ inputs.systems }}
         run: |
-          nix run --no-update-lock-file ./policy -- ci ./project --systems "$SYSTEMS" > ci.json
+          nix run --no-update-lock-file ./policy -- ci ./repo --systems "$SYSTEMS" > ci.json
           check_matrix=$(jq -ce '.checkMatrix' ci.json)
           test_matrix=$(jq -ce '.testMatrix' ci.json)
           vm_job=$(jq -re '.vmJob | booleans | tostring' ci.json)
@@ -61,7 +61,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          path: project
+          path: repo
+          # Full history with every tag: the removal comparison needs the
+          # last release tag, and check fails on a shallow clone.
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -73,7 +76,7 @@ jobs:
         with:
           install_url: https://releases.nixos.org/nix/nix-2.34.6/install
       - name: Check the repo
-        run: nix run --no-update-lock-file ./policy -- check ./project
+        run: nix run --no-update-lock-file ./policy -- check ./repo
   tests:
     name: Tests (${{ matrix.nixpkgs }}, ${{ matrix.system }})
     needs: plan
@@ -84,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          path: project
+          path: repo
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -98,7 +101,7 @@ jobs:
       - name: Run nix flake check
         env:
           NIXPKGS: ${{ matrix.nixpkgs }}
-        run: nix run --no-update-lock-file ./policy -- test ./project --nixpkgs "$NIXPKGS"
+        run: nix run --no-update-lock-file ./policy -- test ./repo --nixpkgs "$NIXPKGS"
   vm:
     name: VM tests
     needs: plan
@@ -107,7 +110,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          path: project
+          path: repo
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -120,4 +123,4 @@ jobs:
           install_url: https://releases.nixos.org/nix/nix-2.34.6/install
           enable_kvm: true
       - name: Build discovered VM tests
-        run: nix run --no-update-lock-file ./policy -- vm ./project
+        run: nix run --no-update-lock-file ./policy -- vm ./repo

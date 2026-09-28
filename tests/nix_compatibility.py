@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from tests.fixtures.cli import checker_command
-from tools import policy, records
+from tools import data, locks, policy
 
 
 class NixCompatibilityTests(unittest.TestCase):
@@ -15,14 +15,14 @@ class NixCompatibilityTests(unittest.TestCase):
         system = self.run_command(
             ["nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem"]
         ).strip()
-        graph = policy.LockGraph(records.read_json(policy.SOURCE_ROOT / "flake.lock"))
+        graph = locks.LockGraph(data.read_json(policy.SOURCE_ROOT / "flake.lock"))
         revision = graph.nodes[graph.resolve(["nixpkgs"])]["locked"]["rev"]
         with tempfile.TemporaryDirectory(prefix="policy-checks-fixture-") as temporary:
             workspace = Path(temporary)
-            data = self.write_data(
+            data_root = self.write_data(
                 workspace, {"stable": revision, "unstable": revision}
             )
-            root = workspace / "project"
+            root = workspace / "repo"
             root.mkdir()
             flake = root / "flake.nix"
             build = (
@@ -50,7 +50,7 @@ class NixCompatibilityTests(unittest.TestCase):
                     before = policy.fingerprints(root)
                     process = subprocess.run(
                         [
-                            *checker_command(data),
+                            *checker_command(data_root),
                             "test",
                             str(root),
                             "--nixpkgs",
@@ -82,16 +82,16 @@ class NixCompatibilityTests(unittest.TestCase):
 
     @staticmethod
     def write_data(workspace, pins):
-        data = workspace / "data"
-        data.mkdir()
-        (data / "pins.json").write_text(
+        data_root = workspace / "data"
+        data_root.mkdir()
+        (data_root / "pins.json").write_text(
             json.dumps({"stableBranch": "nixos-26.05", **pins})
         )
-        (data / "repos.json").write_text(json.dumps({"repos": []}))
-        return data
+        (data_root / "repos.json").write_text(json.dumps({"repos": []}))
+        return data_root
 
     def test_shell_probe_requires_working_default_shell_without_fixed_tools(self):
-        graph = policy.LockGraph(records.read_json(policy.SOURCE_ROOT / "flake.lock"))
+        graph = locks.LockGraph(data.read_json(policy.SOURCE_ROOT / "flake.lock"))
         revision = graph.nodes[graph.resolve(["nixpkgs"])]["locked"]["rev"]
         with tempfile.TemporaryDirectory(prefix="policy-shell-fixture-") as temporary:
             root = Path(temporary)
@@ -182,7 +182,7 @@ class NixCompatibilityTests(unittest.TestCase):
     def test_real_overrides_build_checks_preserve_locks_and_reject_default_updates(
         self,
     ):
-        graph = policy.LockGraph(records.read_json(policy.SOURCE_ROOT / "flake.lock"))
+        graph = locks.LockGraph(data.read_json(policy.SOURCE_ROOT / "flake.lock"))
         pins = {
             channel: graph.nodes[graph.resolve([name])]["locked"]["rev"]
             for channel, name in [
@@ -192,9 +192,9 @@ class NixCompatibilityTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory(prefix="policy-nix-fixture-") as temporary:
             workspace = Path(temporary)
-            project = workspace / "project"
-            project.mkdir()
-            flake = project / "flake.nix"
+            repo = workspace / "repo"
+            repo.mkdir()
+            flake = repo / "flake.nix"
             flake.write_text(
                 """{
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/STABLE";
@@ -209,15 +209,15 @@ class NixCompatibilityTests(unittest.TestCase):
 }
 """.replace("STABLE", pins["stable"])
             )
-            self.run_command(["git", "init", "-q", str(project)])
-            self.run_command(["git", "-C", str(project), "add", "flake.nix"])
-            self.run_command(["nix", "flake", "lock", str(project)])
-            self.run_command(["git", "-C", str(project), "add", "flake.lock"])
+            self.run_command(["git", "init", "-q", str(repo)])
+            self.run_command(["git", "-C", str(repo), "add", "flake.nix"])
+            self.run_command(["nix", "flake", "lock", str(repo)])
+            self.run_command(["git", "-C", str(repo), "add", "flake.lock"])
             self.run_command(
                 [
                     "git",
                     "-C",
-                    str(project),
+                    str(repo),
                     "-c",
                     "user.name=Fixture",
                     "-c",
@@ -227,14 +227,14 @@ class NixCompatibilityTests(unittest.TestCase):
                     "test: Create compatibility fixture",
                 ]
             )
-            data = self.write_data(workspace, pins)
-            lock_before = (project / "flake.lock").read_bytes()
+            data_root = self.write_data(workspace, pins)
+            lock_before = (repo / "flake.lock").read_bytes()
             self.run_command(
                 [
                     "nix",
                     "flake",
                     "check",
-                    str(project),
+                    str(repo),
                     "--no-update-lock-file",
                     "--print-build-logs",
                 ]
@@ -245,9 +245,9 @@ class NixCompatibilityTests(unittest.TestCase):
                     report = json.loads(
                         self.run_command(
                             [
-                                *checker_command(data),
+                                *checker_command(data_root),
                                 "test",
-                                str(project),
+                                str(repo),
                                 "--nixpkgs",
                                 mode,
                             ]
@@ -258,42 +258,42 @@ class NixCompatibilityTests(unittest.TestCase):
                     self.assertEqual(report["resolvedRevision"], revision)
                     self.assertEqual(report["checks"], ["selectedInput"])
                     self.assertEqual(report["commands"][-1]["returncode"], 0)
-                    self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
+                    self.assertEqual((repo / "flake.lock").read_bytes(), lock_before)
                     self.assertEqual(
-                        self.selected_input(project, report["system"], mode, pins),
+                        self.selected_input(repo, report["system"], mode, pins),
                         revision,
                     )
             flake.write_text(
                 flake.read_text().replace(pins["stable"], pins["unstable"])
             )
             default = subprocess.run(
-                ["nix", "flake", "check", str(project), "--no-update-lock-file"],
+                ["nix", "flake", "check", str(repo), "--no-update-lock-file"],
                 text=True,
                 capture_output=True,
                 check=False,
             )
             self.assertNotEqual(default.returncode, 0)
             self.assertIn("lock file", default.stderr)
-            self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
+            self.assertEqual((repo / "flake.lock").read_bytes(), lock_before)
             stale = subprocess.run(
-                [*checker_command(data), "test", str(project), "--nixpkgs", "locked"],
+                [*checker_command(data_root), "test", str(repo), "--nixpkgs", "locked"],
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 check=False,
             )
             self.assertEqual(stale.returncode, 1, stale.stdout)
-            self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
+            self.assertEqual((repo / "flake.lock").read_bytes(), lock_before)
 
     def test_check_evaluates_public_outputs_and_compares_the_release_tag(self):
-        graph = policy.LockGraph(records.read_json(policy.SOURCE_ROOT / "flake.lock"))
+        graph = locks.LockGraph(data.read_json(policy.SOURCE_ROOT / "flake.lock"))
         revision = graph.nodes[graph.resolve(["nixpkgs"])]["locked"]["rev"]
         with tempfile.TemporaryDirectory(prefix="policy-outputs-fixture-") as temporary:
             workspace = Path(temporary)
-            data = self.write_data(
+            data_root = self.write_data(
                 workspace, {"stable": revision, "unstable": revision}
             )
-            root = workspace / "project"
+            root = workspace / "repo"
             root.mkdir()
             source = """{
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/REVISION";
@@ -320,7 +320,7 @@ class NixCompatibilityTests(unittest.TestCase):
 
             def check():
                 process = subprocess.run(
-                    [*checker_command(data), "check", str(root)],
+                    [*checker_command(data_root), "check", str(root)],
                     text=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
@@ -401,7 +401,7 @@ class NixCompatibilityTests(unittest.TestCase):
             self.assertEqual(report["rules"]["outputs-removal"], "pass")
             self.assertEqual(report["release"], {"tag": "v0.1.0", "version": "0.2.0"})
 
-    def selected_input(self, project, system, mode, pins):
+    def selected_input(self, repo, system, mode, pins):
         """Return the nixpkgs revision that the built check recorded."""
         flags = (
             ["--no-update-lock-file"]
@@ -414,7 +414,7 @@ class NixCompatibilityTests(unittest.TestCase):
                 "build",
                 "--no-link",
                 "--print-out-paths",
-                f"{project}#checks.{system}.selectedInput",
+                f"{repo}#checks.{system}.selectedInput",
                 *flags,
             ]
         ).strip()

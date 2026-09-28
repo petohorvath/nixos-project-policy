@@ -4,6 +4,8 @@ import re
 from urllib.parse import urlsplit
 
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+# An exact lowercase Git commit.
+REVISION = re.compile(r"[0-9a-f]{40}\Z")
 
 
 class LockGraph:

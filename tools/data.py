@@ -5,11 +5,13 @@ from pathlib import Path
 import re
 from typing import NamedTuple
 
+if __package__:
+    from . import locks
+else:
+    import locks
 
-REVISION = re.compile(r"[0-9a-f]{40}\Z")
-_SOURCE_ROOT = Path(__file__).resolve().parents[1]
-DATA_ROOT = _SOURCE_ROOT / "data"
-REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+
+DATA_ROOT = Path(__file__).resolve().parents[1] / "data"
 
 
 def unique_mapping(pairs):
@@ -74,7 +76,7 @@ def load_repos(path):
     for repository in document["repos"]:
         if (
             not isinstance(repository, str)
-            or not REPOSITORY.fullmatch(repository)
+            or not locks.REPOSITORY.fullmatch(repository)
             or repository.lower() in identities
         ):
             raise ValueError(
@@ -92,5 +94,5 @@ def validate_pair(pair):
 
 
 def require_revision(value):
-    if not isinstance(value, str) or not REVISION.fullmatch(value):
+    if not isinstance(value, str) or not locks.REVISION.fullmatch(value):
         raise ValueError("Expected an exact 40-character lowercase Git commit")

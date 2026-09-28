@@ -2,7 +2,7 @@
 
 import json
 
-from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.cases import RepoTestCase
 from tests.fixtures.data import NEW_STABLE, SOURCE, lockfile, nixpkgs
 
 INPUT_RULES = {
@@ -30,7 +30,7 @@ def sibling(repository, *, ref=None, rev=SOURCE, follows=True):
     return node
 
 
-class InputRuleTests(ProjectTestCase):
+class InputRuleTests(RepoTestCase):
     def setUp(self):
         super().setUp()
         self.repos[:] = ["petohorvath/nixos-registry"]
@@ -160,7 +160,7 @@ class InputRuleTests(ProjectTestCase):
                 self.assertEqual(code, 1, report)
                 self.assertEqual(self.failures(report), {("sibling-tag", "registry")})
 
-    def test_unlisted_repos_of_the_family_are_siblings(self):
+    def test_unlisted_repos_under_a_listed_owner_are_siblings(self):
         self.add_input("nftypes", sibling("PetoHorvath/nix-nftypes", ref="main"))
         code, report = self.check()
         self.assertEqual(code, 1, report)
@@ -311,11 +311,3 @@ class InputRuleTests(ProjectTestCase):
             {"outputs-removal"},
         )
         self.assertEqual(report["rules"]["outputs-removal"], "not-run")
-
-    def test_check_needs_no_caller_workflow(self):
-        (self.root / ".github/workflows/policy.yml").unlink()
-        (self.root / "README.md").unlink()
-        (self.root / ".envrc").unlink()
-        code, report = self.check()
-        self.assertEqual(code, 0, report)
-        self.assertNotIn("selectionStatus", report)

@@ -7,21 +7,19 @@ Every command prints JSON and exits 0, or prints an error and exits 2.
 import argparse
 import json
 from pathlib import Path
-import re
 import subprocess
 import sys
 
 if __package__:
-    from . import records
+    from . import ci, data, releases
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import records
+    import ci
+    import data
+    import releases
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
-RUNNERS = {"x86_64-linux": "ubuntu-24.04", "aarch64-linux": "ubuntu-24.04-arm"}
-VM_SYSTEM = "x86_64-linux"
-VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 
 
 def main(argv=None):
@@ -43,7 +41,7 @@ def main(argv=None):
         if args.command == "propose":
             result = propose_pins(args.root, args.stable, args.unstable)
         elif args.command == "matrix":
-            result = matrix(records.load_repos(args.root / "data/repos.json"))
+            result = matrix(data.load_repos(args.root / "data/repos.json"))
         else:
             result = plan_release(args.root)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
@@ -56,8 +54,8 @@ def main(argv=None):
 def propose_pins(root, stable, unstable):
     """Write the pins, the legacy pins file, VERSION, and a changelog entry."""
     pair = {"stable": stable, "unstable": unstable}
-    records.validate_pair(pair)
-    current = records.load_pins(root / "data/pins.json")
+    data.validate_pair(pair)
+    current = data.load_pins(root / "data/pins.json")
     pins = {**current, **pair}
     version = read_version(root)
     tags = release_tags(root)
@@ -97,23 +95,23 @@ def matrix(repos):
     include = []
     for repository in repos:
         for task in ["stable", "unstable"]:
-            for system, runner in RUNNERS.items():
+            for system, runner in ci.RUNNERS.items():
                 include.append(
                     {
                         "repository": repository,
                         "task": task,
                         "system": system,
                         "runner": runner,
-                        "name": f"Tests ({task}, {system})",
+                        "name": ci.TESTS_JOB_NAME.format(nixpkgs=task, system=system),
                     }
                 )
         include.append(
             {
                 "repository": repository,
                 "task": "vm",
-                "system": VM_SYSTEM,
-                "runner": RUNNERS[VM_SYSTEM],
-                "name": "VM tests",
+                "system": ci.VM_SYSTEM,
+                "runner": ci.RUNNERS[ci.VM_SYSTEM],
+                "name": ci.VM_JOB_NAME,
             }
         )
     return {"include": include}
@@ -123,11 +121,11 @@ def plan_release(root):
     """Plan the tag for a merged pin bump: VERSION must be the next patch."""
     version = read_version(root)
     tag = f"v{version}"
-    revision = git(root, "rev-parse", "HEAD")
+    revision = releases.git(root, "rev-parse", "HEAD").strip()
     tags = release_tags(root)
     release = {**series(version), "revision": revision}
     if tag in tags:
-        tagged = git(root, "rev-list", "-n", "1", f"refs/tags/{tag}")
+        tagged = releases.git(root, "rev-list", "-n", "1", f"refs/tags/{tag}").strip()
         if tagged != revision:
             raise ValueError(f"{tag} already exists on {tagged}; tags never move")
         latest = next_patch(version, tags - {tag})["version"]
@@ -146,7 +144,7 @@ def next_patch(version, tags):
     major, minor, _ = parse_version(version)
     patches = []
     for tag in tags:
-        parsed = VERSION.fullmatch(tag[1:]) if tag.startswith("v") else None
+        parsed = releases.TAG.fullmatch(tag)
         if parsed and tuple(map(int, parsed.groups()[:2])) == (major, minor):
             patches.append(int(parsed.group(3)))
     if not patches:
@@ -163,7 +161,7 @@ def series(version):
 
 
 def parse_version(version):
-    parsed = VERSION.fullmatch(version)
+    parsed = releases.VERSION.fullmatch(version)
     if not parsed:
         raise ValueError(f"VERSION must be MAJOR.MINOR.PATCH, not {version!r}")
     return tuple(map(int, parsed.groups()))
@@ -176,7 +174,7 @@ def read_version(root):
 
 
 def release_tags(root):
-    return set(git(root, "tag", "--list", "v*").split())
+    return set(releases.git(root, "tag", "--list", "v*").split())
 
 
 def release_changelog(text, version, entry):
@@ -198,12 +196,6 @@ def release_changelog(text, version, entry):
 
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
-
-
-def git(root, *arguments):
-    return subprocess.check_output(
-        ["git", "-C", str(root), *arguments], text=True
-    ).strip()
 
 
 if __name__ == "__main__":

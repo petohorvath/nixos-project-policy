@@ -6,10 +6,10 @@ import unittest
 
 import yaml
 
-from tools import policy, records
+from tools import data, locks, policy
 
 
-from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.cases import RepoTestCase
 from tests.fixtures.cli import invoke
 from tests.fixtures.data import (
     NEW_STABLE,
@@ -30,12 +30,12 @@ class LockTests(unittest.TestCase):
         ]
         for lock in malformed:
             with self.subTest(lock=lock), self.assertRaises(ValueError):
-                policy.LockGraph(lock)
+                locks.LockGraph(lock)
 
     def test_follows_resolves_from_nonstandard_root(self):
         lock = lockfile()
         lock["nodes"]["entry"]["inputs"]["alias"] = ["nixpkgs"]
-        graph = policy.LockGraph(lock)
+        graph = locks.LockGraph(lock)
         self.assertEqual(graph.resolve(["alias"]), "arbitrary-node")
         self.assertEqual(len(graph.reachable()), 3)
 
@@ -44,28 +44,28 @@ class LockTests(unittest.TestCase):
         lock["nodes"]["entry"]["inputs"]["library"] = "library"
         lock["nodes"]["library"] = {"inputs": {"pkgs": ["nixpkgs"]}}
         self.assertEqual(
-            policy.LockGraph(lock).resolve(["library", "pkgs"]), "arbitrary-node"
+            locks.LockGraph(lock).resolve(["library", "pkgs"]), "arbitrary-node"
         )
 
     def test_alias_cycles_fail(self):
         lock = lockfile()
         lock["nodes"]["entry"]["inputs"].update(nixpkgs=["alias"], alias=["nixpkgs"])
         with self.assertRaisesRegex(ValueError, "Cyclic follows"):
-            policy.LockGraph(lock).reachable()
+            locks.LockGraph(lock).reachable()
 
     def test_missing_node_and_missing_alias_fail(self):
         for reference in ["missing", ["missing"]]:
             with self.subTest(reference=reference), self.assertRaises(ValueError):
-                policy.LockGraph(lockfile()).resolve(reference)
+                locks.LockGraph(lockfile()).resolve(reference)
 
     def test_unreachable_old_nodes_are_ignored(self):
         lock = lockfile()
         lock["nodes"]["unused"] = nixpkgs(NEW_STABLE, "nixos-26.05")
-        self.assertNotIn("unused", policy.LockGraph(lock).reachable())
+        self.assertNotIn("unused", locks.LockGraph(lock).reachable())
 
     def test_git_transport_identity(self):
         self.assertEqual(
-            policy.repository_identity(
+            locks.repository_identity(
                 {"locked": {"url": "https://github.com/NixOS/nixpkgs.git"}}
             ),
             "nixos/nixpkgs",
@@ -75,10 +75,10 @@ class LockTests(unittest.TestCase):
 class PinStateTests(unittest.TestCase):
     def test_floating_revisions_fail(self):
         with self.assertRaises(ValueError):
-            records.validate_pair({"stable": "nixos-26.05", "unstable": UNSTABLE})
+            data.validate_pair({"stable": "nixos-26.05", "unstable": UNSTABLE})
 
 
-class ProjectTests(ProjectTestCase):
+class RepoTests(RepoTestCase):
     def test_malformed_bundled_data_fails_every_command(self):
         self.pins["approved"] = PAIR
         for command in [

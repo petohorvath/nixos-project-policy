@@ -5,13 +5,13 @@ import io
 import json
 from unittest.mock import patch
 
-from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.cases import RepoTestCase
 from tests.fixtures.data import lockfile
 from tests.fixtures.process import commit, git, initialize, isolated_git
-from tools import policy, records
+from tools import data, policy
 
 
-class SurveyTests(ProjectTestCase):
+class SurveyTests(RepoTestCase):
     def setUp(self):
         super().setUp()
         self.repos[:] = ["owner/alpha", "owner/beta"]
@@ -36,7 +36,7 @@ class SurveyTests(ProjectTestCase):
     def survey(self):
         output, errors = io.StringIO(), io.StringIO()
         with (
-            patch.object(records, "DATA_ROOT", self.write_data()),
+            patch.object(data, "DATA_ROOT", self.write_data()),
             contextlib.redirect_stdout(output),
             contextlib.redirect_stderr(errors),
         ):
@@ -155,7 +155,7 @@ class SurveyTests(ProjectTestCase):
         self.workspace.rmdir()
         output, errors = io.StringIO(), io.StringIO()
         with (
-            patch.object(records, "DATA_ROOT", self.write_data()),
+            patch.object(data, "DATA_ROOT", self.write_data()),
             contextlib.redirect_stdout(output),
             contextlib.redirect_stderr(errors),
         ):

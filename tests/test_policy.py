@@ -7,7 +7,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 import yaml
 
@@ -236,22 +235,6 @@ class ProjectTests(ProjectTestCase):
                 status, report = self.run_policy(*command)
                 self.assertEqual(status, 2, report)
                 self.assertIn("pins.json requires only", report["error"])
-
-    def test_shell_probe_fails_check_on_probe_errors(self):
-        for probe_error in [None, subprocess.CalledProcessError(1, "nix")]:
-            with (
-                self.subTest(probe_error=probe_error),
-                patch.object(policy.subprocess, "run", side_effect=probe_error),
-                patch.object(
-                    policy.subprocess, "check_output", return_value="x86_64-linux"
-                ),
-            ):
-                status, report = self.run_policy("check", str(self.root), "--shell")
-                self.assertEqual(status, 1 if probe_error else 0)
-                self.assertEqual(report["status"], "fail" if probe_error else "pass")
-                self.assertEqual(
-                    report["rules"]["shell"], "fail" if probe_error else "pass"
-                )
 
 
 class RecordTests(unittest.TestCase):

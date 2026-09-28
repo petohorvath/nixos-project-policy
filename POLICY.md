@@ -11,8 +11,8 @@ Each repo in devnix-labs that follows this policy makes three guarantees: about 
 
 ## Public outputs
 
-- Every public output evaluates. Do not publish empty output namespaces.
-- After the first release tag, removing a public output requires a minor or major version bump over the last release tag. The new version is the topmost release heading in `CHANGELOG.md`.
+- Every public output evaluates. Avoid empty output namespaces; the check reports them without failing.
+- After the first release tag, removing a public output requires a minor or major version bump over the last release tag. The last release tag is the highest `vMAJOR.MINOR.PATCH` tag reachable from the checked commit. The new version is the topmost release heading in `CHANGELOG.md`, such as `## [0.5.0] - 2026-10-01`; an `Unreleased` heading does not count.
 - Without a release tag, the removal comparison is skipped. Tag a first release, such as `v0.1.0`, to turn it on.
 
 ## Tests

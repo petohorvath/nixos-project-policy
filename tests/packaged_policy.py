@@ -110,7 +110,7 @@ class PackagedPolicyTests(unittest.TestCase):
         report = self.call("vm", root)
         self.assertEqual(report["vmTests"], ["boot"])
         for system in records.load_requirements()["ci"]["runners"]:
-            self.call("check", root, "--shell", system=system)
+            self.call("check", root, system=system)
             for mode in ["locked", *PAIR]:
                 report = self.call("test", root, "--nixpkgs", mode, system=system)
                 # The fixture lock holds the stable pin as its root nixpkgs.

@@ -82,7 +82,7 @@ A repair that changes either nixpkgs revision creates a revised candidate. Rerun
 1. Select the member migration explicitly.
 2. Prepare its shell, tools, formatter, documentation, dependency selection, and checks. Preserve public contracts and specialized host requirements.
 3. Use the selected release's caller template. Match its release reference, `policy_version`, and documentation links. Declare [member settings](checker.md#member-declarations-and-central-records) in the caller.
-4. Run `nix run --no-update-lock-file ./checker -- check PATH --shell` with the member's selected checker.
+4. Run `nix run --no-update-lock-file ./checker -- check PATH` with the member's selected checker.
 5. Run committed-lock checks, both compatibility revisions on every required architecture, and `vm` on `x86_64-linux` for repos with `legacyPackages.<system>.vmTests`.
 6. Run `ci PATH --project NAME` with the same checker prefix. Compare the generated names with actual PR statuses and merge gates.
 7. Retain the evidence on the member PR. Add the repository identity to `data/repos.json` through a reviewed central PR after verification.

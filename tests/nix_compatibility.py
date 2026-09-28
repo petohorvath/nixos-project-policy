@@ -285,6 +285,122 @@ class NixCompatibilityTests(unittest.TestCase):
             self.assertEqual(stale.returncode, 1, stale.stdout)
             self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
 
+    def test_check_evaluates_public_outputs_and_compares_the_release_tag(self):
+        graph = policy.LockGraph(records.read_json(policy.SOURCE_ROOT / "flake.lock"))
+        revision = graph.nodes[graph.resolve(["nixpkgs"])]["locked"]["rev"]
+        with tempfile.TemporaryDirectory(prefix="policy-outputs-fixture-") as temporary:
+            workspace = Path(temporary)
+            data = self.write_data(
+                workspace, {"stable": revision, "unstable": revision}
+            )
+            root = workspace / "project"
+            root.mkdir()
+            source = """{
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/REVISION";
+  outputs = { nixpkgs, ... }: let
+    forSystems = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ];
+    pkgs = system: nixpkgs.legacyPackages.${system};
+  in {
+    packages = forSystems (system: { hello = (pkgs system).hello; PACKAGES });
+    lib = { greeting = "hello"; LIB };
+    nixosModules = { };
+    devShells = forSystems (system: {
+      default = (pkgs system).mkShellNoCC { };
+    });
+    formatter = forSystems (system: (pkgs system).nixfmt);
+    checks = forSystems (system: { private = throw "checks are not public"; });
+  };
+}
+""".replace("REVISION", revision)
+
+            def stage(packages, library=""):
+                (root / "flake.nix").write_text(
+                    source.replace("PACKAGES", packages).replace("LIB", library)
+                )
+
+            def check():
+                process = subprocess.run(
+                    [*checker_command(data), "check", str(root)],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                return process.returncode, json.loads(process.stdout)
+
+            def git(*arguments):
+                self.run_command(
+                    [
+                        "git",
+                        "-C",
+                        str(root),
+                        "-c",
+                        "user.name=Fixture",
+                        "-c",
+                        "user.email=fixture@example.invalid",
+                        *arguments,
+                    ]
+                )
+
+            stage("tool = (pkgs system).jq;")
+            self.run_command(["git", "init", "-q", str(root)])
+            git("add", ".")
+            self.run_command(["nix", "flake", "lock", str(root)])
+            git("add", ".")
+            git("commit", "-qm", "feat: Publish tool")
+
+            code, report = check()
+            self.assertEqual(code, 0, report)
+            self.assertEqual(report["rules"]["outputs-removal"], "not-run")
+            self.assertIn("v0.1.0", " ".join(n["message"] for n in report["notices"]))
+            self.assertEqual(report["rules"]["shell"], "pass")
+            self.assertEqual(report["rules"]["formatter"], "pass")
+            # The throwing check stays private; nixosModules is an empty namespace.
+            self.assertEqual(report["rules"]["outputs-evaluate"], "pass")
+            self.assertEqual(
+                [
+                    n["output"]
+                    for n in report["notices"]
+                    if n["rule"] == "outputs-empty"
+                ],
+                ["nixosModules"],
+            )
+            git("tag", "v0.1.0")
+
+            stage(
+                'broken = throw "broken package";',
+                "missing = nixpkgs.lib.doesNotExist;",
+            )
+            git("commit", "-qam", "fix!: Drop tool")
+            code, report = check()
+            self.assertEqual(code, 1, report)
+            failures = {(i["rule"], i["output"]) for i in report["issues"]}
+            system = self.run_command(
+                ["nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem"]
+            ).strip()
+            self.assertEqual(
+                failures,
+                {
+                    ("outputs-evaluate", f"packages.{system}.broken"),
+                    # An undefined attribute is not catchable per value.
+                    ("outputs-evaluate", "lib"),
+                    ("outputs-removal", "packages.aarch64-linux.tool"),
+                    ("outputs-removal", "packages.x86_64-linux.tool"),
+                },
+            )
+            self.assertEqual(report["release"], {"tag": "v0.1.0", "version": None})
+
+            stage("")
+            (root / "CHANGELOG.md").write_text(
+                "# Changelog\n\n## 0.2.0\n\n- Drop tool.\n"
+            )
+            git("add", ".")
+            git("commit", "-qm", "chore: Release 0.2.0")
+            code, report = check()
+            self.assertEqual(code, 0, report)
+            self.assertEqual(report["rules"]["outputs-removal"], "pass")
+            self.assertEqual(report["release"], {"tag": "v0.1.0", "version": "0.2.0"})
+
     def selected_input(self, project, system, mode, pins):
         """Return the nixpkgs revision that the built check recorded."""
         flags = (

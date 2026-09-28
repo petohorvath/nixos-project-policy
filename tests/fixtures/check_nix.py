@@ -8,6 +8,7 @@ tag carries the outputs of its own revision.
 """
 
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -22,6 +23,8 @@ class CheckNix:
         self.host = "x86_64-linux"
         self.failing = []
         self.commands = []
+        # Called with the working directory of `nix develop`, like a shellHook.
+        self.shell_hook = None
 
     def __call__(self, command, **kwargs):
         if command[0] != "nix":
@@ -33,6 +36,8 @@ class CheckNix:
             return subprocess.CompletedProcess(command, 0, self.host)
         if command[:2] == ["nix", "eval"] and outputs.FLAKE_VARIABLE in command[-1]:
             return self.describe(command, kwargs["env"])
+        if command[:2] == ["nix", "develop"] and self.shell_hook:
+            self.shell_hook(Path(kwargs.get("cwd") or os.getcwd()))
         if command[:2] in (["nix", "eval"], ["nix", "develop"]):
             return subprocess.CompletedProcess(command, 0, "")
         raise AssertionError(command)

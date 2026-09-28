@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import sys
 
 if __package__:
@@ -164,30 +165,33 @@ def host_system():
 def shell_problem(root, system):
     """Start devShells.<system>.default with a cleared environment."""
     # Unnamed nix develop can fall back to the default package, so evaluate
-    # the shell by name first.
-    return probe(
-        "default development shell does not start",
-        [
+    # the shell by name first. The shellHook runs in an empty directory
+    # because hooks such as git-hooks.nix write to the repository they run in.
+    with tempfile.TemporaryDirectory(prefix="nixos-project-policy-shell-") as empty:
+        return probe(
+            "default development shell does not start",
             [
-                "nix",
-                "eval",
-                "--no-update-lock-file",
-                "--raw",
-                f"path:{root}#devShells.{system}.default.drvPath",
+                [
+                    "nix",
+                    "eval",
+                    "--no-update-lock-file",
+                    "--raw",
+                    f"path:{root}#devShells.{system}.default.drvPath",
+                ],
+                [
+                    "nix",
+                    "develop",
+                    "--no-update-lock-file",
+                    "--ignore-environment",
+                    f"path:{root}",
+                    "--command",
+                    "bash",
+                    "-c",
+                    ":",
+                ],
             ],
-            [
-                "nix",
-                "develop",
-                "--no-update-lock-file",
-                "--ignore-environment",
-                f"path:{root}",
-                "--command",
-                "bash",
-                "-c",
-                ":",
-            ],
-        ],
-    )
+            cwd=empty,
+        )
 
 
 def formatter_problem(root, system):
@@ -205,12 +209,12 @@ def formatter_problem(root, system):
     )
 
 
-def probe(problem, commands):
+def probe(problem, commands, cwd=None):
     """Run COMMANDS in order; return PROBLEM with the failure, or None."""
     for command in commands:
         try:
             # Nix output goes to standard error to keep the JSON report intact.
-            subprocess.run(command, check=True, timeout=900, stdout=sys.stderr)
+            subprocess.run(command, check=True, timeout=900, stdout=sys.stderr, cwd=cwd)
         except (subprocess.SubprocessError, OSError) as error:
             return f"{problem}: {error}"
     return None

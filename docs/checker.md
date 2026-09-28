@@ -24,7 +24,7 @@ nix run --no-update-lock-file .# -- COMMAND
 | `vm PATH`                    | Build every `legacyPackages.<host-system>.vmTests` entry. Return `not-applicable` if none exist.  |
 | `survey WORKSPACE`           | Run `check` on every Git repo directly under `WORKSPACE`. Print a rule table on standard error.   |
 
-The `shell` rule first evaluates `devShells.<host-system>.default.drvPath`, then enters the development shell with the inherited environment cleared and executes `bash -c ':'`. A default package or non-default shell cannot satisfy it. The `formatter` rule evaluates the root formatter without asserting compliance. The shell rule checks startup and command execution, not a fixed tool list or project-specific development tasks.
+The `shell` rule first evaluates `devShells.<host-system>.default.drvPath`, then enters the development shell with the inherited environment cleared and executes `bash -c ':'` from an empty temporary directory, so a `shellHook` that writes to its working directory's Git repository changes neither the checked repo nor the caller's. A default package or non-default shell cannot satisfy it. The `formatter` rule evaluates the root formatter without asserting compliance. The shell rule checks startup and command execution, not a fixed tool list or project-specific development tasks.
 
 Run a selected release directly:
 

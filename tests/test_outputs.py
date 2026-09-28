@@ -1,5 +1,6 @@
 """Public-output, development-shell, and formatter rules that `check` applies."""
 
+import contextlib
 import json
 
 from tests.fixtures.cases import ProjectTestCase
@@ -162,6 +163,19 @@ class ShellAndFormatterTests(ProjectTestCase):
             ["nix", "develop"],
             [command[:2] for command in self.check_nix.commands],
         )
+
+    def test_the_shell_hook_does_not_write_to_the_working_directory_or_the_repo(self):
+        # Reason: a shellHook (for example git-hooks.nix) writes to the Git
+        # repository of its working directory, so `check` and `survey` changed
+        # the caller's repository.
+        caller = self.root.parent / "caller"
+        caller.mkdir()
+        self.check_nix.shell_hook = lambda directory: (directory / "hooked").touch()
+        with contextlib.chdir(caller):
+            code, report = self.run_policy("check", str(self.root))
+        self.assertEqual(code, 0, report)
+        self.assertEqual(list(caller.iterdir()), [])
+        self.assertFalse((self.root / "hooked").exists())
 
     def test_a_failing_shell_or_formatter_fails_check(self):
         root = str(self.root.resolve())

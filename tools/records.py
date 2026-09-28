@@ -1,8 +1,9 @@
-"""Load and validate central records."""
+"""Load and validate the data bundled with the checker."""
 
 import json
 from pathlib import Path
 import re
+from typing import NamedTuple
 
 if __package__:
     from . import declarations
@@ -11,9 +12,10 @@ else:
 
 
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
-_REQUIREMENTS_PATH = Path(__file__).resolve().parents[1] / "policy/requirements.json"
+_SOURCE_ROOT = Path(__file__).resolve().parents[1]
+_REQUIREMENTS_PATH = _SOURCE_ROOT / "policy/requirements.json"
+DATA_ROOT = _SOURCE_ROOT / "data"
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
-PROJECT = re.compile(r"[a-z0-9-]+\Z")
 
 
 def unique_mapping(pairs):
@@ -29,54 +31,63 @@ def read_json(path):
     return json.loads(path.read_text(), object_pairs_hook=unique_mapping)
 
 
-def load(root):
-    """Read current records using the executing release's requirements."""
-    pins = read_json(root / "policy/pins.json")
+class Data(NamedTuple):
+    """Pins and listed repos bundled with the executing checker."""
+
+    pins: dict
+    repos: list
+
+
+def load():
+    """Read and validate the pins and listed repos bundled with this checker.
+
+    Every command reads its data through this function. Tests replace the
+    bundled files by patching DATA_ROOT.
+    """
+    return Data(
+        pins=load_pins(DATA_ROOT / "pins.json"),
+        repos=load_repos(DATA_ROOT / "repos.json"),
+    )
+
+
+def load_pins(path):
+    pins = read_json(path)
     if not isinstance(pins, dict) or set(pins) != {
-        "schemaVersion",
+        "stable",
+        "unstable",
         "stableBranch",
-        "approved",
     }:
         raise ValueError(
-            "Pin records require only schemaVersion, stableBranch, and approved"
+            f"{path.name} requires only stable, unstable, and stableBranch"
         )
-    if type(pins.get("schemaVersion")) is not int or pins["schemaVersion"] != 1:
-        raise ValueError("Unsupported policy record schema")
-    if not isinstance(pins.get("stableBranch"), str) or not re.fullmatch(
+    if not isinstance(pins["stableBranch"], str) or not re.fullmatch(
         r"nixos-[0-9]{2}\.[0-9]{2}", pins["stableBranch"]
     ):
         raise ValueError("Expected a stable NixOS update branch")
-    # Requirements belong to the selected checker release, never the live records.
-    config = load_requirements()
-    config["_members"] = load_members(root)
-    if pins["approved"] is not None:
-        validate_pair(pins["approved"])
-    return config, pins
+    validate_pair({"stable": pins["stable"], "unstable": pins["unstable"]})
+    return pins
 
 
-def load_members(root):
-    roster = read_json(root / "policy/members.json")
+def load_repos(path):
+    document = read_json(path)
     if (
-        not isinstance(roster, dict)
-        or set(roster) != {"schemaVersion", "members"}
-        or type(roster["schemaVersion"]) is not int
-        or roster["schemaVersion"] != 1
-        or not isinstance(roster["members"], dict)
+        not isinstance(document, dict)
+        or set(document) != {"repos"}
+        or not isinstance(document["repos"], list)
     ):
-        raise ValueError("Unsupported enrolled-member roster schema")
+        raise ValueError(f"{path.name} requires only a repos list")
     identities = set()
-    for name, repository in roster["members"].items():
+    for repository in document["repos"]:
         if (
-            not PROJECT.fullmatch(name)
-            or not isinstance(repository, str)
+            not isinstance(repository, str)
             or not REPOSITORY.fullmatch(repository)
             or repository.lower() in identities
         ):
             raise ValueError(
-                f"Invalid or duplicate enrolled repository identity: {name}"
+                f"Invalid or duplicate GitHub owner/repository identity: {repository!r}"
             )
         identities.add(repository.lower())
-    return roster["members"]
+    return document["repos"]
 
 
 def load_requirements():

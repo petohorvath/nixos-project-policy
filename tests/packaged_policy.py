@@ -1,4 +1,8 @@
-"""Host fixture: the built release package with controlled Nix commands."""
+"""Host fixture: the built release package with controlled Nix commands.
+
+The package is built from a copy whose bundled data holds fixture pins that
+differ from the committed ones, so every report proves which data it used.
+"""
 
 import json
 import os
@@ -27,10 +31,10 @@ class PackagedPolicyTests(unittest.TestCase):
                 ".git", ".direnv", "__pycache__", ".ruff_cache"
             ),
         )
-        shutil.copytree(
-            fixture.baseline / "policy", authority / "policy", dirs_exist_ok=True
-        )
-        fixture.baseline = authority
+        committed = records.read_json(policy.SOURCE_ROOT / "data/pins.json")
+        self.assertNotEqual({channel: committed[channel] for channel in PAIR}, PAIR)
+        fixture.write_data(authority / "data")
+        self.authority = authority
         fixture.commit(authority)
         built = json.loads(
             self.command(
@@ -91,13 +95,10 @@ class PackagedPolicyTests(unittest.TestCase):
     def call(self, *arguments, system="x86_64-linux"):
         result = json.loads(
             self.command(
-                [
-                    self.program,
-                    "--policy-root",
-                    str(self.fixture.baseline),
-                    *map(str, arguments),
-                ],
+                [self.program, *map(str, arguments)],
                 environment={**self.environment, "POLICY_PACKAGE_SYSTEM": system},
+                # No checkout of the policy repository is reachable from here.
+                cwd=self.fixture.workspace,
             )
         )
         self.assertNotIn(result.get("status"), {"error", "fail"}, result)
@@ -122,7 +123,7 @@ class PackagedPolicyTests(unittest.TestCase):
                     channel,
                     system=system,
                 )
-                self.assertEqual(report["pinStatus"], "approved")
+                self.assertEqual(report["expectedRevision"], PAIR[channel])
                 self.assertEqual(report["resolvedRevision"], PAIR[channel])
                 self.assertNotIn("artifacts", report)
                 self.assertNotIn("policyRecordsDigest", report)
@@ -137,12 +138,14 @@ class PackagedPolicyTests(unittest.TestCase):
                 environment={**self.environment, "POLICY_PACKAGE_SYSTEM": system},
             )
 
-    def test_packaged_member_checks(self):
+    def test_packaged_checker_uses_bundled_data_without_a_data_checkout(self):
         fixture = self.fixture
         self.assertIn("0.4.0", self.command([self.program, "--version"]))
         self.command([self.program, "--help"])
-        self.call("validate")
-        baseline = policy.fingerprints(fixture.baseline)
+        report = self.call("validate")
+        self.assertEqual(report["pins"], fixture.pins)
+        self.assertEqual(report["repos"], ["owner/example", "owner/alpha"])
+        baseline = policy.fingerprints(self.authority)
         alpha = fixture.roots["alpha"]
         self.gates(alpha, "alpha", enrolled="enrolled")
         pending = fixture.workspace / "pending"
@@ -154,4 +157,4 @@ class PackagedPolicyTests(unittest.TestCase):
         write_json(pending / ".github/workflows/policy.yml", workflow)
         fixture.commit(pending)
         self.gates(pending, "pending", enrolled="not-enrolled")
-        self.assertEqual(policy.fingerprints(fixture.baseline), baseline)
+        self.assertEqual(policy.fingerprints(self.authority), baseline)

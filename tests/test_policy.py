@@ -16,6 +16,7 @@ from tools import policy, records
 
 
 from tests.fixtures.cases import ProjectTestCase
+from tests.fixtures.cli import invoke
 from tests.fixtures.compatibility import CompatibilityFixture
 from tests.fixtures.data import (
     CHECKER,
@@ -96,7 +97,7 @@ class PinStateTests(unittest.TestCase):
 
 class ProjectTests(ProjectTestCase):
     def test_pending_enrollment_does_not_prevent_full_checks(self):
-        self.members.clear()
+        self.repos.clear()
 
         status, report = self.run_policy(
             "check", str(self.root), "--project", "example"
@@ -149,9 +150,9 @@ class ProjectTests(ProjectTestCase):
     def test_checks_report_enrollment_separately(self):
         for enrolled in [False, True]:
             with self.subTest(enrolled=enrolled):
-                self.members.clear()
+                self.repos.clear()
                 if enrolled:
-                    self.members["example"] = "owner/example"
+                    self.repos.append("owner/example")
                 status, report = self.run_policy(
                     "check", str(self.root), "--project", "example"
                 )
@@ -166,7 +167,7 @@ class ProjectTests(ProjectTestCase):
         command = ("check", str(self.root), "--project", "example")
         status, before = self.run_policy(*command)
         self.assertEqual(status, 0)
-        self.pins["approved"] = NEW_PAIR
+        self.pins.update(NEW_PAIR)
         status, stale = self.run_policy(*command)
         self.assertEqual(status, 1)
         self.assertTrue(any("allowed pin pair" in issue for issue in stale["issues"]))
@@ -212,26 +213,6 @@ class ProjectTests(ProjectTestCase):
                 self.assertTrue(
                     any("AGENTS.md" in issue for issue in self.inspect()["issues"])
                 )
-
-    def test_live_records_cannot_override_release_requirements(self):
-        status, _ = self.run_policy("validate")
-        self.assertEqual(status, 0)
-        root = Path(self.temp.name) / "records"
-        (root / "policy/requirements.json").write_text(
-            json.dumps(
-                {
-                    "schemaVersion": 1,
-                    "policyRepository": "attacker/policy",
-                    "ci": {},
-                }
-            )
-        )
-        config, _ = records.load(root)
-        requirements = json.loads(
-            (policy.SOURCE_ROOT / "policy/requirements.json").read_text()
-        )
-        for field in ["policyRepository", "ci"]:
-            self.assertEqual(config[field], requirements[field])
 
     def test_enrolled_members_derive_checks_without_recording_mandatory_names(self):
         self.assertEqual(self.run_policy("validate")[0], 0)
@@ -347,9 +328,9 @@ class ProjectTests(ProjectTestCase):
         del self.workflow["jobs"]["policy"]["with"]["required_architectures"]
         self.declare()
         for enrolled in [False, True]:
-            self.members.clear()
+            self.repos.clear()
             if enrolled:
-                self.members["example"] = "owner/example"
+                self.repos.append("owner/example")
             status, report = self.run_policy("ci", "--project", "example")
             self.assertEqual(status, 2, report)
             self.assertIn("required_architectures", report["error"])
@@ -386,8 +367,7 @@ class ProjectTests(ProjectTestCase):
                 self.assertNotIn("matrix", report)
 
     def test_ci_plan_does_not_claim_pin_approval_or_adoption(self):
-        self.members.clear()
-        self.pins["approved"] = None
+        self.repos.clear()
         status, report = self.run_policy("ci", "--project", "example")
         self.assertEqual(status, 0)
         self.assertEqual(report["status"], "planned")
@@ -410,11 +390,17 @@ class ProjectTests(ProjectTestCase):
         self.assertEqual(status, 0, report)
         self.assertEqual(report["requiredChecks"], checks)
 
-    def test_unknown_record_schema_is_rejected(self):
-        self.pins["schemaVersion"] = 0
-        status, report = self.run_policy("validate")
-        self.assertEqual(status, 2)
-        self.assertIn("Unsupported policy record schema", report["error"])
+    def test_malformed_bundled_data_fails_every_command(self):
+        self.pins["approved"] = PAIR
+        for command in [
+            ("validate",),
+            ("ci", "--project", "example"),
+            ("check", str(self.root), "--project", "example"),
+        ]:
+            with self.subTest(command=command[0]):
+                status, report = self.run_policy(*command)
+                self.assertEqual(status, 2, report)
+                self.assertIn("pins.json requires only", report["error"])
 
     def test_local_check_cannot_use_a_different_policy_release(self):
         self.workflow["jobs"]["policy"]["uses"] = (
@@ -477,13 +463,7 @@ class ProjectTests(ProjectTestCase):
             code, report = self.run_policy("host-checks", str(self.root))
             self.assertEqual(code, 1, report)
 
-    def test_pre_enrollment_cannot_waive_missing_approval_or_policy_version(self):
-        self.pins["approved"] = None
-        status, report = self.run_policy(
-            "check", str(self.root), "--project", "example"
-        )
-        self.assertEqual(status, 1, report)
-        self.pins["approved"] = PAIR
+    def test_pre_enrollment_cannot_waive_missing_policy_version(self):
         del self.workflow["jobs"]["policy"]["with"]["policy_version"]
         self.declare()
         status, report = self.run_policy(
@@ -584,14 +564,14 @@ class ProjectTests(ProjectTestCase):
         self.assertEqual(self.inspect()["status"], "pass")
 
     def test_mixed_shared_channels_cannot_pass(self):
-        self.pins["approved"] = NEW_PAIR
+        self.pins.update(NEW_PAIR)
         lock = lockfile()
         lock["nodes"]["rolling"]["locked"]["rev"] = NEW_UNSTABLE
         self.write("examples/flake.lock", json.dumps(lock))
         self.assertEqual(self.inspect()["status"], "fail")
 
     def test_separate_locks_cannot_select_different_pairs(self):
-        self.pins["approved"] = NEW_PAIR
+        self.pins.update(NEW_PAIR)
         lock = lockfile()
         lock["nodes"]["arbitrary-node"]["locked"]["rev"] = NEW_STABLE
         lock["nodes"]["rolling"]["locked"]["rev"] = NEW_UNSTABLE
@@ -620,7 +600,7 @@ class ProjectTests(ProjectTestCase):
         )
 
     def test_trailing_slash_git_sources_retain_policy_pin_and_dependency_checks(self):
-        self.members["other"] = "owner/other"
+        self.repos.append("owner/other")
         for repository in [POLICY_REPO, "NixOS/nixpkgs", "owner/other"]:
             with self.subTest(repository=repository):
                 lock = lockfile()
@@ -645,15 +625,6 @@ class ProjectTests(ProjectTestCase):
                     self.assertEqual(report["dependencies"], ["other"])
                 else:
                     self.assertEqual(code, 1, report)
-
-    def test_missing_approval_fails_closed(self):
-        self.pins["approved"] = None
-        self.assertTrue(
-            any(
-                "no approved family baseline" in issue
-                for issue in self.inspect()["issues"]
-            )
-        )
 
     def test_conditional_or_unpinned_callers_fail(self):
         self.workflow["jobs"]["policy"]["if"] = "false"
@@ -791,38 +762,6 @@ class ProjectTests(ProjectTestCase):
         )
         self.assertTrue(any("AGENTS.md" in issue for issue in self.inspect()["issues"]))
 
-    def test_parent_policy_root_in_markdown_fails(self):
-        for command in [
-            "--policy-root ../nixos-project-policy-records check .",
-            "--policy-root=../records check .",
-            '--policy-root "../records" check .',
-            "--policy-root \\\n  ../records \\\n  check .",
-            "--policy-root .. check .",
-        ]:
-            with self.subTest(command=command):
-                self.write(
-                    "docs/development.md", f"```sh\nnix run .# -- {command}\n```\n"
-                )
-                self.assertIn(
-                    "documentation: docs/development.md passes a ../ path to "
-                    "--policy-root; clone records into a mktemp -d directory",
-                    self.inspect()["issues"],
-                )
-
-    def test_other_policy_roots_in_markdown_pass(self):
-        for command in [
-            '--policy-root "$RECORDS_DIR" check ../member',
-            "--policy-root ./records check ../member",
-            "--policy-root ..records check .",
-        ]:
-            with self.subTest(command=command):
-                self.write(
-                    "docs/development.md", f"```sh\nnix run .# -- {command}\n```\n"
-                )
-                self.assertFalse(
-                    any("--policy-root" in issue for issue in self.inspect()["issues"])
-                )
-
     def test_wrong_project_cannot_select_other_vm_requirements(self):
         self.workflow["jobs"]["policy"]["with"]["project"] = "another-project"
         self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
@@ -831,7 +770,7 @@ class ProjectTests(ProjectTestCase):
 
 class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
     def test_unenrolled_compatibility_uses_member_settings_and_approved_pins(self):
-        self.members.clear()
+        self.repos.clear()
         code, report = self.compatibility()
         self.assertEqual(code, 0, report)
         self.assertEqual(report["enrollment"], "not-enrolled")
@@ -978,12 +917,6 @@ class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
         self.assertEqual(code, 1, report)
         self.assertIn("Invalid compatibility host", " ".join(report["issues"]))
 
-    def test_missing_approval_cannot_run(self):
-        self.pins["approved"] = None
-        code, report = self.compatibility()
-        self.assertEqual(code, 1, report)
-        self.assertEqual(report["commands"], [])
-
     def test_lock_changes_are_reported_as_failure(self):
         original = self.run_command
 
@@ -1017,8 +950,8 @@ class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
 
         def change_records(command, **kwargs):
             if command[:3] == ["nix", "flake", "metadata"]:
-                records = Path(self.temp.name) / "records/policy/pins.json"
-                records.write_text(json.dumps({**self.pins, "approved": NEW_PAIR}))
+                pins = Path(self.temp.name) / "data/pins.json"
+                pins.write_text(json.dumps({**self.pins, **NEW_PAIR}))
             return original(command, **kwargs)
 
         code, before = self.compatibility()
@@ -1045,23 +978,29 @@ class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
 
 
 class RecordTests(unittest.TestCase):
-    def test_member_commands_require_explicit_current_records(self):
+    def test_policy_root_option_is_removed(self):
         for args in [
-            ["check", ".", "--project", "example"],
-            ["vm", ".", "--project", "example"],
-            ["compatibility", ".", "--project", "example", "--channel", "stable"],
-            ["ci", "--project", "example"],
+            ["--policy-root", ".", "validate"],
+            ["--policy-root", ".", "check", ".", "--project", "example"],
+            ["ci", ".", "--project", "example", "--policy-root", "."],
         ]:
             with (
-                self.subTest(command=args[0]),
-                contextlib.redirect_stderr(io.StringIO()) as errors,
-                contextlib.redirect_stdout(io.StringIO()) as output,
+                self.subTest(args=args),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit) as error,
             ):
-                self.assertEqual(policy.main(args), 2)
-                self.assertIn(
-                    "requires --policy-root",
-                    json.loads(output.getvalue() or errors.getvalue())["error"],
-                )
+                policy.main(args)
+            self.assertEqual(error.exception.code, 2)
+
+    def test_validate_passes_on_the_committed_bundled_data(self):
+        code, report = invoke("validate")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["status"], "valid")
+        self.assertEqual(
+            report["repos"],
+            ["petohorvath/nixos-cross-config", "petohorvath/nixos-registry"],
+        )
+        self.assertEqual(set(report["pins"]), {"stable", "unstable", "stableBranch"})
 
     def test_cli_version_matches_release_version_file(self):
         output = io.StringIO()
@@ -1071,29 +1010,6 @@ class RecordTests(unittest.TestCase):
         version = (policy.SOURCE_ROOT / "VERSION").read_text().strip()
         self.assertEqual(output.getvalue().strip(), f"nixos-project-policy {version}")
 
-    def test_separate_record_snapshot_is_used_and_identified(self):
-        source = Path(__file__).resolve().parents[1]
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "policy").mkdir()
-            (root / "policy/members.json").write_text(
-                (source / "policy/members.json").read_text()
-            )
-            pins = {
-                "schemaVersion": 1,
-                "stableBranch": "nixos-26.05",
-                "approved": PAIR,
-            }
-            (root / "policy/pins.json").write_text(json.dumps(pins))
-            output = io.StringIO()
-            with contextlib.redirect_stdout(output):
-                status = policy.main(["--policy-root", str(root), "validate"])
-            report = json.loads(output.getvalue())
-            self.assertEqual(status, 0)
-            self.assertTrue(report["approvedPins"])
-            self.assertNotIn("policyRecordsDigest", report)
-            self.assertNotIn("policyRecordsRevision", report)
-
     def test_audit_and_agreement_commands_do_not_exist(self):
         for command in ["audit", "agreement"]:
             with (
@@ -1101,7 +1017,7 @@ class RecordTests(unittest.TestCase):
                 contextlib.redirect_stderr(io.StringIO()),
                 self.assertRaises(SystemExit) as error,
             ):
-                policy.main(["--policy-root", ".", command, "."])
+                policy.main([command, "."])
             self.assertEqual(error.exception.code, 2)
 
 
@@ -1174,7 +1090,7 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertEqual(job["runs-on"], "${{ matrix.runner }}")
         categories = {
-            "--policy-root ./policy-state check ./project": "Compliance",
+            "-- check ./project": "Compliance",
             "nix flake check ./project": "Project tests",
         }
         for command, category in categories.items():
@@ -1203,23 +1119,9 @@ class WorkflowTests(unittest.TestCase):
         step = next(step for step in records_job["steps"] if step.get("id") == "ci")
         self.assertEqual(step["env"]["PROJECT"], "${{ inputs.project }}")
         self.assertIn("--no-update-lock-file ./policy", step["run"])
-        self.assertIn("--policy-root ./policy-state", step["run"])
+        self.assertNotIn("--policy-root", step["run"])
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            records = root / "policy-state/policy"
-            records.mkdir(parents=True)
-            (records / "pins.json").write_text(
-                json.dumps(
-                    {
-                        "schemaVersion": 1,
-                        "stableBranch": "nixos-26.05",
-                        "approved": PAIR,
-                    }
-                )
-            )
-            (records / "members.json").write_text(
-                json.dumps({"schemaVersion": 1, "members": {}})
-            )
             stub = root / "nix"
             stub.write_text(
                 f"#!{sys.executable}\nimport os, sys\n"
@@ -1361,12 +1263,12 @@ class WorkflowTests(unittest.TestCase):
                     self.assertEqual(result.returncode == 0, passes, result.stderr)
                     self.assertEqual(
                         output.read_text(),
-                        f"revision={SOURCE}\nchecker_revision={CHECKER}\nproject_revision={SOURCE}\n"
+                        f"checker_revision={CHECKER}\nproject_revision={SOURCE}\n"
                         if passes
                         else "",
                     )
 
-    def test_all_member_jobs_use_one_release_and_record_snapshot(self):
+    def test_all_member_jobs_use_one_release_without_a_data_checkout(self):
         workflow = yaml.load(
             (policy.SOURCE_ROOT / ".github/workflows/check.yml").read_text(),
             Loader=yaml.BaseLoader,
@@ -1383,12 +1285,13 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual(
                     checkouts["policy"], "${{ needs.records.outputs.checker_revision }}"
                 )
-                self.assertEqual(
-                    checkouts["policy-state"], "${{ needs.records.outputs.revision }}"
-                )
+                self.assertEqual(set(checkouts), {"policy", "project"})
                 for step in jobs[job]["steps"]:
                     if "nix run" in step.get("run", ""):
-                        self.assertIn("--policy-root ./policy-state", step["run"])
+                        self.assertIn(
+                            "nix run --no-update-lock-file ./policy -- ", step["run"]
+                        )
+                        self.assertNotIn("--policy-root", step["run"])
 
     def test_compatibility_jobs_use_the_generated_member_matrix(self):
         workflow = yaml.load(
@@ -1419,7 +1322,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("continue-on-error", step)
         self.assertIn('--channel "$CHANNEL"', step["run"])
         self.assertEqual(step["env"]["CHANNEL"], "${{ matrix.channel }}")
-        self.assertIn("--policy-root ./policy-state", step["run"])
+        self.assertNotIn("--policy-root", step["run"])
         self.assertNotIn("||", step["run"])
         self.assertNotIn("--output", step["run"])
         self.assertFalse(
@@ -1442,7 +1345,7 @@ class WorkflowTests(unittest.TestCase):
         commands = tests_step["run"].strip().splitlines()
         self.assertEqual(
             commands[0],
-            "nix run --no-update-lock-file ./policy -- --policy-root ./policy-state host-checks ./project",
+            "nix run --no-update-lock-file ./policy -- host-checks ./project",
         )
         self.assertEqual(
             commands[1],

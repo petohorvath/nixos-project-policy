@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 
+from tests.fixtures.cli import checker_command
 from tools import policy, records
 
 
@@ -233,20 +234,12 @@ class NixCompatibilityTests(unittest.TestCase):
                     "test: Create compatibility fixture",
                 ]
             )
-            record_directory = workspace / "records/policy"
-            record_directory.mkdir(parents=True)
-            (record_directory / "pins.json").write_text(
-                json.dumps(
-                    {
-                        "schemaVersion": 1,
-                        "stableBranch": "nixos-26.05",
-                        "approved": pins,
-                    }
-                )
+            data = workspace / "data"
+            data.mkdir()
+            (data / "pins.json").write_text(
+                json.dumps({"stableBranch": "nixos-26.05", **pins})
             )
-            (record_directory / "members.json").write_text(
-                json.dumps({"schemaVersion": 1, "members": {}})
-            )
+            (data / "repos.json").write_text(json.dumps({"repos": []}))
             lock_before = (project / "flake.lock").read_bytes()
             self.run_command(
                 [
@@ -263,10 +256,7 @@ class NixCompatibilityTests(unittest.TestCase):
                     report = json.loads(
                         self.run_command(
                             [
-                                sys.executable,
-                                str(policy.SOURCE_ROOT / "tools/policy.py"),
-                                "--policy-root",
-                                str(record_directory.parent),
+                                *checker_command(data),
                                 "compatibility",
                                 str(project),
                                 "--project",

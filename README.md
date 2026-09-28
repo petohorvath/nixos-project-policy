@@ -6,7 +6,7 @@ Shared development and maintenance rules for independent Nix and NixOS projects.
 
 Development shells, formatting, and checks support `x86_64-linux` and `aarch64-linux`. The flake exposes the checker package and default app for every system in its pinned nixpkgs package sets. This repository has no VM tests.
 
-Support starts at v0.4.0. [VERSION](VERSION) identifies the current checker version. Publish new releases through the [release procedure](docs/maintenance.md#releases). Policy releases contain the rules and checker code. Current [records on `main`](docs/maintenance.md#records) contain shared pins, the stable update branch, and member enrollment.
+Support starts at v0.4.0. [VERSION](VERSION) identifies the current checker version. Publish new releases through the [release procedure](docs/maintenance.md#releases). Policy releases contain the rules, the checker code, and the [checker data](docs/maintenance.md#records): the stable and unstable pins, the stable update branch, and the listed repos.
 
 ## Quickstart
 
@@ -15,10 +15,10 @@ Install the [host prerequisites](docs/development.md#host-prerequisites), then r
 ```bash
 direnv allow
 nix flake check --no-update-lock-file --print-build-logs
-nix run --no-update-lock-file .# -- --policy-root . validate
+nix run --no-update-lock-file .# -- validate
 ```
 
-Use `nix develop --no-update-lock-file` to enter the shell without direnv. `nix flake check` runs checker tests, record validation, formatting, and lint checks for the host architecture. `validate` checks the selected record checkout and reports whether it contains an approved pin pair; it does not check member compliance or approve pins.
+Use `nix develop --no-update-lock-file` to enter the shell without direnv. `nix flake check` runs checker tests, record validation, formatting, and lint checks for the host architecture. `validate` checks the checker's bundled pins and repo list and prints them; it does not check member compliance.
 
 ## Member projects
 
@@ -26,19 +26,14 @@ Use the [policy caller template](templates/policy-caller.yml) to select a publis
 
 Members choose their root `nixpkgs` revision independently. Policy CI runs separate compliance, committed-lock project tests, and stable/unstable compatibility jobs on every required architecture. Compatibility jobs override the root input with the approved shared pins and run full root checks. Other nixpkgs lock scopes remain subject to shared-pin requirements. Declared VM tests run separately.
 
-For local checks, run the member's selected checker release with an explicit trusted checkout of current records. Clone the records from `main` into a temporary directory, and remove it after the last command that uses it:
+For local checks, run the member's selected checker release. It reads the pins and repo list bundled with it, so no other checkout is needed:
 
 ```bash
-PROJECT_RECORDS_DIR=$(mktemp -d)
-git clone --branch main --single-branch \
-  https://github.com/petohorvath/nixos-project-policy.git "$PROJECT_RECORDS_DIR"
 nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
-  --policy-root "$PROJECT_RECORDS_DIR" \
   check ../PROJECT --project PROJECT --shell
-rm -rf "${PROJECT_RECORDS_DIR:?}"
 ```
 
-Replace the tag with the member's selected release and `PROJECT` with its name. In the variable name, write the name in upper case with underscores, such as `NIXOS_REGISTRY_RECORDS_DIR`. The command does not fetch records, so clone them again for each check of current approval. Keep the records out of sibling directories: `check` rejects member Markdown that passes a `../` path to `--policy-root`. `check` inspects structure, locks, and the policy caller. `--shell` also smoke-tests the default development shell and evaluates the formatter. Compatibility execution requires separate `compatibility` commands for `stable` and `unstable`.
+Replace the tag with the member's selected release and `PROJECT` with its name. `check` inspects structure, locks, and the policy caller. `--shell` also smoke-tests the default development shell and evaluates the formatter. Compatibility execution requires separate `compatibility` commands for `stable` and `unstable`.
 
 The checker also plans CI gates and executes declared VM targets. See the [checker reference](docs/checker.md#commands) for commands, JSON results, and validation limits.
 

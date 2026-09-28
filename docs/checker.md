@@ -4,19 +4,19 @@ The checker supports v0.4.0 and later. Member callers and consumed member revisi
 
 Run the checker from its selected policy release or packaged `nixos-project-policy` executable. Use `--version` to identify it.
 
-`--policy-root PATH` selects a trusted record checkout. It is required for member checks, CI planning, compatibility, and VM execution. These commands do not default to a release's bundled records. Other commands default to bundled records.
+Every command reads the pins and the repo list bundled with the executing checker, in `data/pins.json` and `data/repos.json`. No command takes a separate data checkout.
 
 ## Commands
 
 Use this prefix with the commands below:
 
 ```bash
-nix run --no-update-lock-file .# -- --policy-root . COMMAND
+nix run --no-update-lock-file .# -- COMMAND
 ```
 
 | Command                                              | Behavior                                                                                         |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `validate`                                           | Check record structure and report whether pins are approved.                                     |
+| `validate`                                           | Check the bundled pins and repo list and print them.                                             |
 | `ci PATH --project NAME`                             | Report CI matrices and required status names. Do not execute checks.                             |
 | `check PATH --project NAME`                          | Inspect a member checkout against its selected policy and approved pins.                         |
 | `check PATH --project NAME --shell`                  | Also smoke-test the member shell and evaluate its root formatter.                                |
@@ -27,25 +27,18 @@ nix run --no-update-lock-file .# -- --policy-root . COMMAND
 
 For a shell-only probe, run `nix run --no-update-lock-file .# -- shell PATH`. This first evaluates `devShells.<host-system>.default.drvPath`, enters the development shell with the inherited environment cleared, and executes `bash -c ':'`. It also evaluates the root formatter without asserting compliance. A default package or non-default shell cannot satisfy the development-shell requirement. Policy CI uses it as a host smoke test. The probe checks startup and command execution, not a fixed tool list or project-specific development tasks.
 
-Use a selected release with current records cloned from `main` into a temporary directory:
+Run a selected release directly:
 
 ```bash
-MEMBER_RECORDS_DIR=$(mktemp -d)
-git clone --branch main --single-branch \
-  https://github.com/petohorvath/nixos-project-policy.git "$MEMBER_RECORDS_DIR"
 nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
-  --policy-root "$MEMBER_RECORDS_DIR" \
   check ../member --project member --shell
-rm -rf "${MEMBER_RECORDS_DIR:?}"
 ```
-
-Name the variable after the member, such as `NIXOS_REGISTRY_RECORDS_DIR`. Run every command that uses it in the same shell, before the cleanup command. Local commands neither fetch records nor prove that a checkout is current.
 
 `check`, `ci`, `compatibility`, and `vm` require one member caller selecting the executing checker release. The caller's `policy_version` must match its immutable workflow reference. Enrollment does not change this requirement.
 
 ### Results
 
-Record and member commands print JSON. Reports include `checkerVersion`. Member reports also identify `policyVersion`, validated `memberSettings`, and the member commit when available. Reusable CI logs the captured checker and record commits.
+Record and member commands print JSON. Reports include `checkerVersion`. Member reports also identify `policyVersion`, validated `memberSettings`, and the member commit when available. Reusable CI logs the checker and project commits.
 
 | Exit | Meaning                                                                             |
 | ---- | ----------------------------------------------------------------------------------- |
@@ -83,7 +76,7 @@ nix flake check PATH --print-build-logs \
 
 It does not use `--no-build`. Nix can satisfy builds from its cache; success does not prove every test process ran again. See the Nix [check options](https://nix.dev/manual/nix/2.34/command-ref/new-cli/nix3-flake-check.html) and [metadata output](https://nix.dev/manual/nix/2.34/command-ref/new-cli/nix3-flake-metadata.html).
 
-The runner tests the exact `approved` pair from the supplied record snapshot. Success returns `pass` with `pinStatus: "approved"`; a missing pair fails. This field describes the supplied records, not whether they have merged to `main`. Testing proposed records does not grant central approval.
+The runner tests the exact pin from the checker's bundled `data/pins.json`. Success returns `pass` with `pinStatus: "approved"`.
 
 Reports include:
 
@@ -114,27 +107,27 @@ The policy flake exposes its executable for every system in its pinned nixpkgs p
 
 ### Record ownership
 
-| File                       | Schema | Contents                                                              |
-| -------------------------- | ------ | --------------------------------------------------------------------- |
-| `policy/members.json`      | 1      | `members` maps enrolled names to GitHub `owner/repository` identities |
-| `policy/pins.json`         | 1      | Stable update branch, approved stable/unstable pair                   |
-| `policy/requirements.json` | 1      | Policy repository identity and release-owned CI requirements          |
+| File                       | Contents                                                          |
+| -------------------------- | ----------------------------------------------------------------- |
+| `data/pins.json`           | `stable` and `unstable` pins and the `stableBranch` update branch |
+| `data/repos.json`          | `repos`: a list of GitHub `owner/repository` identities           |
+| `policy/requirements.json` | Policy repository identity and release-owned CI requirements      |
 
-The member roster contains no copied selections, settings, or adoption flags. Names and repository identities must be unique; repository comparison ignores case. Missing, malformed, or duplicate-key records fail inspection. An empty roster is valid and distinct from missing data.
+Repository identities must be unique; comparison ignores case. A member counts as enrolled when a listed identity's repository name equals its project name. Missing, malformed, or duplicate-key files fail every command with exit 2. An empty repo list is valid.
 
-Reviewed central changes control enrollment and removal. Ordinary upgrades and checks before enrollment leave the roster unchanged.
+`policy/pins.json` and `policy/members.json` remain on `main` unchanged for v0.4.0 callers. The checker no longer reads them.
 
 ### Release requirements
 
-The checker reads `requirements.json` beside its own code, independently of `--policy-root`. Current records cannot replace release requirements or policy repository identity. Named runner systems come from `ci.runners`; there is no separate systems list.
+The checker reads `requirements.json` beside its own code. Named runner systems come from `ci.runners`; there is no separate systems list.
 
 The `ci` fields define the caller name, common `requiredChecks`, per-architecture `architectureChecks`, `compatibilityChecks` templates, `runners`, `vmRunners`, and the conditional `vmCheck` status template. Templates use `{architecture}`. The checker combines these fields with member settings to produce ordinary and compatibility matrices and the complete gate list. Additional gate names do not create workflow jobs.
 
 ### Shared pins
 
-`pins.json` contains only `schemaVersion`, `stableBranch`, and `approved`. The stable branch names the NixOS update source. The approved pair contains exact `stable` and `unstable` commits, or is null before initial approval. The root bootstrap lock does not approve shared pins. Changes to member commits require no pin-record update.
+`data/pins.json` contains only `stable`, `unstable`, and `stableBranch`. The pins are exact 40-character lowercase commits. The stable branch names the NixOS update source.
 
-Static checks compare shared-pin lock scopes against this single pair, excluding the independently selected root lock node. Compatibility execution tests both revisions through root input overrides. Proposed pairs can be tested with a reviewed record checkout supplied through `--policy-root`. Normal member CI captures records from `main`.
+Static checks compare shared-pin lock scopes against this pair, excluding the independently selected root lock node. Compatibility execution tests both revisions through root input overrides.
 
 ## Implemented coverage
 
@@ -144,7 +137,7 @@ Root `nixpkgs` must resolve to an immutable `NixOS/nixpkgs` flake. Its revision 
 
 Additional root inputs, distinct transitive nodes, and independently locked examples require one allowed pair across the project. In these scopes, first-party stable inputs use `nixpkgs`; unstable inputs use `nixpkgs-unstable`. An absent input need not be added. Transitive input names and lock node identifiers are unrestricted. Branch declarations identify stable/unstable selections; exact revisions can identify them when they match one allowed value uniquely.
 
-Structural checks inspect the root development entrypoint, required files, links to the selected release's `POLICY.md`, and `--policy-root` paths in Markdown files. A `--policy-root` value of `..` or one starting with `../` fails, because it places a record checkout beside the member. The checker requires a root `README.md` without inspecting its content or headings.
+Structural checks inspect the root development entrypoint, required files, and links to the selected release's `POLICY.md`. The checker requires a root `README.md` without inspecting its content or headings.
 
 Caller validation requires:
 

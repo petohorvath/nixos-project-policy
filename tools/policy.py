@@ -25,7 +25,6 @@ repository_identity = locks.repository_identity
 
 REVISION = records.REVISION
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
-PARENT_POLICY_ROOT = re.compile(r"--policy-root(?:[\s=]|\\\n)+[\"']?\.\.(?![^/\s\"'])")
 EXCLUDED_DIRS = {
     ".git",
     ".direnv",
@@ -40,11 +39,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="nixos-project-policy", description=__doc__)
     version = (SOURCE_ROOT / "VERSION").read_text().strip()
     parser.add_argument("--version", action="version", version=f"%(prog)s {version}")
-    parser.add_argument(
-        "--policy-root", type=Path, help="Trusted checkout of current central records"
-    )
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("validate", help="Validate the central records")
+    commands.add_parser("validate", help="Validate the bundled pins and repo list")
     ci = commands.add_parser(
         "ci", help="Report a member's CI matrix and required gates"
     )
@@ -91,16 +87,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         declarations.require_policy_version(f"v{version}")
-        if (
-            args.command in {"check", "vm", "compatibility", "ci"}
-            and args.policy_root is None
-        ):
-            raise ValueError(
-                f"{args.command} requires --policy-root with current central records; "
-                "a policy release's bundled pins do not establish current approval"
-            )
-        records_root = args.policy_root or SOURCE_ROOT
-        config, pins = records.load(records_root)
+        data = records.load()
+        config = records.load_requirements()
         project = None
         if args.command in {"check", "ci", "compatibility", "vm"}:
             project = member_project(
@@ -112,17 +100,14 @@ def main(argv=None):
                 else None,
             )
         if args.command == "validate":
-            result = {
-                "status": "valid",
-                "approvedPins": pins["approved"] is not None,
-            }
+            result = {"status": "valid", "pins": data.pins, "repos": data.repos}
         elif args.command == "ci":
             result = {
                 "status": "planned",
                 "project": args.project,
                 "policyVersion": project["policyVersion"],
                 "memberSettings": member_settings(project),
-                "enrollment": enrollment(config, args.project),
+                "enrollment": enrollment(data.repos, args.project),
                 "revision": git_revision(args.project_dir),
                 **ci_plan(project, config["ci"]),
             }
@@ -140,7 +125,7 @@ def main(argv=None):
                 args.project_dir,
                 args.project,
                 config,
-                pins,
+                data,
                 args.channel,
                 project=project,
             )
@@ -163,14 +148,14 @@ def main(argv=None):
                 "targets": targets,
                 "policyVersion": project["policyVersion"],
                 "memberSettings": member_settings(project),
-                "enrollment": enrollment(config, args.project),
+                "enrollment": enrollment(data.repos, args.project),
             }
         else:
             result = inspect_project(
                 args.project_dir,
                 args.project,
                 config,
-                pins,
+                data,
                 project=project,
             )
             if args.shell:
@@ -229,17 +214,20 @@ def member_settings(project):
     }
 
 
-def enrollment(config, name):
-    return "enrolled" if name in config["_members"] else "not-enrolled"
+def repo_name(repository):
+    return repository.rsplit("/", 1)[1].lower()
 
 
-def inspect_project(root, name, config, pins, *, project):
+def enrollment(repos, name):
+    listed = {repo_name(repository) for repository in repos}
+    return "enrolled" if name.lower() in listed else "not-enrolled"
+
+
+def inspect_project(root, name, config, data, *, project):
     root = root.resolve()
     issues = check_structure(root, config, project["policyVersion"])
     revision = git_revision(root)
-    pairs = [pins["approved"]] if pins["approved"] else []
-    if not pairs:
-        issues.append("pins: no approved family baseline; compliance cannot pass yet")
+    pairs = [{channel: data.pins[channel] for channel in ("stable", "unstable")}]
     observations = []
     shared_observations = []
     dependencies = set()
@@ -247,7 +235,7 @@ def inspect_project(root, name, config, pins, *, project):
     if root / "flake.lock" not in locks:
         issues.append("pins: missing root flake.lock")
     known_repos = {
-        repository.lower(): name for name, repository in config["_members"].items()
+        repository.lower(): repo_name(repository) for repository in data.repos
     }
     for path in locks:
         lock = LockGraph(records.read_json(path))
@@ -338,7 +326,7 @@ def inspect_project(root, name, config, pins, *, project):
         "revision": revision,
         "status": status,
         "compatibility": "not-run",
-        "enrollment": enrollment(config, name),
+        "enrollment": enrollment(data.repos, name),
         "issues": issues,
         "pins": observations,
         "dependencies": sorted(dependencies),
@@ -408,23 +396,17 @@ def check_structure(root, config, version):
             issues.append(
                 f"documentation: {file} needs only the selected policy release's POLICY.md links"
             )
-    for path in source_files(root, "*.md"):
-        if PARENT_POLICY_ROOT.search(path.read_text()):
-            issues.append(
-                f"documentation: {path.relative_to(root)} passes a ../ path to --policy-root; "
-                "clone records into a mktemp -d directory"
-            )
     return issues
 
 
-def check_compatibility(root, name, config, pins, channel, *, project=None):
+def check_compatibility(root, name, config, data, channel, *, project=None):
     root = root.resolve()
     project = project or member_project(root, name, config)
     result = {
         "project": name,
         "policyVersion": project["policyVersion"],
         "memberSettings": member_settings(project),
-        "enrollment": enrollment(config, name),
+        "enrollment": enrollment(data.repos, name),
         "revision": git_revision(root),
         "channel": channel,
         "system": None,
@@ -448,11 +430,8 @@ def check_compatibility(root, name, config, pins, channel, *, project=None):
         if before != committed_lock:
             raise ValueError("Compatibility requires the committed root lock")
         selected_nixpkgs(LockGraph(json.loads(before)))
-        pair = pins["approved"]
-        if pair is None:
-            raise ValueError("No approved family baseline for compatibility")
         result["pinStatus"] = "approved"
-        revision = pair[channel]
+        revision = data.pins[channel]
         result["expectedRevision"] = revision
         result["system"] = compatibility_command(
             result,

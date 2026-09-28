@@ -1,9 +1,10 @@
-"""Member files and central records, independent of unittest lifecycles."""
+"""Member files and bundled checker data, independent of unittest lifecycles."""
 
 import contextlib
 import json
 from pathlib import Path
 import tempfile
+from unittest.mock import patch
 
 from tests.fixtures.cli import invoke
 from tests.fixtures.data import (
@@ -12,7 +13,7 @@ from tests.fixtures.data import (
     RELEASE,
     lockfile,
 )
-from tools import policy
+from tools import records
 
 
 class ProjectFixture:
@@ -26,20 +27,8 @@ class ProjectFixture:
         self.temp = tempfile.TemporaryDirectory()
         self.resources.enter_context(self.temp)
         self.root = Path(self.temp.name) / "example"
-        self.config = {
-            "schemaVersion": 1,
-            "policyRepository": POLICY_REPO,
-            "ci": json.loads(
-                (policy.SOURCE_ROOT / "policy/requirements.json").read_text()
-            )["ci"],
-        }
-        self.pins = {
-            "stableBranch": "nixos-26.05",
-            "schemaVersion": 1,
-            "approved": PAIR,
-        }
-        self.members = {"example": "owner/example"}
-        self.config["_members"] = self.members
+        self.pins = {"stableBranch": "nixos-26.05", **PAIR}
+        self.repos = ["owner/example"]
         self.write("flake.nix", "{}")
         self.write(".envrc", "use flake\n")
         self.write("LICENSE", "MIT")
@@ -82,17 +71,17 @@ class ProjectFixture:
     def inspect(self):
         return self.run_policy("check", str(self.root), "--project", "example")[1]
 
-    def write_records(self):
-        records = Path(self.temp.name) / "records"
-        (records / "policy").mkdir(parents=True, exist_ok=True)
-        (records / "policy/pins.json").write_text(json.dumps(self.pins))
-        (records / "policy/members.json").write_text(
-            json.dumps({"schemaVersion": 1, "members": self.members})
-        )
-        return records
+    def write_data(self, directory=None):
+        """Write the fixture's pins and repo list in the bundled data layout."""
+        directory = directory or Path(self.temp.name) / "data"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "pins.json").write_text(json.dumps(self.pins))
+        (directory / "repos.json").write_text(json.dumps({"repos": self.repos}))
+        return directory
 
     def run_policy(self, *args):
+        """Invoke the CLI with the fixture's data in place of the bundled files."""
         if args[0] == "ci" and (len(args) == 1 or args[1].startswith("--")):
             args = ("ci", str(self.root), *args[1:])
-        records = self.write_records()
-        return invoke("--policy-root", str(records), *args)
+        with patch.object(records, "DATA_ROOT", self.write_data()):
+            return invoke(*args)

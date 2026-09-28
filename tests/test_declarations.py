@@ -105,9 +105,6 @@ class DeclarationTests(ProjectTestCase):
         )
         workspace = Path(self.temp.name)
         (workspace / "project").symlink_to(self.root, target_is_directory=True)
-        (workspace / "policy-state").symlink_to(
-            workspace / "records", target_is_directory=True
-        )
         stub = workspace / "nix"
         stub.write_text(
             f"#!{sys.executable}\nimport json, os, sys\n"
@@ -157,8 +154,8 @@ class DeclarationTests(ProjectTestCase):
                         "pass" if targets else "not-applicable",
                     )
 
-    def test_pre_enrollment_checks_and_planning_do_not_change_records(self):
-        self.members.clear()
+    def test_pre_enrollment_checks_and_planning_do_not_change_data(self):
+        self.repos.clear()
         for command in ["ci", "check", "vm"]:
             with self.subTest(command=command):
                 code, report = self.run_policy(
@@ -168,12 +165,12 @@ class DeclarationTests(ProjectTestCase):
                 self.assertEqual(report["enrollment"], "not-enrolled")
                 self.assertEqual(report["policyVersion"], RELEASE)
                 self.assertEqual(report["memberSettings"]["vmTargets"], [])
-                records = Path(self.temp.name) / "records/policy"
+                data = Path(self.temp.name) / "data"
                 self.assertEqual(
-                    json.loads((records / "members.json").read_text())["members"], {}
+                    json.loads((data / "repos.json").read_text()), {"repos": []}
                 )
                 self.assertEqual(
-                    json.loads((records / "pins.json").read_text()), self.pins
+                    json.loads((data / "pins.json").read_text()), self.pins
                 )
 
     def test_hosted_defaults_and_local_literals_produce_the_same_plan(self):
@@ -309,7 +306,7 @@ class DeclarationTests(ProjectTestCase):
                 self.assertTrue(any(document in issue for issue in report["issues"]))
 
     def test_vm_execution_and_gates_follow_the_same_arm_only_declaration(self):
-        self.members.clear()
+        self.repos.clear()
         self.declare(
             required_architectures='["aarch64-linux"]',
             vm_targets='["vm-tests", "vm-tests-unstable"]',

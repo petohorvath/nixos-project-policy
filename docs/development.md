@@ -10,7 +10,7 @@ Review `.envrc`, then run `direnv allow`. Alternatively, run `nix develop --no-u
 
 ## Tools and checks
 
-The root lock supplies Nix, nil, nixfmt, statix, deadnix, treefmt, shfmt, Prettier, Git, jq, Python/PyYAML, Ruff, and actionlint. `policy/pins.json` separately records the approved shared pins.
+The root lock supplies Nix, nil, nixfmt, statix, deadnix, treefmt, shfmt, Prettier, Git, jq, Python/PyYAML, Ruff, and actionlint. `data/pins.json` separately holds the stable and unstable pins that the checker bundles.
 
 ```bash
 nix fmt --no-update-lock-file
@@ -28,7 +28,7 @@ The formatter covers Nix, shell, Markdown, YAML, JSON, and Python. It preserves 
 ```bash
 nix develop --no-update-lock-file --command python -m unittest discover -s tests -v
 nix fmt --no-update-lock-file -- --ci
-nix run --no-update-lock-file .# -- --policy-root . validate
+nix run --no-update-lock-file .# -- validate
 nix run --no-update-lock-file .# -- --version
 ```
 
@@ -42,7 +42,7 @@ nix develop --no-update-lock-file --command python -m unittest tests.nix_compati
 
 `tests.nix_compatibility` runs real metadata queries and root checks with both exact nixpkgs overrides. It checks lock preservation, rejection of required default-lock updates, nonempty host checks under the committed lock, and the explicit default development-shell requirement.
 
-`tests.packaged_policy` builds the checker from a controlled clean repository. It exercises member checks and checks before enrollment using the current release contract.
+`tests.packaged_policy` builds the checker from a controlled clean repository whose bundled pins differ from the committed ones. It runs the packaged commands without any data checkout and asserts that reports use the bundled pins, for member checks and checks before enrollment.
 
 Test adapters supply Nix process results. Git operations, record processing, checker code, and packaged commands execute normally. Use the real-Nix test to verify native override behavior.
 
@@ -54,13 +54,13 @@ nix run --no-update-lock-file .# -- shell .
 
 ## Member checks
 
-When the member selects the version in this checkout's `VERSION`, run the local checker with explicit trusted records:
+When the member selects the version in this checkout's `VERSION`, run the local checker:
 
 ```bash
-nix run --no-update-lock-file .# -- --policy-root . check ../PROJECT --project PROJECT
+nix run --no-update-lock-file .# -- check ../PROJECT --project PROJECT
 ```
 
-For another selected release, use that release's checker with a separate current record checkout, as shown in the [checker reference](checker.md#commands). Add `--shell` to smoke-test the member's development environment and evaluate its formatter. The default check reads files; compatibility execution uses the separate `compatibility` command. Checks do not update member sources or lockfiles, though shell and compatibility commands execute member code. See the [checker reference](checker.md) for results and limits.
+For another selected release, use that release's checker, as shown in the [checker reference](checker.md#commands). Add `--shell` to smoke-test the member's development environment and evaluate its formatter. The default check reads files; compatibility execution uses the separate `compatibility` command. Checks do not update member sources or lockfiles, though shell and compatibility commands execute member code. See the [checker reference](checker.md) for results and limits.
 
 ## Nix conventions
 

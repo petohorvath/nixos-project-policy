@@ -4,19 +4,21 @@ This guide covers v0.4.0 and later. Publish each immutable release before activa
 
 ## Records
 
-Current records live on `main`. Use one trusted snapshot for each operation.
+The checker carries its own data. Each release bundles the files below.
 
-| Record                                                                                            | Purpose                                       |
-| ------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| [members.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/members.json) | Enrolled repository identities                |
-| [pins.json](https://github.com/petohorvath/nixos-project-policy/blob/main/policy/pins.json)       | Approved shared pins and stable update branch |
+| File                                  | Purpose                                    |
+| ------------------------------------- | ------------------------------------------ |
+| [data/repos.json](../data/repos.json) | Listed repository identities               |
+| [data/pins.json](../data/pins.json)   | Stable and unstable pins and update branch |
+
+`policy/pins.json` and `policy/members.json` stay on `main` unchanged for v0.4.0 callers.
 
 The selected release supplies the rules, checker code, repository identity, and CI [requirements](../policy/requirements.json). Each member selects a supported release and its settings in its policy caller. See [record formats](checker.md#member-declarations-and-central-records) for fields and validation rules. Keep approval and test evidence in PRs and CI results.
 
-Run member commands with that selected checker and an explicit trusted record checkout. In the commands below, `./checker` is a checkout of the member's exact published release and `./records` contains the current central records. The checker and record checkouts can be at different revisions:
+Run member commands with that selected checker. In the commands below, `./checker` is a checkout of the member's exact published release:
 
 ```bash
-nix run --no-update-lock-file ./checker -- --policy-root ./records COMMAND
+nix run --no-update-lock-file ./checker -- COMMAND
 ```
 
 ## Pin candidates and approval
@@ -24,28 +26,26 @@ nix run --no-update-lock-file ./checker -- --policy-root ./records COMMAND
 A pin update changes the approved pair through an ordinary central PR. Member commits and rollout states are not stored in this repository.
 
 1. Select the weekly candidate artifact or prepare an urgent pair.
-2. Change `approved.stable` and `approved.unstable` in `policy/pins.json`. Keep enrollment and checker changes separate.
-3. Use each enrolled member's selected published checker against the proposed record checkout. Run both compatibility revisions on its required architectures, committed-lock checks, and applicable VM and additional gates.
+2. Change `stable` and `unstable` in `data/pins.json`. Keep enrollment and checker changes separate.
+3. Build the checker from the proposed change and run it against each enrolled member. Run both compatibility revisions on its required architectures, committed-lock checks, and applicable VM and additional gates.
 4. Retain exact tested source, checker, and record revisions with the results in the PR. Resolve required member fixes through their own reviewed PRs, then renew affected checks.
-5. Obtain human approval and merge the central PR. Subsequent member CI runs capture the new pair from `main`.
+5. Obtain human approval and merge the central PR. Members receive the new pins with the next release that bundles them.
 
-For example, test a reviewed proposed record checkout with the member's selected checker:
+For example, test the proposed pins with a checkout `./proposed` of the proposed change:
 
 ```bash
-nix run --no-update-lock-file ./checker -- \
-  --policy-root ./proposed-records compatibility ./member \
-  --project MEMBER --channel stable
-nix run --no-update-lock-file ./checker -- \
-  --policy-root ./proposed-records compatibility ./member \
-  --project MEMBER --channel unstable
+nix run --no-update-lock-file ./proposed -- \
+  compatibility ./member --project MEMBER --channel stable
+nix run --no-update-lock-file ./proposed -- \
+  compatibility ./member --project MEMBER --channel unstable
 nix flake check ./member --no-update-lock-file --print-build-logs
 ```
 
-Repeat on every required architecture and run the remaining member gates. These results establish behavior against the supplied snapshot; they do not approve pins or verify that the snapshot is current `main`. No batch registration, central copy of member revisions, or separate pin-approval workflow is required.
+Repeat on every required architecture and run the remaining member gates. These results establish behavior against the proposed pins; they do not approve them. No batch registration, central copy of member revisions, or separate pin-approval workflow is required.
 
 ### Candidate preparation
 
-The [Prepare pin update workflow](../.github/workflows/pins.yml) produces `candidate.json` in the `pin-proposal` artifact weekly or on manual dispatch. Urgent manual preparation accepts both `stable_revision` and `unstable_revision` as exact commits. Supplying only one fails. With neither input, it resolves `stableBranch` from `policy/pins.json` and the `nixos-unstable` branch once. Preparation does not run member compatibility checks; retain those results separately before approval.
+The [Prepare pin update workflow](../.github/workflows/pins.yml) produces `candidate.json` in the `pin-proposal` artifact weekly or on manual dispatch. Urgent manual preparation accepts both `stable_revision` and `unstable_revision` as exact commits. Supplying only one fails. With neither input, it resolves `stableBranch` from `data/pins.json` and the `nixos-unstable` branch once. Preparation does not run member compatibility checks; retain those results separately before approval.
 
 Preparation creates no PR. Automation that creates member PRs requires a separately reviewed write identity and tests for targeted lock updates.
 
@@ -81,16 +81,16 @@ A repair that changes either nixpkgs revision creates a revised candidate. Rerun
 1. Select the member migration explicitly.
 2. Prepare its shell, tools, formatter, documentation, dependency selection, and checks. Preserve public contracts and specialized host requirements.
 3. Use the selected release's caller template. Match its release reference, `policy_version`, and documentation links. Declare [member settings](checker.md#member-declarations-and-central-records) in the caller.
-4. Run `nix run --no-update-lock-file ./checker -- --policy-root ./records check PATH --project NAME --shell` with the member's selected checker and current trusted records.
+4. Run `nix run --no-update-lock-file ./checker -- check PATH --project NAME --shell` with the member's selected checker.
 5. Run committed-lock checks, both compatibility revisions on every required architecture, and applicable VM suites on the selected `vm_architecture` (default `x86_64-linux`).
-6. Run `ci PATH --project NAME` with the same checker and records prefix. Compare the generated names with actual PR statuses and merge gates.
-7. Retain the evidence on the member PR. Add the repository identity to `policy/members.json` through a reviewed central PR after verification.
+6. Run `ci PATH --project NAME` with the same checker prefix. Compare the generated names with actual PR statuses and merge gates.
+7. Retain the evidence on the member PR. Add the repository identity to `data/repos.json` through a reviewed central PR after verification.
 
 Drafts can prepare an unpublished release. Hosted checks require publication before activation. Checks before enrollment do not change membership or pin approval.
 
 Removal also requires a reviewed central PR. Keep enrollment plans in issues. Ordinary policy upgrades do not change the roster.
 
-Enroll new identities in `policy/members.json`; ordinary member changes do not update the roster or pin records.
+Enroll new identities in `data/repos.json`; ordinary member changes do not update the roster or pin records.
 
 ## Releases
 

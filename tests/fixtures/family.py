@@ -26,7 +26,7 @@ class FamilyFixture(ProjectFixture):
         alpha = self.workspace / "alpha"
         shutil.copytree(self.root, alpha)
         self.roots["alpha"] = alpha
-        self.members["alpha"] = "owner/alpha"
+        self.repos.append("owner/alpha")
         self.declaration(
             "alpha",
             RELEASE,
@@ -36,8 +36,6 @@ class FamilyFixture(ProjectFixture):
         )
         for root in self.roots.values():
             self.commit(root)
-        self.baseline = self.write_records()
-        self.commit(self.baseline)
 
     commit = staticmethod(commit)
 

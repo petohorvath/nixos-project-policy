@@ -39,20 +39,11 @@ class ProjectFixture:
                 f"[Rules](https://github.com/{POLICY_REPO}/blob/{RELEASE}/POLICY.md)\n",
             )
         self.workflow = {
-            "on": {
-                "pull_request": {
-                    "types": ["opened", "synchronize", "reopened", "edited"]
-                }
-            },
+            "on": {"pull_request": {"types": ["opened", "synchronize", "reopened"]}},
             "jobs": {
                 "policy": {
                     "name": "Policy",
-                    "uses": f"{POLICY_REPO}/.github/workflows/check.yml@{RELEASE}",
-                    "with": {
-                        "policy_version": RELEASE,
-                        "project": "example",
-                        "required_architectures": '["x86_64-linux", "aarch64-linux"]',
-                    },
+                    "uses": f"{POLICY_REPO}/.github/workflows/check.yml@v0.5",
                 }
             },
         }
@@ -63,10 +54,6 @@ class ProjectFixture:
         path = self.root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
-
-    def declare(self, **inputs):
-        self.workflow["jobs"]["policy"]["with"].update(inputs)
-        self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
 
     def inspect(self):
         return self.run_policy("check", str(self.root))[1]
@@ -81,7 +68,5 @@ class ProjectFixture:
 
     def run_policy(self, *args):
         """Invoke the CLI with the fixture's data in place of the bundled files."""
-        if args[0] == "ci" and (len(args) == 1 or args[1].startswith("--")):
-            args = ("ci", str(self.root), *args[1:])
         with patch.object(records, "DATA_ROOT", self.write_data()):
             return invoke(*args)

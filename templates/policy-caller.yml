@@ -13,13 +13,7 @@ permissions:
 jobs:
   policy:
     name: Policy
-    # Replace both version placeholders with the same published immutable release tag.
-    # Both compatibility channels run on every declared architecture.
-    uses: petohorvath/nixos-project-policy/.github/workflows/check.yml@POLICY_VERSION
-    with:
-      project: PROJECT_NAME
-      policy_version: POLICY_VERSION
-      required_architectures: '["x86_64-linux", "aarch64-linux"]'
-      # Other Nix systems use self-hosted runners labelled with the system name.
-      # Optional list inputs default to empty lists.
-      # additional_required_checks: '["Integration"]'
+    uses: petohorvath/nixos-project-policy/.github/workflows/check.yml@v0.5
+    # Optional; defaults to both Linux systems.
+    # with:
+    #   systems: '["x86_64-linux"]'

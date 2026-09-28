@@ -1,0 +1,6 @@
+# actionlint 1.7.12 predates the job context properties that name the
+# reusable workflow's own repository and commit (GitHub, September 2026).
+paths:
+  .github/workflows/check.yml:
+    ignore:
+      - 'property "workflow_(repository|sha)" is not defined in object type \{check_run_id: number;'

@@ -10,22 +10,22 @@ import subprocess
 import sys
 
 if __package__:
-    from . import declarations, inputs, locks, records, tests_runner, vm
+    from . import ci, inputs, locks, records, tests_runner, vm
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import declarations
+    import ci
     import inputs
     import locks
     import records
     import tests_runner
     import vm
 
-ci_plan = declarations.ci_plan
 LockGraph = locks.LockGraph
 repository_identity = locks.repository_identity
 
 
 REVISION = records.REVISION
+POLICY_REPOSITORY = "petohorvath/nixos-project-policy"
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_DIRS = {
     ".git",
@@ -43,14 +43,13 @@ def main(argv=None):
     parser.add_argument("--version", action="version", version=f"%(prog)s {version}")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("validate", help="Validate the bundled pins and repo list")
-    ci = commands.add_parser(
-        "ci", help="Report a member's CI matrix and required gates"
+    plan = commands.add_parser(
+        "ci", help="Print a repo's CI job matrices and required status names"
     )
-    ci.add_argument("project_dir", type=Path, nargs="?", default=Path("."))
-    ci.add_argument("--project", required=True)
-    ci.add_argument(
-        "--inputs-json",
-        help="Hosted workflow inputs to compare with local declarations",
+    plan.add_argument("project_dir", type=Path)
+    plan.add_argument(
+        "--systems",
+        help="JSON list of Nix systems (default: x86_64-linux and aarch64-linux)",
     )
     check = commands.add_parser("check", help="Check a repo's inputs")
     check.add_argument("project_dir", type=Path)
@@ -77,31 +76,11 @@ def main(argv=None):
     candidate.add_argument("--unstable", required=True)
     args = parser.parse_args(argv)
     try:
-        declarations.require_policy_version(f"v{version}")
         data = records.load()
-        config = records.load_requirements()
-        project = None
-        if args.command == "ci":
-            project = member_project(
-                args.project_dir,
-                args.project,
-                config,
-                hosted_inputs=json.loads(args.inputs_json)
-                if args.inputs_json is not None
-                else None,
-            )
         if args.command == "validate":
             result = {"status": "valid", "pins": data.pins, "repos": data.repos}
         elif args.command == "ci":
-            result = {
-                "status": "planned",
-                "project": args.project,
-                "policyVersion": project["policyVersion"],
-                "memberSettings": member_settings(project),
-                "enrollment": enrollment(data.repos, args.project),
-                "revision": git_revision(args.project_dir),
-                **ci_plan(project, config["ci"]),
-            }
+            result = ci.plan(args.project_dir, ci.parse_systems(args.systems))
         elif args.command == "candidate":
             pair = {"stable": args.stable, "unstable": args.unstable}
             records.validate_pair(pair)
@@ -117,10 +96,8 @@ def main(argv=None):
             result = vm.run(args.project_dir)
         else:
             result = check_repo(
-                args.project_dir, data, config["policyRepository"], shell=args.shell
+                args.project_dir, data, POLICY_REPOSITORY, shell=args.shell
             )
-        if project is not None:
-            result["selectionStatus"] = "supported"
         result["checkerVersion"] = f"v{version}"
         print(json.dumps(result, indent=2, sort_keys=True))
         return {"fail": 1, "error": 2}.get(result.get("status"), 0)
@@ -132,49 +109,10 @@ def main(argv=None):
         subprocess.SubprocessError,
     ) as error:
         print(
-            json.dumps(
-                {
-                    "status": "error",
-                    "selectionStatus": "invalid"
-                    if isinstance(error, InvalidDeclaration)
-                    else "unknown",
-                    "error": str(error),
-                }
-            ),
+            json.dumps({"status": "error", "error": str(error)}),
             file=sys.stderr,
         )
         return 2
-
-
-class InvalidDeclaration(ValueError):
-    """The inspected caller cannot select a valid policy contract."""
-
-
-def member_project(root, name, config, *, hosted_inputs=None):
-    try:
-        return declarations.inspect(
-            root.resolve(),
-            config["policyRepository"],
-            name,
-            config,
-            checker_version=f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}",
-            hosted_inputs=hosted_inputs,
-        )
-    except ValueError as error:
-        raise InvalidDeclaration(str(error)) from error
-
-
-def member_settings(project):
-    return {field: project[field] for field in declarations.INPUT_FIELDS.values()}
-
-
-def repo_name(repository):
-    return repository.rsplit("/", 1)[1].lower()
-
-
-def enrollment(repos, name):
-    listed = {repo_name(repository) for repository in repos}
-    return "enrolled" if name.lower() in listed else "not-enrolled"
 
 
 def check_repo(root, data, policy_repository, *, shell):

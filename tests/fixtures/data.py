@@ -13,20 +13,6 @@ SOURCE = "f" * 40
 PAIR = {"stable": STABLE, "unstable": UNSTABLE}
 NEW_PAIR = {"stable": NEW_STABLE, "unstable": NEW_UNSTABLE}
 POLICY_REPO = "petohorvath/nixos-project-policy"
-COMPATIBILITY_CHECKS = [
-    "Policy / Compatibility (stable, x86_64-linux)",
-    "Policy / Compatibility (stable, aarch64-linux)",
-    "Policy / Compatibility (unstable, x86_64-linux)",
-    "Policy / Compatibility (unstable, aarch64-linux)",
-]
-REQUIRED_CHECKS = [
-    "Policy / Verify policy version and load shared pins",
-    *COMPATIBILITY_CHECKS,
-    "Policy / Compliance (x86_64-linux)",
-    "Policy / Compliance (aarch64-linux)",
-    "Policy / Project tests (x86_64-linux)",
-    "Policy / Project tests (aarch64-linux)",
-]
 
 
 def nixpkgs(revision, branch):

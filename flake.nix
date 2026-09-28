@@ -21,7 +21,7 @@
           pkgs = nixpkgs.legacyPackages.${system};
           python = pkgs.python3.withPackages (packages: [ packages.pyyaml ]);
           formatter = pkgs.callPackage ./nix/formatter.nix { };
-          checker = pkgs.callPackage ./nix/package.nix { python3 = python; };
+          checker = pkgs.callPackage ./nix/package.nix { };
           checks = {
             tests = mkCheck {
               name = "policy-tests";
@@ -55,7 +55,7 @@
                 statix check .
                 deadnix --fail .
                 ruff check tools tests
-                actionlint .github/workflows/*.yml
+                actionlint -config-file .github/actionlint.yaml .github/workflows/*.yml
               '';
             };
           };

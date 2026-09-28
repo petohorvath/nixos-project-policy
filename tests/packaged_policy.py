@@ -15,7 +15,7 @@ import unittest
 from tests.fixtures.family import FamilyFixture, write_json
 from tests.fixtures.data import PAIR
 from tests.fixtures.process import REAL_RUN
-from tools import policy, records
+from tools import ci, policy, records
 
 
 class PackagedPolicyTests(unittest.TestCase):
@@ -104,12 +104,13 @@ class PackagedPolicyTests(unittest.TestCase):
         self.assertNotIn(result.get("status"), {"error", "fail"}, result)
         return result
 
-    def gates(self, root, name, *, enrolled):
-        planned = self.call("ci", root, "--project", name)
-        self.assertEqual(planned["enrollment"], enrolled)
+    def gates(self, root):
+        planned = self.call("ci", root)
+        self.assertEqual(planned["systems"], list(ci.DEFAULT_SYSTEMS))
+        self.assertEqual(planned["requiredChecks"][-1], "Policy / VM tests")
         report = self.call("vm", root)
         self.assertEqual(report["vmTests"], ["boot"])
-        for system in records.load_requirements()["ci"]["runners"]:
+        for system in planned["systems"]:
             self.call("check", root, "--shell", system=system)
             for mode in ["locked", *PAIR]:
                 report = self.call("test", root, "--nixpkgs", mode, system=system)
@@ -139,14 +140,5 @@ class PackagedPolicyTests(unittest.TestCase):
         self.assertEqual(report["repos"], ["owner/example", "owner/alpha"])
         baseline = policy.fingerprints(self.authority)
         alpha = fixture.roots["alpha"]
-        self.gates(alpha, "alpha", enrolled="enrolled")
-        pending = fixture.workspace / "pending"
-        shutil.copytree(alpha, pending, ignore=shutil.ignore_patterns(".git"))
-        workflow = records.read_json(pending / ".github/workflows/policy.yml")
-        workflow["jobs"]["policy"]["with"].update(
-            project="pending", additional_required_checks="[]"
-        )
-        write_json(pending / ".github/workflows/policy.yml", workflow)
-        fixture.commit(pending)
-        self.gates(pending, "pending", enrolled="not-enrolled")
+        self.gates(alpha)
         self.assertEqual(policy.fingerprints(self.authority), baseline)

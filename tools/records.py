@@ -5,15 +5,9 @@ from pathlib import Path
 import re
 from typing import NamedTuple
 
-if __package__:
-    from . import declarations
-else:
-    import declarations
-
 
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
-_REQUIREMENTS_PATH = _SOURCE_ROOT / "policy/requirements.json"
 DATA_ROOT = _SOURCE_ROOT / "data"
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
@@ -88,39 +82,6 @@ def load_repos(path):
             )
         identities.add(repository.lower())
     return document["repos"]
-
-
-def load_requirements():
-    requirements = read_json(_REQUIREMENTS_PATH)
-    validate_requirements(requirements)
-    return requirements
-
-
-def validate_requirements(requirements):
-    if (
-        not isinstance(requirements, dict)
-        or type(requirements.get("schemaVersion")) is not int
-        or requirements["schemaVersion"] != 1
-    ):
-        raise ValueError("Unsupported policy requirements schema")
-    repository = requirements.get("policyRepository")
-    if not isinstance(repository, str) or not REPOSITORY.fullmatch(repository):
-        raise ValueError("Invalid policy repository")
-    ci = requirements.get("ci")
-    if not isinstance(ci, dict):
-        raise ValueError("Policy requirements need CI configuration")
-    runners = ci.get("runners")
-    if (
-        not isinstance(runners, dict)
-        or not runners
-        or any(
-            not declarations.valid_system(system)
-            or not isinstance(runner, str)
-            or not runner
-            for system, runner in runners.items()
-        )
-    ):
-        raise ValueError("Supported systems require named CI runners")
 
 
 def validate_pair(pair):

@@ -98,9 +98,7 @@ jobs:
           nix run --no-update-lock-file ./policy -- check ./project --shell
       - name: Run project tests
         if: matrix.check == 'Project tests'
-        run: |
-          nix run --no-update-lock-file ./policy -- host-checks ./project
-          nix flake check ./project --no-update-lock-file --print-build-logs
+        run: nix run --no-update-lock-file ./policy -- test ./project --nixpkgs locked
   compatibility:
     name: ${{ matrix.check }}
     needs: records
@@ -123,11 +121,10 @@ jobs:
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
         with:
           install_url: https://releases.nixos.org/nix/nix-2.34.6/install
-      - name: Run root checks with the recorded compatibility pin
+      - name: Run project tests with the bundled nixpkgs pin
         env:
-          PROJECT: ${{ inputs.project }}
           CHANNEL: ${{ matrix.channel }}
-        run: nix run --no-update-lock-file ./policy -- compatibility ./project --project "$PROJECT" --channel "$CHANNEL"
+        run: nix run --no-update-lock-file ./policy -- test ./project --nixpkgs "$CHANNEL"
   vm:
     name: VM tests
     needs: records

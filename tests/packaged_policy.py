@@ -111,20 +111,14 @@ class PackagedPolicyTests(unittest.TestCase):
         self.assertEqual(report["vmTests"], ["boot"])
         for system in records.load_requirements()["ci"]["runners"]:
             self.call("check", root, "--shell", system=system)
-            for channel in PAIR:
-                report = self.call(
-                    "compatibility",
-                    root,
-                    "--project",
-                    name,
-                    "--channel",
-                    channel,
-                    system=system,
-                )
-                self.assertEqual(report["expectedRevision"], PAIR[channel])
-                self.assertEqual(report["resolvedRevision"], PAIR[channel])
-                self.assertNotIn("artifacts", report)
-                self.assertNotIn("policyRecordsDigest", report)
+            for mode in ["locked", *PAIR]:
+                report = self.call("test", root, "--nixpkgs", mode, system=system)
+                # The fixture lock holds the stable pin as its root nixpkgs.
+                expected = PAIR.get(mode, PAIR["stable"])
+                self.assertEqual(report["nixpkgs"], mode)
+                self.assertEqual(report["system"], system)
+                self.assertEqual(report["expectedRevision"], expected)
+                self.assertEqual(report["resolvedRevision"], expected)
             # The separate real-Nix fixture establishes actual host builds.
             self.command(
                 [

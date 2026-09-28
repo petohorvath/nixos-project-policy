@@ -22,7 +22,7 @@ nix run --no-update-lock-file .# -- COMMAND
 | `check PATH --project NAME --shell`                  | Also smoke-test the member shell and evaluate its root formatter.                                |
 | `compatibility PATH --project NAME --channel stable` | Verify the stable override and run full root host checks. Use `unstable` for the other revision. |
 | `host-checks PATH`                                   | Require nonempty `checks.<host-system>` under the committed lock, without building checks.       |
-| `vm PATH --project NAME`                             | Execute declared VM targets on a suitable builder. Return `not-applicable` if none exist.        |
+| `vm PATH`                                            | Build every `legacyPackages.<host-system>.vmTests` entry. Return `not-applicable` if none exist. |
 | `candidate --stable COMMIT --unstable COMMIT`        | Emit an unapproved pair. Do not write locks or approve pins.                                     |
 
 For a shell-only probe, run `nix run --no-update-lock-file .# -- shell PATH`. This first evaluates `devShells.<host-system>.default.drvPath`, enters the development shell with the inherited environment cleared, and executes `bash -c ':'`. It also evaluates the root formatter without asserting compliance. A default package or non-default shell cannot satisfy the development-shell requirement. Policy CI uses it as a host smoke test. The probe checks startup and command execution, not a fixed tool list or project-specific development tasks.
@@ -34,7 +34,7 @@ nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
   check ../member --project member --shell
 ```
 
-`check`, `ci`, `compatibility`, and `vm` require one member caller selecting the executing checker release. The caller's `policy_version` must match its immutable workflow reference. Enrollment does not change this requirement.
+`check`, `ci`, and `compatibility` require one member caller selecting the executing checker release. The caller's `policy_version` must match its immutable workflow reference. Enrollment does not change this requirement.
 
 ### Results
 
@@ -48,7 +48,7 @@ Record and member commands print JSON. Reports include `checkerVersion`. Member 
 
 A normal `check` can return `pass` before enrollment. Its separate `enrollment` field is `enrolled` or `not-enrolled`. Static checks report `compatibility: "not-run"`. No result changes enrollment or approves pins.
 
-`ci` returns `planned`, `matrix`, `compatibilityMatrix`, `vmTargets`, `vmJob` (check name, system, and runner), and the complete `requiredChecks`. Omit `PATH` only when the current directory is the member. Hosted `--inputs-json JSON` must normalize to the checked-out caller's inputs; it cannot replace member settings.
+`ci` returns `planned`, `matrix`, `compatibilityMatrix`, and the complete `requiredChecks`. Omit `PATH` only when the current directory is the member. Hosted `--inputs-json JSON` must normalize to the checked-out caller's inputs; it cannot replace member settings.
 
 ### Lock handling
 
@@ -90,18 +90,16 @@ Source or lock changes during execution fail the run. The runner does not repair
 
 The policy caller owns literal `project`, `policy_version`, and these string inputs:
 
-| Input                        | Contract                                                                |
-| ---------------------------- | ----------------------------------------------------------------------- |
-| `required_architectures`     | Required nonempty JSON list of unique Nix system names                  |
-| `vm_architecture`            | Optional literal Linux Nix system; default `x86_64-linux`               |
-| `vm_targets`                 | Optional JSON list of simple lowercase build target names; default `[]` |
-| `additional_required_checks` | Optional JSON list of additional GitHub status names; default `[]`      |
+| Input                        | Contract                                                           |
+| ---------------------------- | ------------------------------------------------------------------ |
+| `required_architectures`     | Required nonempty JSON list of unique Nix system names             |
+| `additional_required_checks` | Optional JSON list of additional GitHub status names; default `[]` |
 
-Validation rejects malformed JSON, wrong types, duplicates, unsupported values, dynamic expressions, forbidden inputs, and missing or multiple callers. Architectures cannot be empty. Additional gates cannot remove mandatory statuses or create jobs. Reports use `requiredArchitectures`, `vmTargets`, `vmArchitecture`, and `additionalRequiredChecks` inside `memberSettings`.
+Validation rejects malformed JSON, wrong types, duplicates, unsupported values, dynamic expressions, forbidden inputs, and missing or multiple callers. Architectures cannot be empty. Additional gates cannot remove mandatory statuses or create jobs. Reports use `requiredArchitectures` and `additionalRequiredChecks` inside `memberSettings`. The caller no longer declares VM tests; `vm_targets` and `vm_architecture` are rejected.
 
 Architecture selection has no platform allowlist. System names use an architecture and platform separated by a hyphen, such as `riscv64-linux` or `aarch64-darwin`, with letters, digits, underscores, and hyphens. The existing `x86_64-linux` and `aarch64-linux` mappings use `ubuntu-24.04` and `ubuntu-24.04-arm`. Other systems use runner labels `["self-hosted", SYSTEM]`. Provide a matching runner with Nix and the workflow prerequisites before running hosted checks; accepting a declaration does not establish runner availability or successful builds. Compliance, project tests, and compatibility jobs use these mappings.
 
-VM execution uses `vm_architecture` independently of ordinary coverage. The `ci.vmRunners` mapping selects `ubuntu-24.04` for x86_64 Linux; other Linux systems use `["self-hosted", SYSTEM]`. VM workers must provide Nix and usable KVM. An ARM-only member can set `vm_architecture: aarch64-linux` and provide an ARM runner with KVM. Locally, `vm` builds each declared target with `nix build --no-link --no-update-lock-file --print-build-logs`; it does not select a worker or configure KVM. Run it on a suitable host or with a configured builder for the declared VM system.
+VM tests are discovered, not declared. `vm` evaluates `legacyPackages.<host-system>.vmTests` and builds every entry with `nix build --no-link --no-update-lock-file --print-build-logs`. It continues after a failed build and reports the discovered names in `vmTests` and the failing names in `failed`. A missing or empty `vmTests` returns `not-applicable`. `nix flake check` does not build `vmTests`. The reusable workflow runs `vm` on `ubuntu-24.04` (x86_64 Linux) with KVM; locally, run it on a host with KVM or a configured builder.
 
 The policy flake exposes its executable for every system in its pinned nixpkgs package sets. Systems outside those package sets require checker packaging support before hosted execution can succeed. This repository's own development and check outputs remain on its two Linux CI platforms.
 
@@ -121,7 +119,7 @@ Repository identities must be unique; comparison ignores case. A member counts a
 
 The checker reads `requirements.json` beside its own code. Named runner systems come from `ci.runners`; there is no separate systems list.
 
-The `ci` fields define the caller name, common `requiredChecks`, per-architecture `architectureChecks`, `compatibilityChecks` templates, `runners`, `vmRunners`, and the conditional `vmCheck` status template. Templates use `{architecture}`. The checker combines these fields with member settings to produce ordinary and compatibility matrices and the complete gate list. Additional gate names do not create workflow jobs.
+The `ci` fields define the caller name, common `requiredChecks`, per-architecture `architectureChecks`, `compatibilityChecks` templates, and `runners`. Templates use `{architecture}`. The checker combines these fields with member settings to produce ordinary and compatibility matrices and the complete gate list. Additional gate names do not create workflow jobs.
 
 ### Shared pins
 
@@ -179,13 +177,12 @@ The first job captures the checker, member, and current record commits. All late
 | `Policy / Project tests (<architecture>)`             | Each required architecture |
 | `Policy / Compatibility (stable, <architecture>)`     | Each required architecture |
 | `Policy / Compatibility (unstable, <architecture>)`   | Each required architecture |
-| `Policy / VM tests (<vm_architecture>)`               | Members with VM targets    |
 
 The first job verifies the release version and generates matrices once on x86_64. This metadata job does not add x86_64 to the member's required architectures or publish a release.
 
 Compliance runs structural, pin, caller, and shell checks. Members own formatting and lint enforcement. Project tests first run `host-checks` to require nonempty host checks with `--no-update-lock-file`, then run full committed-lock root checks. Compatibility runs both shared revisions.
 
-Each category runs independently on every required architecture with `fail-fast: false`. They and the VM job depend only on the first job. A failure does not suppress other categories. Declared VM targets require the gate for the selected VM architecture. Changing that selection requires updating the member's required merge status; review must justify any coverage reduction. Without targets, CI skips the VM job without allocating a worker, the local `vm` command reports `not-applicable`, and the VM status need not be required.
+Each category runs independently on every required architecture with `fail-fast: false`. They and the VM job depend only on the first job. A failure does not suppress other categories. The `VM tests` job always runs on x86_64 Linux and reports `not-applicable` without `vmTests`; `ci` does not list it among the required statuses.
 
 Standard PR checkout tests GitHub's candidate merge commit. Each run captures its source and current records without registering that commit centrally. A merged pin update takes effect when a new member CI run captures the updated records.
 

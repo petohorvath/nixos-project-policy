@@ -11,12 +11,13 @@ import subprocess
 import sys
 
 if __package__:
-    from . import declarations, locks, records
+    from . import declarations, locks, records, vm
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import declarations
     import locks
     import records
+    import vm
 
 ci_plan = declarations.ci_plan
 LockGraph = locks.LockGraph
@@ -74,11 +75,10 @@ def main(argv=None):
         "host-checks", help="Require nonempty host checks with the committed lock"
     )
     host_checks.add_argument("project_dir", type=Path)
-    vm = commands.add_parser(
-        "vm", help="Run member-declared VM targets on a suitable host"
+    vm_command = commands.add_parser(
+        "vm", help="Build every legacyPackages.<system>.vmTests entry on this host"
     )
-    vm.add_argument("project_dir", type=Path)
-    vm.add_argument("--project", required=True)
+    vm_command.add_argument("project_dir", type=Path)
     candidate = commands.add_parser(
         "candidate", help="Print an unapproved pin proposal"
     )
@@ -90,7 +90,7 @@ def main(argv=None):
         data = records.load()
         config = records.load_requirements()
         project = None
-        if args.command in {"check", "ci", "compatibility", "vm"}:
+        if args.command in {"check", "ci", "compatibility"}:
             project = member_project(
                 args.project_dir,
                 args.project,
@@ -130,26 +130,7 @@ def main(argv=None):
                 project=project,
             )
         elif args.command == "vm":
-            targets = project["vmTargets"]
-            for target in targets:
-                subprocess.run(
-                    [
-                        "nix",
-                        "build",
-                        "--no-link",
-                        "--no-update-lock-file",
-                        "--print-build-logs",
-                        f"path:{args.project_dir.resolve()}#{target}",
-                    ],
-                    check=True,
-                )
-            result = {
-                "status": "pass" if targets else "not-applicable",
-                "targets": targets,
-                "policyVersion": project["policyVersion"],
-                "memberSettings": member_settings(project),
-                "enrollment": enrollment(data.repos, args.project),
-            }
+            result = vm.run(args.project_dir)
         else:
             result = inspect_project(
                 args.project_dir,
@@ -208,10 +189,7 @@ def member_project(root, name, config, *, hosted_inputs=None):
 
 
 def member_settings(project):
-    return {
-        **{field: project[field] for field in declarations.INPUT_FIELDS.values()},
-        "vmArchitecture": project["vmArchitecture"],
-    }
+    return {field: project[field] for field in declarations.INPUT_FIELDS.values()}
 
 
 def repo_name(repository):

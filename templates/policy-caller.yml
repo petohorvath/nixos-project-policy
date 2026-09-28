@@ -22,8 +22,4 @@ jobs:
       required_architectures: '["x86_64-linux", "aarch64-linux"]'
       # Other Nix systems use self-hosted runners labelled with the system name.
       # Optional list inputs default to empty lists.
-      # VM architecture defaults to x86_64-linux; other Linux systems need KVM
-      # on a self-hosted runner labelled with the system name.
-      # vm_architecture: aarch64-linux
-      # vm_targets: '["vm-tests"]'
       # additional_required_checks: '["Integration"]'

@@ -5,6 +5,7 @@
 - Remove the `audit` and `agreement` commands, the Member audit and agreement workflows, and the integration caller template. The checker no longer calls the GitHub API or inspects published releases, and the reusable workflow no longer verifies release immutability or exports source and record snapshot outputs.
 - Remove record digests, checker and source digests, and replay data from reports. `compatibility` no longer accepts `--output` or writes evidence directories.
 - Bundle the pins and the listed repos with the checker in `data/pins.json` and `data/repos.json`, and remove `--policy-root`. Every command reads the bundled data; `validate` checks both files. The reusable workflow no longer checks out `main` for records. `policy/pins.json` and `policy/members.json` stay unchanged for v0.4.0 callers.
+- Discover VM tests from `legacyPackages.<system>.vmTests` instead of declaring them. `vm PATH` builds every entry on the host system, continues after a failure, reports failing names, and returns `not-applicable` without VM tests; it no longer takes `--project` or reads the caller workflow. Remove the `vm_targets` and `vm_architecture` caller inputs; `ci` no longer reports `vmTargets` or `vmJob`, and the workflow's `VM tests` job always runs on x86_64 Linux.
 
 ## 0.4.0
 

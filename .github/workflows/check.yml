@@ -14,14 +14,6 @@ on:
         description: Literal nonempty JSON list of Nix systems
         required: true
         type: string
-      vm_targets:
-        description: Literal JSON list of VM build targets
-        default: "[]"
-        type: string
-      vm_architecture:
-        description: Literal Linux Nix system for VM execution
-        default: x86_64-linux
-        type: string
       additional_required_checks:
         description: Literal JSON list of additional GitHub merge gates
         default: "[]"
@@ -39,8 +31,6 @@ jobs:
       project_revision: ${{ steps.snapshot.outputs.project_revision }}
       matrix: ${{ steps.ci.outputs.matrix }}
       compatibility_matrix: ${{ steps.ci.outputs.compatibility_matrix }}
-      vm_job: ${{ steps.ci.outputs.vm_job }}
-      vm_required: ${{ steps.ci.outputs.vm_required }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -72,10 +62,6 @@ jobs:
           WORKFLOW_INPUTS: ${{ toJSON(inputs) }}
         run: |
           nix run --no-update-lock-file ./policy -- ci ./project --project "$PROJECT" --inputs-json "$WORKFLOW_INPUTS" > ci.json
-          vm_job=$(jq -ce '.vmJob' ci.json)
-          printf 'vm_job=%s\n' "$vm_job" >> "$GITHUB_OUTPUT"
-          vm_required=$(jq -r '.vmTargets | length > 0' ci.json)
-          printf 'vm_required=%s\n' "$vm_required" >> "$GITHUB_OUTPUT"
           matrix=$(jq -ce '.matrix' ci.json)
           compatibility_matrix=$(jq -ce '.compatibilityMatrix' ci.json)
           printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
@@ -145,10 +131,9 @@ jobs:
           CHANNEL: ${{ matrix.channel }}
         run: nix run --no-update-lock-file ./policy -- compatibility ./project --project "$PROJECT" --channel "$CHANNEL"
   vm:
-    name: ${{ fromJSON(needs.records.outputs.vm_job).check }}
+    name: VM tests
     needs: records
-    if: needs.records.outputs.vm_required == 'true'
-    runs-on: ${{ fromJSON(needs.records.outputs.vm_job).runner }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -165,7 +150,5 @@ jobs:
         with:
           install_url: https://releases.nixos.org/nix/nix-2.34.6/install
           enable_kvm: true
-      - name: Run applicable VM suites
-        env:
-          PROJECT: ${{ inputs.project }}
-        run: nix run --no-update-lock-file ./policy -- vm ./project --project "$PROJECT"
+      - name: Build discovered VM tests
+        run: nix run --no-update-lock-file ./policy -- vm ./project

@@ -34,13 +34,15 @@ nix run --no-update-lock-file .# -- --version
 
 ### Host tests
 
-These tests run outside Nix build sandboxes because they invoke Nix themselves. The CI workflow runs both in one development-shell invocation on each supported architecture:
+These tests run outside Nix build sandboxes because they invoke Nix themselves. The CI workflow runs them in one development-shell invocation on each supported architecture:
 
 ```bash
-nix develop --no-update-lock-file --command python -m unittest tests.nix_compatibility tests.packaged_policy -v
+nix develop --no-update-lock-file --command python -m unittest tests.nix_compatibility tests.nix_vm tests.packaged_policy -v
 ```
 
 `tests.nix_compatibility` runs real metadata queries and root checks with both exact nixpkgs overrides. It checks lock preservation, rejection of required default-lock updates, nonempty host checks under the committed lock, and the explicit default development-shell requirement.
+
+`tests.nix_vm` checks that `vm` discovers and builds `legacyPackages.<system>.vmTests`, reports failing entries by name, returns `not-applicable` without VM tests, and that `nix flake check` does not build them.
 
 `tests.packaged_policy` builds the checker from a controlled clean repository whose bundled pins differ from the committed ones. It runs the packaged commands without any data checkout and asserts that reports use the bundled pins, for member checks and checks before enrollment.
 

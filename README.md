@@ -35,7 +35,7 @@ nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
 
 Replace the tag with the member's selected release and `PROJECT` with its name. `check` inspects structure, locks, and the policy caller. `--shell` also smoke-tests the default development shell and evaluates the formatter. Compatibility execution requires separate `compatibility` commands for `stable` and `unstable`.
 
-The checker also plans CI gates and executes declared VM targets. See the [checker reference](docs/checker.md#commands) for commands, JSON results, and validation limits.
+The checker also plans CI gates and builds the VM tests it discovers under `legacyPackages.<system>.vmTests`. See the [checker reference](docs/checker.md#commands) for commands, JSON results, and validation limits.
 
 ## Development
 

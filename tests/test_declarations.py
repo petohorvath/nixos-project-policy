@@ -2,16 +2,11 @@
 
 import copy
 import json
-import os
 from pathlib import Path
-import subprocess
-import sys
 from unittest.mock import patch
 
-import yaml
-
 from tests.fixtures.cases import ProjectTestCase
-from tests.fixtures.data import POLICY_REPO, RELEASE, REQUIRED_CHECKS, VM_CHECK
+from tests.fixtures.data import POLICY_REPO, RELEASE
 from tools import policy
 
 
@@ -43,7 +38,6 @@ class DeclarationTests(ProjectTestCase):
                 ("ci", []),
                 ("check", ["--shell"]),
                 ("compatibility", ["--channel", "stable"]),
-                ("vm", []),
             ]:
                 with self.subTest(version=version, command=command):
                     code, report = self.run_policy(
@@ -93,70 +87,9 @@ class DeclarationTests(ProjectTestCase):
                             report["requiredChecks"],
                         )
 
-    def test_actual_vm_workflow_step_uses_defaults_targets_and_failure_status(self):
-        workflow = yaml.load(
-            (policy.SOURCE_ROOT / ".github/workflows/check.yml").read_text(),
-            Loader=yaml.BaseLoader,
-        )
-        script = next(
-            step["run"]
-            for step in workflow["jobs"]["vm"]["steps"]
-            if step.get("name") == "Run applicable VM suites"
-        )
-        workspace = Path(self.temp.name)
-        (workspace / "project").symlink_to(self.root, target_is_directory=True)
-        stub = workspace / "nix"
-        stub.write_text(
-            f"#!{sys.executable}\nimport json, os, sys\n"
-            "from pathlib import Path\n"
-            "if sys.argv[1] == 'run':\n"
-            f"    os.execv(sys.executable, [sys.executable, {str(policy.SOURCE_ROOT / 'tools/policy.py')!r}, *sys.argv[sys.argv.index('--') + 1:]])\n"
-            "with Path(os.environ['COMMAND_LOG']).open('a') as stream:\n"
-            "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-            "sys.exit(int(os.environ['BUILD_STATUS']))\n"
-        )
-        stub.chmod(0o755)
-        log = workspace / "commands.jsonl"
-        for targets, build_status in [
-            ([], 0),
-            (["vm-tests", "vm-tests-unstable"], 0),
-            (["vm-tests"], 1),
-        ]:
-            with self.subTest(targets=targets, build_status=build_status):
-                self.declare(vm_targets=json.dumps(targets))
-                self.assertEqual(self.run_policy("ci", "--project", "example")[0], 0)
-                log.write_text("")
-                process = subprocess.run(
-                    ["bash", "-e", "-o", "pipefail", "-c", script],
-                    cwd=workspace,
-                    env={
-                        **os.environ,
-                        "PATH": f"{workspace}:{os.environ['PATH']}",
-                        "PROJECT": "example",
-                        "BUILD_STATUS": str(build_status),
-                        "COMMAND_LOG": str(log),
-                    },
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                self.assertEqual(
-                    process.returncode, 2 if build_status else 0, process.stderr
-                )
-                commands = [json.loads(line) for line in log.read_text().splitlines()]
-                self.assertEqual(
-                    [command[-1] for command in commands],
-                    [f"path:{self.root}#{target}" for target in targets],
-                )
-                if not build_status:
-                    self.assertEqual(
-                        json.loads(process.stdout)["status"],
-                        "pass" if targets else "not-applicable",
-                    )
-
     def test_pre_enrollment_checks_and_planning_do_not_change_data(self):
         self.repos.clear()
-        for command in ["ci", "check", "vm"]:
+        for command in ["ci", "check"]:
             with self.subTest(command=command):
                 code, report = self.run_policy(
                     command, str(self.root), "--project", "example"
@@ -164,7 +97,9 @@ class DeclarationTests(ProjectTestCase):
                 self.assertEqual(code, 0, report)
                 self.assertEqual(report["enrollment"], "not-enrolled")
                 self.assertEqual(report["policyVersion"], RELEASE)
-                self.assertEqual(report["memberSettings"]["vmTargets"], [])
+                self.assertEqual(
+                    report["memberSettings"]["additionalRequiredChecks"], []
+                )
                 data = Path(self.temp.name) / "data"
                 self.assertEqual(
                     json.loads((data / "repos.json").read_text()), {"repos": []}
@@ -177,8 +112,6 @@ class DeclarationTests(ProjectTestCase):
         local_code, local = self.run_policy("ci", "--project", "example")
         inputs = {
             **self.workflow["jobs"]["policy"]["with"],
-            "vm_targets": "[]",
-            "vm_architecture": "x86_64-linux",
             "additional_required_checks": "[]",
         }
         code, hosted = self.run_policy(
@@ -216,7 +149,7 @@ class DeclarationTests(ProjectTestCase):
         ]
         cases += [
             (field, value)
-            for field in ["vm_targets", "additional_required_checks"]
+            for field in ["additional_required_checks"]
             for value in [
                 "{",
                 "null",
@@ -230,20 +163,8 @@ class DeclarationTests(ProjectTestCase):
             ]
         ]
         cases += [
-            ("vm_architecture", value)
-            for value in [
-                "",
-                "aarch64-darwin",
-                "../linux",
-                "linux",
-                '["aarch64-linux"]',
-                "${{ inputs.arch }}",
-                None,
-            ]
-        ]
-        cases += [
-            ("vm_targets", '["../escape"]'),
-            ("vm_targets", '["target#other"]'),
+            ("vm_targets", '["vm-tests"]'),
+            ("vm_architecture", "x86_64-linux"),
             ("additional_required_checks", '["bad\\ncheck"]'),
             ("additional_required_checks", '[" leading"]'),
             ("policy_root", "candidate"),
@@ -253,7 +174,7 @@ class DeclarationTests(ProjectTestCase):
         for field, value in cases:
             self.workflow = copy.deepcopy(original)
             self.declare(**{field: value})
-            for command in ["ci", "check", "vm", "compatibility"]:
+            for command in ["ci", "check", "compatibility"]:
                 with self.subTest(field=field, value=value, command=command):
                     options = (
                         ["--channel", "stable"] if command == "compatibility" else []
@@ -304,79 +225,3 @@ class DeclarationTests(ProjectTestCase):
                 )
                 self.assertEqual(code, 1, report)
                 self.assertTrue(any(document in issue for issue in report["issues"]))
-
-    def test_vm_execution_and_gates_follow_the_same_arm_only_declaration(self):
-        self.repos.clear()
-        self.declare(
-            required_architectures='["aarch64-linux"]',
-            vm_targets='["vm-tests", "vm-tests-unstable"]',
-            additional_required_checks='["Integration"]',
-        )
-        code, plan = self.run_policy("ci", "--project", "example")
-        self.assertEqual(code, 0, plan)
-        self.assertEqual(
-            plan["requiredChecks"],
-            [check for check in REQUIRED_CHECKS if "x86_64" not in check]
-            + [VM_CHECK, "Integration"],
-        )
-        self.assertEqual(
-            {job["system"] for job in plan["matrix"]["include"]}, {"aarch64-linux"}
-        )
-        with (
-            patch.object(policy.subprocess, "run") as execute,
-            patch.object(policy, "git_revision", return_value=None),
-        ):
-            code, report = self.run_policy("vm", str(self.root), "--project", "example")
-        self.assertEqual(code, 0, report)
-        self.assertEqual(report["targets"], plan["vmTargets"])
-        self.assertEqual(
-            [call.args[0][-1] for call in execute.call_args_list],
-            [f"path:{self.root}#{target}" for target in plan["vmTargets"]],
-        )
-        with patch.object(
-            policy.subprocess,
-            "run",
-            side_effect=subprocess.CalledProcessError(1, "nix"),
-        ):
-            self.assertEqual(
-                self.run_policy("vm", str(self.root), "--project", "example")[0], 2
-            )
-
-    def test_vm_architecture_controls_worker_gate_and_report(self):
-        for system in ["aarch64-linux", "riscv64-linux"]:
-            with self.subTest(system=system):
-                self.declare(
-                    required_architectures=json.dumps([system]),
-                    vm_architecture=system,
-                    vm_targets='["vm-tests"]',
-                )
-                code, plan = self.run_policy("ci", "--project", "example")
-                self.assertEqual(code, 0, plan)
-                self.assertEqual(
-                    plan["vmJob"],
-                    {
-                        "check": f"VM tests ({system})",
-                        "system": system,
-                        "runner": ["self-hosted", system],
-                    },
-                )
-                self.assertIn(f"Policy / VM tests ({system})", plan["requiredChecks"])
-                self.assertFalse(
-                    any("x86_64" in check for check in plan["requiredChecks"])
-                )
-                self.assertEqual(plan["memberSettings"]["vmArchitecture"], system)
-                inputs = {
-                    **self.workflow["jobs"]["policy"]["with"],
-                    "vm_architecture": "x86_64-linux",
-                }
-                code, report = self.run_policy(
-                    "ci", "--project", "example", "--inputs-json", json.dumps(inputs)
-                )
-                self.assertEqual(code, 2, report)
-                self.assertIn("disagree", report["error"])
-                self.declare(vm_targets="[]")
-                code, plan = self.run_policy("ci", "--project", "example")
-                self.assertEqual(code, 0, plan)
-                self.assertFalse(
-                    any("VM tests" in check for check in plan["requiredChecks"])
-                )

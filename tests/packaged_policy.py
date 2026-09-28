@@ -107,7 +107,8 @@ class PackagedPolicyTests(unittest.TestCase):
     def gates(self, root, name, *, enrolled):
         planned = self.call("ci", root, "--project", name)
         self.assertEqual(planned["enrollment"], enrolled)
-        self.call("vm", root, "--project", name)
+        report = self.call("vm", root)
+        self.assertEqual(report["vmTests"], ["boot"])
         for system in records.load_requirements()["ci"]["runners"]:
             checked = self.call(
                 "check", root, "--project", name, "--shell", system=system
@@ -152,7 +153,7 @@ class PackagedPolicyTests(unittest.TestCase):
         shutil.copytree(alpha, pending, ignore=shutil.ignore_patterns(".git"))
         workflow = records.read_json(pending / ".github/workflows/policy.yml")
         workflow["jobs"]["policy"]["with"].update(
-            project="pending", vm_targets="[]", additional_required_checks="[]"
+            project="pending", additional_required_checks="[]"
         )
         write_json(pending / ".github/workflows/policy.yml", workflow)
         fixture.commit(pending)

@@ -27,7 +27,6 @@ REQUIRED_CHECKS = [
     "Policy / Project tests (x86_64-linux)",
     "Policy / Project tests (aarch64-linux)",
 ]
-VM_CHECK = "Policy / VM tests (x86_64-linux)"
 
 
 def nixpkgs(revision, branch):

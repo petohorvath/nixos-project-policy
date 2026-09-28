@@ -11,9 +11,7 @@
     "runners": {
       "x86_64-linux": "ubuntu-24.04",
       "aarch64-linux": "ubuntu-24.04-arm"
-    },
-    "vmRunners": { "x86_64-linux": "ubuntu-24.04" },
-    "vmCheck": "Policy / VM tests ({architecture})"
+    }
   },
   "policyRepository": "petohorvath/nixos-project-policy"
 }

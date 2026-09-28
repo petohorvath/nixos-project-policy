@@ -31,7 +31,6 @@ from tests.fixtures.data import (
     SOURCE,
     STABLE,
     UNSTABLE,
-    VM_CHECK,
     lockfile,
     nixpkgs,
 )
@@ -222,17 +221,6 @@ class ProjectTests(ProjectTestCase):
         self.assertEqual(status, 0, report)
         self.assertEqual(report["requiredChecks"], REQUIRED_CHECKS)
 
-    def test_vm_gate_is_mandatory_only_when_targets_are_declared(self):
-        self.assertEqual(self.run_policy("validate")[0], 0)
-        status, report = self.run_policy("ci", "--project", "example")
-        self.assertEqual(status, 0, report)
-        self.assertEqual(report["requiredChecks"], REQUIRED_CHECKS)
-        self.declare(vm_targets='["vm-tests", "vm-tests-unstable"]')
-        self.assertEqual(self.run_policy("validate")[0], 0)
-        status, report = self.run_policy("ci", "--project", "example")
-        self.assertEqual(status, 0, report)
-        self.assertEqual(report["requiredChecks"], [*REQUIRED_CHECKS, VM_CHECK])
-
     def test_ci_plan_uses_the_members_required_architectures_for_jobs_and_gates(self):
         for architectures in [
             ["x86_64-linux"],
@@ -335,26 +323,6 @@ class ProjectTests(ProjectTestCase):
             self.assertEqual(status, 2, report)
             self.assertIn("required_architectures", report["error"])
 
-    def test_vm_gate_keeps_its_platform_when_regular_ci_requires_only_arm(self):
-        checks = [
-            check
-            for check in REQUIRED_CHECKS
-            if check == REQUIRED_CHECKS[0] or check.endswith("aarch64-linux)")
-        ]
-        self.declare(
-            required_architectures='["aarch64-linux"]', vm_targets='["vm-tests"]'
-        )
-        status, report = self.run_policy("ci", "--project", "example")
-        self.assertEqual(status, 0)
-        self.assertEqual(report["requiredChecks"], [*checks, VM_CHECK])
-        self.assertEqual(
-            {job["system"] for job in report["matrix"]["include"]}, {"aarch64-linux"}
-        )
-        self.assertEqual(
-            {job["system"] for job in report["compatibilityMatrix"]["include"]},
-            {"aarch64-linux"},
-        )
-
     def test_ci_planning_requires_the_members_selected_release(self):
         for version in [None, "v0.1.1"]:
             with self.subTest(version=version):
@@ -380,10 +348,9 @@ class ProjectTests(ProjectTestCase):
         self.assertEqual(status, 0, report)
         self.assertEqual(report["requiredChecks"], [*REQUIRED_CHECKS, "Integration"])
 
-    def test_ci_plan_requires_policy_vm_and_additional_project_gates(self):
-        checks = [*REQUIRED_CHECKS, VM_CHECK, "Project-specific integration tests"]
+    def test_ci_plan_requires_policy_and_additional_project_gates(self):
+        checks = [*REQUIRED_CHECKS, "Project-specific integration tests"]
         self.declare(
-            vm_targets='["vm-tests"]',
             additional_required_checks='["Project-specific integration tests"]',
         )
         status, report = self.run_policy("ci", "--project", "example")
@@ -1037,10 +1004,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("needs", caller)
         self.assertNotIn("strategy", caller)
         plan = policy.ci_plan(
-            {
-                "requiredArchitectures": list(requirements["ci"]["runners"]),
-                "vmTargets": [],
-            },
+            {"requiredArchitectures": list(requirements["ci"]["runners"])},
             requirements["ci"],
         )
         names = {f"{caller['name']} / {jobs['records']['name']}"}
@@ -1057,18 +1021,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(
             requirements["ci"]["requiredChecks"],
             [REQUIRED_CHECKS[0]],
-        )
-        self.assertEqual(
-            jobs["vm"]["name"], "${{ fromJSON(needs.records.outputs.vm_job).check }}"
-        )
-        self.assertEqual(
-            jobs["vm"]["runs-on"],
-            "${{ fromJSON(needs.records.outputs.vm_job).runner }}",
-        )
-        self.assertEqual(f"{caller['name']} / {plan['vmJob']['check']}", VM_CHECK)
-        self.assertEqual(plan["vmJob"]["runner"], "ubuntu-24.04")
-        self.assertEqual(
-            requirements["ci"]["vmCheck"].format(architecture="x86_64-linux"), VM_CHECK
         )
 
     def test_check_categories_run_independently_on_both_linux_architectures(self):
@@ -1110,12 +1062,6 @@ class WorkflowTests(unittest.TestCase):
         )
         records_job = workflow["jobs"]["records"]
         self.assertNotIn("strategy", records_job)
-        self.assertEqual(
-            records_job["outputs"]["vm_required"], "${{ steps.ci.outputs.vm_required }}"
-        )
-        self.assertEqual(
-            workflow["jobs"]["vm"]["if"], "needs.records.outputs.vm_required == 'true'"
-        )
         step = next(step for step in records_job["steps"] if step.get("id") == "ci")
         self.assertEqual(step["env"]["PROJECT"], "${{ inputs.project }}")
         self.assertIn("--no-update-lock-file ./policy", step["run"])
@@ -1130,15 +1076,14 @@ class WorkflowTests(unittest.TestCase):
             )
             stub.chmod(0o755)
             output = root / "output"
-            for architectures, targets in [
-                (["x86_64-linux"], []),
-                (["aarch64-linux"], []),
-                (["aarch64-linux"], ["vm-tests"]),
-                (["x86_64-linux", "aarch64-linux"], []),
-                ([], []),
-                (["unsupported"], []),
+            for architectures in [
+                ["x86_64-linux"],
+                ["aarch64-linux"],
+                ["x86_64-linux", "aarch64-linux"],
+                [],
+                ["unsupported"],
             ]:
-                with self.subTest(architectures=architectures, targets=targets):
+                with self.subTest(architectures=architectures):
                     caller = yaml.load(
                         (
                             policy.SOURCE_ROOT / "templates/policy-caller.yml"
@@ -1151,8 +1096,6 @@ class WorkflowTests(unittest.TestCase):
                         "project": "example",
                         "policy_version": RELEASE,
                         "required_architectures": json.dumps(architectures),
-                        "vm_architecture": "aarch64-linux",
-                        "vm_targets": json.dumps(targets),
                     }
                     member = root / "project/.github/workflows"
                     member.mkdir(parents=True, exist_ok=True)
@@ -1186,13 +1129,7 @@ class WorkflowTests(unittest.TestCase):
                             line.split("=", 1)
                             for line in output.read_text().splitlines()
                         )
-                        self.assertEqual(
-                            outputs["vm_required"], "true" if targets else "false"
-                        )
-                        self.assertEqual(
-                            json.loads(outputs["vm_job"])["runner"],
-                            ["self-hosted", "aarch64-linux"],
-                        )
+                        self.assertNotIn("vm_job", outputs)
                         matrix = json.loads(outputs["matrix"])
                         compatibility_matrix = json.loads(
                             outputs["compatibility_matrix"]

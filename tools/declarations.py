@@ -14,7 +14,6 @@ SYSTEM_NAME = re.compile(r"[A-Za-z0-9_]+-[A-Za-z0-9_-]+\Z")
 PR_ACTIVITIES = {"opened", "synchronize", "reopened"}
 INPUT_FIELDS = {
     "required_architectures": "requiredArchitectures",
-    "vm_targets": "vmTargets",
     "additional_required_checks": "additionalRequiredChecks",
 }
 
@@ -107,7 +106,7 @@ def require_execution(workflow, job, caller_name):
 
 
 def parse_inputs(inputs, name, version):
-    allowed = {"project", "policy_version", "vm_architecture", *INPUT_FIELDS}
+    allowed = {"project", "policy_version", *INPUT_FIELDS}
     required = {"project", "policy_version", "required_architectures"}
     if (
         not isinstance(inputs, dict)
@@ -115,7 +114,7 @@ def parse_inputs(inputs, name, version):
         or inputs.keys() - allowed
     ):
         raise ValueError(
-            "Policy caller requires project, policy_version, required_architectures and permits only vm_targets, vm_architecture and additional_required_checks as optional inputs"
+            "Policy caller requires project, policy_version, required_architectures and permits only additional_required_checks as an optional input"
         )
     if any(not isinstance(value, str) or "${{" in value for value in inputs.values()):
         raise ValueError(
@@ -144,12 +143,6 @@ def parse_inputs(inputs, name, version):
         raise ValueError(
             "required_architectures must be a nonempty list of Nix system names"
         )
-    if any(not PROJECT_NAME.fullmatch(target) for target in settings["vmTargets"]):
-        raise ValueError("vm_targets must contain simple lowercase target names")
-    vm_architecture = inputs.get("vm_architecture", "x86_64-linux")
-    if not valid_system(vm_architecture) or not vm_architecture.endswith("-linux"):
-        raise ValueError("vm_architecture must be a Linux Nix system name")
-    settings["vmArchitecture"] = vm_architecture
     return settings
 
 
@@ -219,19 +212,9 @@ def ci_plan(project, requirements):
             for job in jobs
         ),
     ]
-    vm_architecture = project.get("vmArchitecture", "x86_64-linux")
-    vm_check = requirements["vmCheck"].format(architecture=vm_architecture)
-    if project["vmTargets"]:
-        checks.append(vm_check)
     return {
         "matrix": {"include": jobs},
         "compatibilityMatrix": {"include": compatibility_jobs},
-        "vmTargets": project["vmTargets"],
-        "vmJob": {
-            "check": vm_check.removeprefix(f"{requirements['callerJobName']} / "),
-            "system": vm_architecture,
-            "runner": runner_for(vm_architecture, requirements["vmRunners"]),
-        },
         "requiredChecks": list(
             dict.fromkeys([*checks, *project.get("additionalRequiredChecks", [])])
         ),

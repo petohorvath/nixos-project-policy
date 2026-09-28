@@ -30,6 +30,8 @@ def run(command, **kwargs):
                 -1
             ].rsplit("/", 1)[1]
         output = json.dumps({"locks": graph})
+    elif command[1] == "eval" and "vmTests" in command[-1]:
+        output = json.dumps({"system": CONFIG["system"], "names": ["boot"]})
     elif command[1] == "eval":
         output = (
             os.environ.get("POLICY_PACKAGE_SYSTEM", CONFIG["system"])

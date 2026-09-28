@@ -31,7 +31,6 @@ class FamilyFixture(ProjectFixture):
             "alpha",
             RELEASE,
             required_architectures='["aarch64-linux"]',
-            vm_targets='["vm-test"]',
             additional_required_checks='["Member / Extra"]',
         )
         for root in self.roots.values():

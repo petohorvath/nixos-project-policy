@@ -260,7 +260,6 @@ class NixCompatibilityTests(unittest.TestCase):
             )
             for channel, revision in pins.items():
                 with self.subTest(channel=channel):
-                    evidence = workspace / channel
                     report = json.loads(
                         self.run_command(
                             [
@@ -274,8 +273,6 @@ class NixCompatibilityTests(unittest.TestCase):
                                 "fixture",
                                 "--channel",
                                 channel,
-                                "--output",
-                                str(evidence),
                             ]
                         )
                     )
@@ -283,7 +280,7 @@ class NixCompatibilityTests(unittest.TestCase):
                     self.assertEqual(report["resolvedRevision"], revision)
                     self.assertEqual(report["commands"][-1]["returncode"], 0)
                     self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
-                    self.assertTrue((evidence / "metadata.json").is_file())
+                    self.assertNotIn("artifacts", report)
             flake.write_text(
                 flake.read_text().replace(pins["stable"], pins["unstable"])
             )

@@ -9,7 +9,6 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from urllib.error import HTTPError
 
 import yaml
 
@@ -35,7 +34,6 @@ from tests.fixtures.data import (
     lockfile,
     nixpkgs,
 )
-from tests.fixtures.projects import enabled_enforcement
 
 
 class LockTests(unittest.TestCase):
@@ -97,41 +95,6 @@ class PinStateTests(unittest.TestCase):
 
 
 class ProjectTests(ProjectTestCase):
-    def run_policy(self, *args):
-        if args[0] != "audit":
-            return super().run_policy(*args)
-
-        def assessed(
-            release, root, name, repository, revision, records_root, snapshot, **kwargs
-        ):
-            return {
-                **policy.inspect_project(
-                    root,
-                    name,
-                    self.config,
-                    self.pins,
-                    project=policy.member_project(root, name, self.config),
-                ),
-                "checkerVersion": release["version"],
-                "checkerRevision": release["revision"],
-            }
-
-        with (
-            patch.object(
-                policy.releases,
-                "inspect_release",
-                side_effect=lambda repository, version: {
-                    "repository": repository,
-                    "version": version,
-                    "revision": CHECKER,
-                },
-            ),
-            patch.object(policy.releases, "check_member", side_effect=assessed),
-            patch.object(policy, "git_revision", return_value=SOURCE),
-            patch.object(policy, "git_dirty", return_value=False),
-        ):
-            return super().run_policy(*args)
-
     def test_pending_enrollment_does_not_prevent_full_checks(self):
         self.members.clear()
 
@@ -217,9 +180,6 @@ class ProjectTests(ProjectTestCase):
         for report in [before, stale, updated]:
             self.assertEqual(report["policyVersion"], RELEASE)
             self.assertEqual(report["checkerVersion"], RELEASE)
-        self.assertNotEqual(
-            before["policyRecordsDigest"], updated["policyRecordsDigest"]
-        )
 
     def test_caller_version_must_match_selected_release(self):
         for version in ["v9.0.0", "main", CHECKER]:
@@ -280,19 +240,17 @@ class ProjectTests(ProjectTestCase):
         )
         self.assertEqual(status, 0, report)
         self.assertEqual(report["requiredChecks"], REQUIRED_CHECKS)
-        self.assertEqual(self.audit_with_checks(REQUIRED_CHECKS)[0], 0)
 
     def test_vm_gate_is_mandatory_only_when_targets_are_declared(self):
         self.assertEqual(self.run_policy("validate")[0], 0)
+        status, report = self.run_policy("ci", "--project", "example")
+        self.assertEqual(status, 0, report)
+        self.assertEqual(report["requiredChecks"], REQUIRED_CHECKS)
         self.declare(vm_targets='["vm-tests", "vm-tests-unstable"]')
         self.assertEqual(self.run_policy("validate")[0], 0)
-        status, report = self.audit_with_checks(REQUIRED_CHECKS)
-        self.assertEqual(status, 1)
-        self.assertEqual(
-            report["projects"][0]["issues"],
-            [f"github: missing required check '{VM_CHECK}'"],
-        )
-        self.assertEqual(self.audit_with_checks([*REQUIRED_CHECKS, VM_CHECK])[0], 0)
+        status, report = self.run_policy("ci", "--project", "example")
+        self.assertEqual(status, 0, report)
+        self.assertEqual(report["requiredChecks"], [*REQUIRED_CHECKS, VM_CHECK])
 
     def test_ci_plan_uses_the_members_required_architectures_for_jobs_and_gates(self):
         for architectures in [
@@ -358,18 +316,12 @@ class ProjectTests(ProjectTestCase):
             self.declare(required_architectures=json.dumps([architecture]))
             with self.subTest(architecture=architecture):
                 self.assertEqual(self.inspect()["status"], "pass")
-                self.assertEqual(self.audit_with_checks(checks)[0], 0)
-                for missing in [
-                    check for check in checks if check in COMPATIBILITY_CHECKS
-                ]:
-                    with self.subTest(missing=missing):
-                        incomplete = [check for check in checks if check != missing]
-                        status, report = self.audit_with_checks(incomplete)
-                        self.assertEqual(status, 1, report)
-                        self.assertIn(
-                            f"github: missing required check '{missing}'",
-                            report["projects"][0]["issues"],
-                        )
+                status, report = self.run_policy("ci", "--project", "example")
+                self.assertEqual(status, 0, report)
+                self.assertEqual(report["requiredChecks"], checks)
+                self.assertTrue(
+                    {check for check in checks if check in COMPATIBILITY_CHECKS}
+                )
 
     def test_invalid_architecture_selections_cannot_produce_a_ci_matrix(self):
         for invalid in [
@@ -447,39 +399,8 @@ class ProjectTests(ProjectTestCase):
         status, report = self.run_policy("ci", "--project", "example")
         self.assertEqual(status, 0, report)
         self.assertEqual(report["requiredChecks"], [*REQUIRED_CHECKS, "Integration"])
-        self.assertEqual(self.audit_with_checks(["Integration"])[0], 1)
 
-    def audit_with_checks(self, checks):
-        repository = "repos/owner/example"
-        data = {
-            repository: {
-                "default_branch": "main",
-                "allow_squash_merge": True,
-                "allow_merge_commit": False,
-                "allow_rebase_merge": False,
-            },
-            f"{repository}/rules/branches/main": [
-                {"type": "pull_request"},
-                {
-                    "type": "required_status_checks",
-                    "parameters": {
-                        "required_status_checks": [
-                            {"context": check} for check in checks
-                        ]
-                    },
-                },
-            ],
-            f"{repository}/branches/main": {"protected": False},
-            **enabled_enforcement(repository),
-        }
-        with patch.object(
-            policy,
-            "github_get",
-            side_effect=data.__getitem__,
-        ):
-            return self.run_policy("audit", str(self.root.parent), "--github")
-
-    def test_github_audit_requires_policy_vm_and_additional_project_gates(self):
+    def test_ci_plan_requires_policy_vm_and_additional_project_gates(self):
         checks = [*REQUIRED_CHECKS, VM_CHECK, "Project-specific integration tests"]
         self.declare(
             vm_targets='["vm-tests"]',
@@ -488,17 +409,6 @@ class ProjectTests(ProjectTestCase):
         status, report = self.run_policy("ci", "--project", "example")
         self.assertEqual(status, 0, report)
         self.assertEqual(report["requiredChecks"], checks)
-        self.assertEqual(self.audit_with_checks(checks)[0], 0)
-        for missing in checks:
-            with self.subTest(missing=missing):
-                status, report = self.audit_with_checks(
-                    [check for check in checks if check != missing]
-                )
-                self.assertEqual(status, 1)
-                self.assertEqual(
-                    report["projects"][0]["issues"],
-                    [f"github: missing required check '{missing}'"],
-                )
 
     def test_unknown_record_schema_is_rejected(self):
         self.pins["schemaVersion"] = 0
@@ -518,16 +428,6 @@ class ProjectTests(ProjectTestCase):
                 )
                 self.assertEqual(status, 2)
                 self.assertIn("selects policy v9.0.0", report["error"])
-
-    def test_missing_checkout_does_not_turn_a_failed_audit_into_an_inspection_error(
-        self,
-    ):
-        workspace = Path(self.temp.name) / "missing-workspace"
-        with patch.object(policy, "github_get") as github:
-            status, report = self.run_policy("audit", str(workspace), "--github")
-        self.assertEqual(status, 1)
-        self.assertEqual(report["projects"][0]["issues"], ["checkout missing"])
-        github.assert_not_called()
 
     def test_shell_probe_preserves_pre_enrollment_and_fails_on_probe_errors(self):
         for probe_error in [None, subprocess.CalledProcessError(1, "nix")]:
@@ -590,290 +490,6 @@ class ProjectTests(ProjectTestCase):
             "check", str(self.root), "--project", "example"
         )
         self.assertEqual(status, 2, report)
-
-    def test_audit_reports_inaccessible_protection_without_claiming_it_is_absent(self):
-        repository = "https://api.github.com/repos/owner/example"
-        info = {
-            "default_branch": "main",
-            "allow_squash_merge": True,
-            "allow_merge_commit": False,
-            "allow_rebase_merge": False,
-        }
-        for code in [401, 403, 404]:
-            with self.subTest(code=code):
-
-                def response(request, **kwargs):
-                    data = {
-                        repository: info,
-                        f"{repository}/rules/branches/main": [],
-                        f"{repository}/branches/main": {"protected": True},
-                    }
-                    if request.full_url == f"{repository}/branches/main/protection":
-                        raise HTTPError(request.full_url, code, "Unavailable", {}, None)
-                    return io.StringIO(json.dumps(data[request.full_url]))
-
-                with (
-                    patch.dict(os.environ, {"GH_TOKEN": "test-audit-token"}),
-                    patch.object(policy, "urlopen", side_effect=response),
-                ):
-                    status, report = self.run_policy(
-                        "audit", str(self.root.parent), "--github"
-                    )
-                self.assertEqual(status, 2)
-                self.assertEqual(report["status"], "error")
-                project = report["projects"][0]
-                self.assertEqual(project["status"], "error")
-                self.assertIn(f"HTTP {code}", " ".join(project["issues"]))
-                self.assertNotIn(
-                    "github: pull requests are not required", project["issues"]
-                )
-                self.assertFalse(
-                    any(
-                        "missing required check" in issue for issue in project["issues"]
-                    )
-                )
-
-    def test_github_audit_requires_member_credentials_only_for_enrolled_members(self):
-        for enrolled in [True, False]:
-            with self.subTest(enrolled=enrolled):
-                self.members.clear()
-                if enrolled:
-                    self.members["example"] = "owner/example"
-                with (
-                    patch.dict(os.environ, {}, clear=True),
-                    patch.object(
-                        policy,
-                        "urlopen",
-                        side_effect=AssertionError("No token must mean no API request"),
-                    ),
-                ):
-                    status, report = self.run_policy(
-                        "audit", str(self.root.parent), "--github"
-                    )
-                self.assertEqual(status, 2 if enrolled else 0)
-                if enrolled:
-                    self.assertIn("token", " ".join(report["projects"][0]["issues"]))
-                else:
-                    self.assertEqual(report["projects"], [])
-
-    def test_github_audit_recognizes_unprotected_branches_and_ruleset_only_gates(self):
-        repository = "https://api.github.com/repos/owner/example"
-        rules = [
-            {"type": "pull_request"},
-            {
-                "type": "required_status_checks",
-                "parameters": {
-                    "required_status_checks": [
-                        {"context": check} for check in REQUIRED_CHECKS
-                    ]
-                },
-            },
-        ]
-        for protected in [False, True]:
-            with self.subTest(protected=protected):
-
-                def response(request, **kwargs):
-                    data = {
-                        repository: {
-                            "default_branch": "main",
-                            "allow_squash_merge": True,
-                            "allow_merge_commit": False,
-                            "allow_rebase_merge": False,
-                        },
-                        f"{repository}/rules/branches/main": rules if protected else [],
-                        f"{repository}/branches/main": {"protected": protected},
-                        **enabled_enforcement(repository),
-                    }
-                    if request.full_url == f"{repository}/branches/main/protection":
-                        raise HTTPError(request.full_url, 404, "Not Found", {}, None)
-                    return io.StringIO(json.dumps(data[request.full_url]))
-
-                with (
-                    patch.dict(os.environ, {"GH_TOKEN": "test-audit-token"}),
-                    patch.object(policy, "urlopen", side_effect=response),
-                ):
-                    status, report = self.run_policy(
-                        "audit", str(self.root.parent), "--github"
-                    )
-                self.assertEqual(status, 0 if protected else 1)
-                self.assertEqual(
-                    report["projects"][0]["status"], "pass" if protected else "fail"
-                )
-                if not protected:
-                    self.assertIn(
-                        "github: pull requests are not required",
-                        report["projects"][0]["issues"],
-                    )
-
-    def test_github_audit_combines_rulesets_and_classic_protection(self):
-        self.declare(additional_required_checks='["Rules", "Classic"]')
-        repository = "https://api.github.com/repos/owner/example"
-        data = {
-            repository: {
-                "default_branch": "release/main",
-                "allow_squash_merge": True,
-                "allow_merge_commit": False,
-                "allow_rebase_merge": False,
-            },
-            f"{repository}/rules/branches/release%2Fmain": [
-                {
-                    "type": "required_status_checks",
-                    "parameters": {"required_status_checks": [{"context": "Rules"}]},
-                },
-            ],
-            f"{repository}/branches/release%2Fmain": {"protected": True},
-            f"{repository}/branches/release%2Fmain/protection": {
-                "required_pull_request_reviews": {"required_approving_review_count": 0},
-                "required_status_checks": {
-                    "contexts": REQUIRED_CHECKS,
-                    "checks": [{"context": "Classic"}],
-                },
-            },
-            **enabled_enforcement(repository),
-        }
-
-        def response(request, **kwargs):
-            self.assertEqual(
-                request.get_header("Authorization"), "Bearer test-audit-token"
-            )
-            return io.StringIO(json.dumps(data[request.full_url]))
-
-        with (
-            patch.dict(
-                os.environ,
-                {"GH_TOKEN": "test-audit-token", "GITHUB_TOKEN": "workflow-token"},
-            ),
-            patch.object(policy, "urlopen", side_effect=response),
-        ):
-            status, report = self.run_policy("audit", str(self.root.parent), "--github")
-        self.assertEqual(status, 0)
-        self.assertEqual(report["projects"][0]["status"], "pass")
-        self.assertEqual(report["projects"][0]["issues"], [])
-
-    def audit_merge_settings(self, rest_settings, graphql_result):
-        repository = "https://api.github.com/repos/owner/example"
-        data = {
-            **enabled_enforcement(repository),
-            repository: {"default_branch": "main", **rest_settings},
-            f"{repository}/rules/branches/main": [
-                {"type": "pull_request"},
-                {
-                    "type": "required_status_checks",
-                    "parameters": {
-                        "required_status_checks": [
-                            {"context": check} for check in REQUIRED_CHECKS
-                        ]
-                    },
-                },
-            ],
-        }
-
-        def response(request, **kwargs):
-            self.assertEqual(request.get_header("Authorization"), "Bearer audit-token")
-            if request.full_url == "https://api.github.com/graphql":
-                self.assertEqual(request.get_method(), "POST")
-                payload = json.loads(request.data)
-                self.assertEqual(
-                    payload["variables"], {"owner": "owner", "name": "example"}
-                )
-                for field in [
-                    "squashMergeAllowed",
-                    "mergeCommitAllowed",
-                    "rebaseMergeAllowed",
-                ]:
-                    self.assertIn(field, payload["query"])
-                if isinstance(graphql_result, Exception):
-                    raise graphql_result
-                return io.StringIO(json.dumps(graphql_result))
-            return io.StringIO(json.dumps(data[request.full_url]))
-
-        with (
-            patch.dict(os.environ, {"GH_TOKEN": "audit-token"}),
-            patch.object(policy, "urlopen", side_effect=response),
-        ):
-            return self.run_policy("audit", str(self.root.parent), "--github")
-
-    def test_github_audit_resolves_hidden_merge_settings(self):
-        squash_only = {
-            "allow_squash_merge": True,
-            "allow_merge_commit": False,
-            "allow_rebase_merge": False,
-        }
-        incomplete = [{}, {"allow_squash_merge": True}]
-        for field in squash_only:
-            incomplete.append(
-                {key: value for key, value in squash_only.items() if key != field}
-            )
-            for invalid in [None, "false", 0]:
-                incomplete.append({**squash_only, field: invalid})
-        for rest_settings in incomplete:
-            for changed in [None, *squash_only]:
-                with self.subTest(rest=rest_settings, changed=changed):
-                    settings = dict(squash_only)
-                    if changed:
-                        settings[changed] = not settings[changed]
-                    status, report = self.audit_merge_settings(
-                        rest_settings, {"data": {"repository": settings}}
-                    )
-                    self.assertEqual(status, 1 if changed else 0)
-                    self.assertEqual(
-                        report["projects"][0]["status"], "fail" if changed else "pass"
-                    )
-                    self.assertEqual(
-                        report["projects"][0]["issues"],
-                        ["github: configure squash as the only merge method"]
-                        if changed
-                        else [],
-                    )
-
-    def test_github_audit_keeps_unknown_merge_settings_as_inspection_errors(self):
-        squash_only = {
-            "allow_squash_merge": True,
-            "allow_merge_commit": False,
-            "allow_rebase_merge": False,
-        }
-        invalid = [
-            None,
-            [],
-            {},
-            {"data": None},
-            {"data": []},
-            {"data": {"repository": None}},
-        ]
-        invalid.append(
-            {"data": {"repository": squash_only}, "errors": [{"message": "Denied"}]}
-        )
-        for field in squash_only:
-            invalid.append(
-                {
-                    "data": {
-                        "repository": {
-                            key: value
-                            for key, value in squash_only.items()
-                            if key != field
-                        }
-                    }
-                }
-            )
-            for value in [None, "false", 0]:
-                invalid.append({"data": {"repository": {**squash_only, field: value}}})
-        for code in [401, 403, 404]:
-            invalid.append(
-                HTTPError("https://api.github.com/graphql", code, "Denied", {}, None)
-            )
-        for result in invalid:
-            with self.subTest(result=result):
-                status, report = self.audit_merge_settings({}, result)
-                self.assertEqual(status, 2)
-                self.assertEqual(report["status"], "error")
-                self.assertEqual(report["projects"][0]["status"], "error")
-                self.assertIn(
-                    "settings are unknown", " ".join(report["projects"][0]["issues"])
-                )
-                self.assertNotIn(
-                    "github: configure squash as the only merge method",
-                    report["projects"][0]["issues"],
-                )
 
     def test_complete_static_contract_passes(self):
         self.assertEqual(self.inspect()["issues"], [])
@@ -1038,12 +654,6 @@ class ProjectTests(ProjectTestCase):
                 for issue in self.inspect()["issues"]
             )
         )
-
-    def test_unenrolled_projects_do_not_enter_audit_scope(self):
-        self.members.clear()
-        code, report = self.run_policy("audit", str(self.root))
-        self.assertEqual(code, 0, report)
-        self.assertEqual(report["projects"], [])
 
     def test_conditional_or_unpinned_callers_fail(self):
         self.workflow["jobs"]["policy"]["if"] = "false"
@@ -1242,8 +852,16 @@ class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
                 self.assertEqual(report["expectedRevision"], revision)
                 self.assertEqual(report["resolvedRevision"], revision)
                 self.assertEqual(report["revision"], SOURCE)
-                self.assertEqual(report["checkerRevision"], CHECKER)
-                self.assertEqual(report["policyRecordsRevision"], CHECKER)
+                for removed in [
+                    "artifacts",
+                    "checkerRevision",
+                    "checkerSourceDigest",
+                    "policyRecordsDigest",
+                    "policyRecordsRevision",
+                    "sourceDigest",
+                    "sourceDirty",
+                ]:
+                    self.assertNotIn(removed, report)
                 self.assertEqual(report["system"], self.host)
                 self.assertEqual(report["pinStatus"], "approved")
                 check = next(
@@ -1257,13 +875,6 @@ class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
                 )
                 self.assertNotIn("--no-build", check)
                 self.assertNotIn("--no-update-lock-file", check)
-                evidence = Path(report["artifacts"])
-                self.assertEqual(
-                    json.loads((evidence / "result.json").read_text()), report
-                )
-                self.assertEqual(
-                    json.loads((evidence / "metadata.json").read_text()), self.metadata
-                )
 
     def test_resolved_input_must_be_present_exact_and_from_nixos(self):
         for failure in [
@@ -1386,7 +997,7 @@ class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
         self.assertEqual(code, 1, report)
         self.assertIn("Compatibility changed the project lockfile", report["issues"])
 
-    def test_source_inspection_errors_preserve_execution_evidence(self):
+    def test_source_inspection_errors_fail_the_run(self):
         original = self.run_command
 
         def mutate(command, **kwargs):
@@ -1400,7 +1011,6 @@ class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
             code, report = self.compatibility()
         self.assertEqual(code, 1, report)
         self.assertIn("escapes", " ".join(report["issues"]))
-        self.assertTrue((Path(report["artifacts"]) / "result.json").is_file())
 
     def test_record_snapshot_is_captured_before_test_execution(self):
         original = self.run_command
@@ -1417,15 +1027,15 @@ class CompatibilityTests(CompatibilityFixture, ProjectTestCase):
             code, after = self.compatibility()
         self.assertEqual(code, 0, after)
         self.assertEqual(after["expectedRevision"], STABLE)
-        self.assertEqual(after["policyRecordsDigest"], before["policyRecordsDigest"])
 
-    def test_evidence_cannot_be_written_inside_the_project(self):
-        code, report = self.compatibility(
-            "stable", "--output", str(self.root / "evidence")
-        )
-        self.assertEqual(code, 2, report)
-        self.assertIn("outside", report["error"])
-        self.assertFalse((self.root / "evidence").exists())
+    def test_compatibility_rejects_an_evidence_directory(self):
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as error,
+        ):
+            self.compatibility("stable", "--output", str(self.root.parent / "out"))
+        self.assertEqual(error.exception.code, 2)
+        self.assertFalse((self.root.parent / "out").exists())
 
     def test_compatibility_requires_the_committed_root_lock(self):
         self.committed_lock = b"{}"
@@ -1438,7 +1048,6 @@ class RecordTests(unittest.TestCase):
     def test_member_commands_require_explicit_current_records(self):
         for args in [
             ["check", ".", "--project", "example"],
-            ["audit", "."],
             ["vm", ".", "--project", "example"],
             ["compatibility", ".", "--project", "example", "--channel", "stable"],
             ["ci", "--project", "example"],
@@ -1482,7 +1091,18 @@ class RecordTests(unittest.TestCase):
             report = json.loads(output.getvalue())
             self.assertEqual(status, 0)
             self.assertTrue(report["approvedPins"])
-            self.assertEqual(len(report["policyRecordsDigest"]), 64)
+            self.assertNotIn("policyRecordsDigest", report)
+            self.assertNotIn("policyRecordsRevision", report)
+
+    def test_audit_and_agreement_commands_do_not_exist(self):
+        for command in ["audit", "agreement"]:
+            with (
+                self.subTest(command=command),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit) as error,
+            ):
+                policy.main(["--policy-root", ".", command, "."])
+            self.assertEqual(error.exception.code, 2)
 
 
 class WorkflowTests(unittest.TestCase):
@@ -1746,56 +1366,6 @@ class WorkflowTests(unittest.TestCase):
                         else "",
                     )
 
-    def test_hosted_release_guard_rejects_unpublished_or_mutable_versions(self):
-        workflow = yaml.load(
-            (policy.SOURCE_ROOT / ".github/workflows/check.yml").read_text(),
-            Loader=yaml.BaseLoader,
-        )
-        guard = workflow["jobs"]["records"]["steps"][0]["run"]
-        approved = {
-            "tag_name": RELEASE,
-            "immutable": True,
-            "draft": False,
-            "prerelease": False,
-        }
-        cases = [
-            (RELEASE, approved, 0, True),
-            (RELEASE, {**approved, "immutable": False}, 0, False),
-            (RELEASE, {**approved, "draft": True}, 0, False),
-            (RELEASE, {**approved, "prerelease": True}, 0, False),
-            (RELEASE, {**approved, "tag_name": "v9.0.0"}, 0, False),
-            (RELEASE, {}, 0, False),
-            (RELEASE, approved, 1, False),
-            ("main", approved, 0, False),
-        ]
-        with tempfile.TemporaryDirectory() as temporary:
-            stub = Path(temporary) / "gh"
-            stub.write_text(
-                f"#!{sys.executable}\n"
-                "import os, sys\n"
-                "print(os.environ['TEST_RELEASE'])\n"
-                "sys.exit(int(os.environ['TEST_GH_STATUS']))\n"
-            )
-            stub.chmod(0o755)
-            for version, release, api_status, passes in cases:
-                with self.subTest(
-                    version=version, release=release, api_status=api_status
-                ):
-                    result = subprocess.run(
-                        ["bash", "-e", "-o", "pipefail", "-c", guard],
-                        env={
-                            **os.environ,
-                            "PATH": f"{temporary}:{os.environ['PATH']}",
-                            "POLICY_VERSION": version,
-                            "TEST_RELEASE": json.dumps(release),
-                            "TEST_GH_STATUS": str(api_status),
-                        },
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    self.assertEqual(result.returncode == 0, passes, result.stderr)
-
     def test_all_member_jobs_use_one_release_and_record_snapshot(self):
         workflow = yaml.load(
             (policy.SOURCE_ROOT / ".github/workflows/check.yml").read_text(),
@@ -1851,12 +1421,13 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(step["env"]["CHANNEL"], "${{ matrix.channel }}")
         self.assertIn("--policy-root ./policy-state", step["run"])
         self.assertNotIn("||", step["run"])
-        upload = next(
-            step
-            for step in job["steps"]
-            if step.get("uses", "").startswith("actions/upload-artifact@")
+        self.assertNotIn("--output", step["run"])
+        self.assertFalse(
+            any(
+                step.get("uses", "").startswith("actions/upload-artifact@")
+                for step in job["steps"]
+            )
         )
-        self.assertEqual(upload["if"], "always()")
         default = workflow["jobs"]["policy"]["steps"]
         self.assertTrue(
             any(
@@ -1878,28 +1449,11 @@ class WorkflowTests(unittest.TestCase):
             "nix flake check ./project --no-update-lock-file --print-build-logs",
         )
 
-    def test_audit_uses_a_member_access_secret(self):
-        source = Path(__file__).resolve().parents[1]
-        workflow = yaml.load(
-            (source / ".github/workflows/audit.yml").read_text(),
-            Loader=yaml.BaseLoader,
-        )
-        audit = next(
-            step
-            for step in workflow["jobs"]["audit"]["steps"]
-            if "--github" in step.get("run", "")
-        )
-        self.assertEqual(
-            audit["env"].get("GH_TOKEN"), "${{ secrets.MEMBER_AUDIT_TOKEN }}"
-        )
-        self.assertNotIn("GITHUB_TOKEN", audit["env"])
-
     def test_pr_workflows_cover_source_changes_without_edit_events(self):
         source = Path(__file__).resolve().parents[1]
         for path in [
             ".github/workflows/ci.yml",
             "templates/policy-caller.yml",
-            "templates/integration-caller.yml",
         ]:
             with self.subTest(path=path):
                 workflow = yaml.load(
@@ -1921,66 +1475,6 @@ class WorkflowTests(unittest.TestCase):
             after = policy.fingerprints(root)
             self.assertNotEqual(before["file.nix"], after["file.nix"])
             self.assertIn("new.md", after)
-
-    def test_cycle_detection(self):
-        self.assertEqual(
-            policy.dependency_cycles({"a": ["b"], "b": ["c"], "c": []}), []
-        )
-        self.assertEqual(
-            policy.dependency_cycles({"a": ["b"], "b": ["a"]}), [["a", "b", "a"]]
-        )
-
-    @patch.object(policy, "github_get")
-    def test_missing_github_gates_are_reported(self, get):
-        get.side_effect = [
-            {
-                "default_branch": "main",
-                "allow_squash_merge": True,
-                "allow_merge_commit": False,
-                "allow_rebase_merge": False,
-            },
-            [],
-            {"protected": False},
-            *enabled_enforcement("repos/owner/example").values(),
-        ]
-        issues = policy.check_github(
-            {"repository": "owner/example"},
-            ["Policy"],
-            workflow=".github/workflows/policy.yml",
-        )
-        self.assertEqual(len(issues), 2)
-
-    @patch.object(policy, "github_get")
-    def test_ruleset_gates_are_recognized(self, get):
-        get.side_effect = [
-            {
-                "default_branch": "main",
-                "allow_squash_merge": True,
-                "allow_merge_commit": False,
-                "allow_rebase_merge": False,
-            },
-            [
-                {"type": "pull_request"},
-                {
-                    "type": "required_status_checks",
-                    "parameters": {
-                        "required_status_checks": [
-                            {"context": name}
-                            for name in ["Policy", *COMPATIBILITY_CHECKS]
-                        ]
-                    },
-                },
-            ],
-            *enabled_enforcement("repos/owner/example").values(),
-        ]
-        self.assertEqual(
-            policy.check_github(
-                {"repository": "owner/example"},
-                ["Policy"],
-                workflow=".github/workflows/policy.yml",
-            ),
-            [],
-        )
 
 
 if __name__ == "__main__":

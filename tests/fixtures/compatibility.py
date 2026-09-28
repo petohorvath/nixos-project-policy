@@ -1,7 +1,6 @@
 """Controlled Nix metadata and command outcomes for compatibility scenarios."""
 
 import json
-from pathlib import Path
 import subprocess
 from unittest.mock import patch
 
@@ -56,10 +55,6 @@ class CompatibilityFixture(ProjectFixture):
         raise AssertionError(command)
 
     def compatibility(self, channel="stable", *options):
-        output = (
-            Path(self.temp.name)
-            / f"evidence-{len(list(Path(self.temp.name).glob('evidence-*')))}"
-        )
         return self.run_policy(
             "compatibility",
             str(self.root),
@@ -67,7 +62,5 @@ class CompatibilityFixture(ProjectFixture):
             "example",
             "--channel",
             channel,
-            "--output",
-            str(output),
             *options,
         )

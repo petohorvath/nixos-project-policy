@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Remove the `audit` and `agreement` commands, the Member audit and agreement workflows, and the integration caller template. The checker no longer calls the GitHub API or inspects published releases, and the reusable workflow no longer verifies release immutability or exports source and record snapshot outputs.
+- Remove record digests, checker and source digests, and replay data from reports. `compatibility` no longer accepts `--output` or writes evidence directories.
 - Reject member Markdown that passes `..` or a `../` path to `--policy-root`. Clone records for local commands into a `mktemp -d` directory, as the README and checker reference now show.
 
 ### Migration

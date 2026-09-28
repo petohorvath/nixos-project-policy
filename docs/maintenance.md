@@ -25,8 +25,8 @@ A pin update changes the approved pair through an ordinary central PR. Member co
 
 1. Select the weekly candidate artifact or prepare an urgent pair.
 2. Change `approved.stable` and `approved.unstable` in `policy/pins.json`. Keep enrollment and checker changes separate.
-3. Use each enrolled member's selected published checker against the proposed record checkout. Run both compatibility revisions on its required architectures, committed-lock checks, and applicable VM and additional gates. For integration projects, include agreement and behavioral checks at their locked dependency revisions.
-4. Retain exact tested source, checker, and record revisions with the results in the PR or CI artifacts. Resolve required member fixes through their own reviewed PRs, then renew affected checks.
+3. Use each enrolled member's selected published checker against the proposed record checkout. Run both compatibility revisions on its required architectures, committed-lock checks, and applicable VM and additional gates.
+4. Retain exact tested source, checker, and record revisions with the results in the PR. Resolve required member fixes through their own reviewed PRs, then renew affected checks.
 5. Obtain human approval and merge the central PR. Subsequent member CI runs capture the new pair from `main`.
 
 For example, test a reviewed proposed record checkout with the member's selected checker:
@@ -34,10 +34,10 @@ For example, test a reviewed proposed record checkout with the member's selected
 ```bash
 nix run --no-update-lock-file ./checker -- \
   --policy-root ./proposed-records compatibility ./member \
-  --project MEMBER --channel stable --output ./evidence-stable
+  --project MEMBER --channel stable
 nix run --no-update-lock-file ./checker -- \
   --policy-root ./proposed-records compatibility ./member \
-  --project MEMBER --channel unstable --output ./evidence-unstable
+  --project MEMBER --channel unstable
 nix flake check ./member --no-update-lock-file --print-build-logs
 ```
 
@@ -46,8 +46,6 @@ Repeat on every required architecture and run the remaining member gates. These 
 ### Candidate preparation
 
 The [Prepare pin update workflow](../.github/workflows/pins.yml) produces `candidate.json` in the `pin-proposal` artifact weekly or on manual dispatch. Urgent manual preparation accepts both `stable_revision` and `unstable_revision` as exact commits. Supplying only one fails. With neither input, it resolves `stableBranch` from `policy/pins.json` and the `nixos-unstable` branch once. Preparation does not run member compatibility checks; retain those results separately before approval.
-
-The [Member audit workflow](../.github/workflows/audit.yml) runs daily or independently on manual dispatch. It uploads `audit.json` as the `drift-audit` artifact, including after a failed audit. Audits inspect selected releases and enforcement; they do not rerun member CI.
 
 Preparation creates no PR. Automation that creates member PRs requires a separately reviewed write identity and tests for targeted lock updates.
 
@@ -68,24 +66,7 @@ Keep `VERSION` and member workflow references unchanged for pin updates. Validat
 
 ## Renewing PR evidence
 
-Renew validation when either proposed revision changes. Renew affected checks when member sources, settings, integration dependencies, checker, or enrollment change. Review evidence against the final proposed pair before merge. Keep exact tested commits with the results; independent member changes require no central bookkeeping commit.
-
-## Audit access
-
-Configure the policy repository's `MEMBER_AUDIT_TOKEN` Actions secret for all enrolled repositories. Use a fine-grained personal access token with these read permissions:
-
-| Permission     | Inspection                                                                                                                                                                                                                                |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Actions        | [Caller workflow state](https://docs.github.com/en/rest/actions/workflows#get-a-workflow)                                                                                                                                                 |
-| Administration | [Actions settings](https://docs.github.com/en/rest/actions/permissions#get-github-actions-permissions-for-a-repository) and [classic branch protection](https://docs.github.com/en/rest/branches/branch-protection#get-branch-protection) |
-| Contents       | [Branch metadata](https://docs.github.com/en/rest/branches/branches#get-a-branch)                                                                                                                                                         |
-| Metadata       | [Active branch rules](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch)                                                                                                                                                 |
-
-Add newly enrolled repositories to the token's selection. Renew the token before expiry. No write permission is required.
-
-The Member audit workflow passes this secret as `GH_TOKEN`. It does not use the automatic [`GITHUB_TOKEN`](https://docs.github.com/en/actions/concepts/security/github_token), which is limited to the policy repository. Local audits accept `GH_TOKEN` or `GITHUB_TOKEN`; `GH_TOKEN` takes precedence. A GitHub App installation token with the same read permissions also works locally. Hosted token issuance needs separate setup.
-
-An empty roster requires no member credential. Otherwise, missing credentials or inaccessible metadata cause inspection errors. An HTTP 404 does not prove absent protection. Verify hosted access before activation. See [audit results](checker.md#enrollment-audits).
+Renew validation when either proposed revision changes. Renew affected checks when member sources, settings, checker, or enrollment change. Review evidence against the final proposed pair before merge. Keep exact tested commits with the results; independent member changes require no central bookkeeping commit.
 
 ## Recovery
 
@@ -102,7 +83,7 @@ A repair that changes either nixpkgs revision creates a revised candidate. Rerun
 3. Use the selected release's caller template. Match its release reference, `policy_version`, and documentation links. Declare [member settings](checker.md#member-declarations-and-central-records) in the caller.
 4. Run `nix run --no-update-lock-file ./checker -- --policy-root ./records check PATH --project NAME --shell` with the member's selected checker and current trusted records.
 5. Run committed-lock checks, both compatibility revisions on every required architecture, and applicable VM suites on the selected `vm_architecture` (default `x86_64-linux`).
-6. Run `ci PATH --project NAME` with the same checker and records prefix. Compare the generated names with actual PR statuses and merge gates. Verify audit access.
+6. Run `ci PATH --project NAME` with the same checker and records prefix. Compare the generated names with actual PR statuses and merge gates.
 7. Retain the evidence on the member PR. Add the repository identity to `policy/members.json` through a reviewed central PR after verification.
 
 Drafts can prepare an unpublished release. Hosted checks require publication before activation. Checks before enrollment do not change membership or pin approval.
@@ -110,14 +91,6 @@ Drafts can prepare an unpublished release. Hosted checks require publication bef
 Removal also requires a reviewed central PR. Keep enrollment plans in issues. Ordinary policy upgrades do not change the roster.
 
 Enroll new identities in `policy/members.json`; ordinary member changes do not update the roster or pin records.
-
-Run an audit from a trusted current policy checkout for all enrolled identities:
-
-```bash
-nix run --no-update-lock-file .# -- --policy-root . audit WORKSPACE --fetch --github
-```
-
-The dispatcher discovers each member's selected release. Retain its JSON report. See [audit behavior](checker.md#enrollment-audits) for release discovery and inspection failures.
 
 ## Releases
 
@@ -134,18 +107,3 @@ The dispatcher discovers each member's selected release. Retain its JSON report.
 9. Verify that GitHub reports an immutable release and that the tag resolves to the checked commit.
 
 Do not reuse a release tag. Ordinary PR merges and candidate generation do not authorize publication. Member upgrades use separate reviewed PRs. Selections must remain at v0.4.0 or later.
-
-## Integration project agreement
-
-Creating or enrolling an integration project requires a separate decision. Keep behavioral tests in its root flake.
-
-1. Adopt the [integration caller template](../templates/integration-caller.yml) after release publication.
-2. Declare `Integration / Policy agreement` as an additional required check.
-3. Keep both callers on the same release. Preserve the template's source and record output bindings.
-4. Run `ci PATH --project NAME` with the selected checker and records prefix to inspect required gates.
-5. Run `agreement PATH --project NAME` with the same prefix against a clean committed integration checkout.
-6. Verify the actual GitHub status. Review merge-setting changes separately.
-
-Upgrade the integration selection and its complete matching dependency set together. Member branches can upgrade independently while the integration lock retains older supported revisions. Review reported lock scopes, source revisions, and selections.
-
-Policy agreement does not prove functional compatibility. Preserve committed-lock tests, both compatibility revisions on each required architecture, and applicable VM tests on the selected VM system. See the [agreement contract](checker.md#integration-policy-agreement).

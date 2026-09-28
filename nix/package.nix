@@ -3,7 +3,6 @@
   python3,
   git,
   nix,
-  checkerRevision,
 }:
 writeShellApplication {
   name = "nixos-project-policy";
@@ -12,6 +11,6 @@ writeShellApplication {
     nix
   ];
   text = ''
-    exec ${python3}/bin/python -c 'import runpy; runpy.run_path("${../.}/tools/policy.py", run_name="__main__", init_globals={"PACKAGED_REVISION": "${checkerRevision}"})' "$@"
+    exec ${python3}/bin/python -c 'import runpy; runpy.run_path("${../.}/tools/policy.py", run_name="__main__")' "$@"
   '';
 }

@@ -42,9 +42,9 @@ nix develop --no-update-lock-file --command python -m unittest tests.nix_compati
 
 `tests.nix_compatibility` runs real metadata queries and root checks with both exact nixpkgs overrides. It checks lock preservation, rejection of required default-lock updates, nonempty host checks under the committed lock, and the explicit default development-shell requirement.
 
-`tests.packaged_policy` builds the checker from a controlled clean repository. It exercises member checks, checks before enrollment, audits, and integration agreement using the current release contract.
+`tests.packaged_policy` builds the checker from a controlled clean repository. It exercises member checks and checks before enrollment using the current release contract.
 
-Test adapters supply unpublished release metadata, GitHub responses, and Nix process results. Git operations, record processing, checker code, and packaged commands execute normally. Use the real-Nix test to verify native override behavior. Neither host test verifies live GitHub merge protection.
+Test adapters supply Nix process results. Git operations, record processing, checker code, and packaged commands execute normally. Use the real-Nix test to verify native override behavior.
 
 CI also smoke-tests the default development shell and evaluates the formatter:
 
@@ -60,7 +60,7 @@ When the member selects the version in this checkout's `VERSION`, run the local 
 nix run --no-update-lock-file .# -- --policy-root . check ../PROJECT --project PROJECT
 ```
 
-For another selected release, use that release's checker with a separate current record checkout, as shown in the [checker reference](checker.md#commands). Add `--shell` to smoke-test the member's development environment and evaluate its formatter. The default check reads files; compatibility execution uses the separate `compatibility` command. Checks and audits do not update member sources or lockfiles, though shell and compatibility commands execute member code. See the [checker reference](checker.md) for results and limits.
+For another selected release, use that release's checker with a separate current record checkout, as shown in the [checker reference](checker.md#commands). Add `--shell` to smoke-test the member's development environment and evaluate its formatter. The default check reads files; compatibility execution uses the separate `compatibility` command. Checks do not update member sources or lockfiles, though shell and compatibility commands execute member code. See the [checker reference](checker.md) for results and limits.
 
 ## Nix conventions
 

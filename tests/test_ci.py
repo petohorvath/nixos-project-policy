@@ -13,7 +13,7 @@ from unittest.mock import patch
 import yaml
 
 from tests.fixtures.cases import RepoTestCase
-from tools import policy
+from tools import pin_bump, policy
 
 
 TWO_SYSTEMS = [
@@ -341,11 +341,13 @@ class WorkflowTests(unittest.TestCase):
 
     def test_caller_template_is_the_minimal_caller_in_the_readme(self):
         caller = load("templates/policy-caller.yml")["jobs"]["policy"]
+        version = pin_bump.read_version(policy.SOURCE_ROOT)
+        series_tag = pin_bump.series(version)["seriesTag"]
         self.assertEqual(
             caller,
             {
                 "name": "Policy",
-                "uses": "petohorvath/nixos-project-policy/.github/workflows/check.yml@v0.5",
+                "uses": f"petohorvath/nixos-project-policy/.github/workflows/check.yml@{series_tag}",
             },
         )
         document = (policy.SOURCE_ROOT / "README.md").read_text()

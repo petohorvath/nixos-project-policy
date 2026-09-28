@@ -34,10 +34,6 @@ This release reduces the policy to three guarantees for each repo: its inputs, i
 
 `policy/pins.json` and `policy/members.json` stay on `main` unchanged until nixos-registry and nixos-cross-config call `@v0.5`, so v0.4.0 callers keep working.
 
-### Publishing
-
-A human merges the release PR, tags the merge commit `v0.5.0`, and creates `v0.5` at the same commit. Until `v0.5.0` exists, the Propose pin bump workflow fails with "VERSION 0.5.0 has no release tag v0.5.0". The proposal also needs Actions permission to create pull requests; see [pin bumps](README.md#pin-bumps).
-
 ## 0.4.0
 
 - Allow members to select a Linux VM execution system with `vm_architecture`. Derive its worker and required status together; preserve x86_64 Linux as the default. Other VM systems require matching self-hosted runners with KVM. Members opting in must update their required VM status after selecting a release that includes this input.

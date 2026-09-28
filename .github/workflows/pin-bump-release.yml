@@ -1,0 +1,64 @@
+name: Tag pin-bump release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pin-bump-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag pin-bump release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Find the merged pin-bump PR
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+        run: |
+          # Only the squash commit of a merged same-repo automation/pin-bump PR is released.
+          count=$(gh api "repos/$REPOSITORY/pulls?state=closed&base=main&head=${REPOSITORY%%/*}:automation/pin-bump&sort=updated&direction=desc&per_page=10" \
+            --jq "[.[] | select(.merged_at != null and .merge_commit_sha == \"$REVISION\")] | length")
+          if test "$count" -gt 0; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$REVISION is not a merged pin-bump PR; no tag."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.source.outputs.release == 'true'
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+        if: steps.source.outputs.release == 'true'
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.34.6/install
+      - name: Tag the next patch release and move the series tag
+        if: steps.source.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          plan=$(nix develop --no-update-lock-file --command python tools/pin_bump.py release)
+          jq . <<< "$plan"
+          tag=$(jq -r .tag <<< "$plan")
+          series=$(jq -r .seriesTag <<< "$plan")
+          gh auth setup-git
+          if test "$(jq -r .status <<< "$plan")" = release; then
+            git tag "$tag" HEAD
+            # Without --force, the push fails rather than move an existing tag.
+            git push origin "refs/tags/$tag"
+          fi
+          git tag --force "$series" "$tag"
+          git push --force origin "refs/tags/$series"

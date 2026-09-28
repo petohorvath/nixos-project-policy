@@ -21,53 +21,27 @@ Run member commands with that selected checker. In the commands below, `./checke
 nix run --no-update-lock-file ./checker -- COMMAND
 ```
 
-## Pin candidates and approval
+## Pin bumps
 
-A pin update changes the approved pair through an ordinary central PR. Member commits and rollout states are not stored in this repository.
+Pin bumps are automated patch releases. Each one needs a human merge.
 
-1. Select the weekly candidate artifact or prepare an urgent pair.
-2. Change `stable` and `unstable` in `data/pins.json`. Keep enrollment and checker changes separate.
-3. Build the checker from the proposed change and run it against each enrolled member. Run both compatibility revisions on its required architectures, committed-lock checks, and applicable VM and additional gates.
-4. Retain exact tested source, checker, and record revisions with the results in the PR. Resolve required member fixes through their own reviewed PRs, then renew affected checks.
-5. Obtain human approval and merge the central PR. Members receive the new pins with the next release that bundles them.
+1. The [Propose pin bump workflow](../.github/workflows/pins.yml) runs weekly and on manual dispatch. Without inputs, it resolves `stableBranch` from `data/pins.json` and `nixos-unstable`. Manual dispatch accepts both `stable_revision` and `unstable_revision` as exact commits; supplying only one fails.
+2. When the pins change, `tools/pin_bump.py propose` writes `data/pins.json`, the transitional `policy/pins.json`, the next patch version in `VERSION`, and a `CHANGELOG.md` section. Unreleased changelog entries move into that section because the patch release ships them. The workflow force-pushes the `automation/pin-bump` branch and opens or updates its PR.
+3. The [Pin-bump tests workflow](../.github/workflows/pin-bump-tests.yml) runs the checker from the PR head against the `main` branch of every repo in `data/repos.json`: `test --nixpkgs stable` and `test --nixpkgs unstable` on each system, and `vm` on `x86_64-linux`. `tools/pin_bump.py matrix` lists the jobs. The `Pin-bump tests` job summarizes them.
+4. Fix a failing repo through a PR in that repo, then re-run the failed jobs.
+5. After a human merges the PR, the [Tag pin-bump release workflow](../.github/workflows/pin-bump-release.yml) runs `tools/pin_bump.py release`. It creates the exact tag from `VERSION` and force-moves the minor-series tag, for example `v0.5`, to it. Other pushes to `main` create no tag.
 
-For example, test the proposed pins with a checkout `./proposed` of the proposed change:
+The next patch version follows the highest `vX.Y.Z` tag in the minor series of `VERSION`. A proposal fails while `VERSION` itself has no tag, for example after a release PR for a new minor series. Tag that release by hand first. The tag workflow fails when `VERSION` is not that next patch or its tag exists on another commit. Exact version tags are never moved.
 
-```bash
-nix run --no-update-lock-file ./proposed -- \
-  test ./member --nixpkgs stable
-nix run --no-update-lock-file ./proposed -- \
-  test ./member --nixpkgs unstable
-nix run --no-update-lock-file ./proposed -- \
-  test ./member --nixpkgs locked
-```
+A patch release ships everything on `main`. Keep `main` releasable in the current series: a breaking change must bump `VERSION` to the next minor version in the same PR.
 
-Repeat on every required architecture and run the remaining member gates. These results establish behavior against the proposed pins; they do not approve them. No batch registration, central copy of member revisions, or separate pin-approval workflow is required.
+Pull requests and pushes from `GITHUB_TOKEN` start no `pull_request` runs. The proposal workflow therefore dispatches the Pin-bump tests and CI workflows on the PR branch. Their check runs appear on the PR head. Re-running them or pushing to the branch by hand also works.
 
-### Candidate preparation
+The workflows need these repository settings:
 
-The [Prepare pin update workflow](../.github/workflows/pins.yml) produces `candidate.json` in the `pin-proposal` artifact weekly or on manual dispatch. Urgent manual preparation accepts both `stable_revision` and `unstable_revision` as exact commits. Supplying only one fails. With neither input, it resolves `stableBranch` from `data/pins.json` and the `nixos-unstable` branch once. Preparation does not run member compatibility checks; retain those results separately before approval.
-
-Preparation creates no PR. Automation that creates member PRs requires a separately reviewed write identity and tests for targeted lock updates.
-
-### Required member lock changes
-
-Members can retain their selected root dependency during compatibility tests. Independently locked examples, additional inputs, and distinct transitive nixpkgs nodes also retain shared-pin requirements.
-
-1. Resolve `follows` relationships before selecting the owning inputs.
-2. Update those inputs with a targeted `nix flake lock` operation and exact candidate revisions.
-3. Update relevant branch declarations for a stable release upgrade.
-4. Compare the old and new lock graphs. Verify persisted revisions, branch declarations, and sharing. Reject unrelated dependency changes.
-5. Run builds and checks with `--no-update-lock-file` and no overrides.
-6. Also run the policy runner against both candidate revisions.
-
-Record each tested commit and result in the central PR. Test these lock properties on controlled fixtures when changing update automation. Keep member changes and their review evidence in their own PRs.
-
-Keep `VERSION` and member workflow references unchanged for pin updates. Validate enrolled members against the proposed pair before approval. Shared-pin lock scopes use one pair; no per-member old/new allowance is recorded.
-
-## Renewing PR evidence
-
-Renew validation when either proposed revision changes. Renew affected checks when member sources, settings, checker, or enrollment change. Review evidence against the final proposed pair before merge. Keep exact tested commits with the results; independent member changes require no central bookkeeping commit.
+- Actions may create pull requests (Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests").
+- `GITHUB_TOKEN` may push the `automation/pin-bump` branch, `vX.Y.Z` tags, and forced updates of `vX.Y` tags. Exempt GitHub Actions from rulesets that block them.
+- Listed repos are public, so the tests can check them out with `GITHUB_TOKEN`.
 
 ## Recovery
 
@@ -75,7 +49,7 @@ Pause further update merges when a regression appears. If the repair is understo
 
 If the impact is unacceptable or the repair is uncertain, roll back through tested PRs. Test the prior pair against current code. Both paths require human approval and evidence in the relevant PRs. Historical releases remain unchanged.
 
-A repair that changes either nixpkgs revision creates a revised candidate. Rerun all affected checks.
+A repair that changes either nixpkgs revision needs a new pin-bump PR. Rerun all affected checks.
 
 ## Enrollment
 
@@ -104,7 +78,7 @@ Enroll new identities in `data/repos.json`; ordinary member changes do not updat
 5. Run required checks on the exact release commit on both supported Linux architectures.
 6. Verify the required controls on `main` and enable [immutable releases](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/establish-provenance-and-integrity/prevent-release-changes).
 7. Prepare a draft release at the checked commit. Include the reviewed changelog and migration notes.
-8. Publish with the exact version tag.
+8. Publish with the exact version tag, then move the minor-series tag, for example `v0.5`, to it.
 9. Verify that GitHub reports an immutable release and that the tag resolves to the checked commit.
 
-Do not reuse a release tag. Ordinary PR merges and candidate generation do not authorize publication. Member upgrades use separate reviewed PRs. Selections must remain at v0.4.0 or later.
+Do not reuse a release tag. Ordinary PR merges and pin-bump proposals do not authorize publication; only a merged pin-bump PR is tagged automatically. Member upgrades use separate reviewed PRs. Selections must remain at v0.4.0 or later.

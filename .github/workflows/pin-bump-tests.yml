@@ -1,0 +1,89 @@
+name: Pin-bump tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pin-bump-tests-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Plan listed repo tests
+    # Other PRs skip this workflow; dispatch runs test the dispatched ref.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.head_ref == 'automation/pin-bump' &&
+      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      count: ${{ steps.matrix.outputs.count }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.34.6/install
+      - name: List jobs for every listed repo
+        id: matrix
+        run: |
+          matrix=$(nix develop --no-update-lock-file --command python tools/pin_bump.py matrix)
+          jq . <<< "$matrix"
+          printf 'matrix=%s\ncount=%s\n' "$matrix" "$(jq '.include | length' <<< "$matrix")" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: ${{ matrix.repository }} ${{ matrix.name }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: policy
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ matrix.repository }}
+          ref: main
+          path: repo
+          persist-credentials: false
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.34.6/install
+          enable_kvm: ${{ matrix.task == 'vm' }}
+      - name: Run the listed repo's tests with the proposed pins
+        env:
+          TASK: ${{ matrix.task }}
+        run: |
+          if test "$TASK" = vm; then
+            nix run --no-update-lock-file ./policy -- vm ./repo
+          else
+            nix run --no-update-lock-file ./policy -- test ./repo --nixpkgs "$TASK"
+          fi
+
+  result:
+    name: Pin-bump tests
+    needs: [plan, test]
+    if: always() && needs.plan.result != 'skipped'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every listed repo job to pass
+        env:
+          PLAN: ${{ needs.plan.result }}
+          TEST: ${{ needs.test.result }}
+        run: |
+          test "$PLAN" = success
+          test "$TEST" = success || test "$TEST" = skipped

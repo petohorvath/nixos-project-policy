@@ -4,6 +4,8 @@ import re
 from urllib.parse import urlsplit
 
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+# An exact lowercase Git commit.
+REVISION = re.compile(r"[0-9a-f]{40}\Z")
 
 
 class LockGraph:
@@ -56,23 +58,6 @@ class LockGraph:
                 for reference in self.nodes[current].get("inputs", {}).values()
             )
         return result
-
-
-def dependency_cycles(graph):
-    visited = set()
-    cycles = []
-
-    def visit(node, stack):
-        if node in stack:
-            cycles.append([*stack[stack.index(node) :], node])
-        elif node not in visited:
-            for dependency in graph.get(node, []):
-                visit(dependency, [*stack, node])
-            visited.add(node)
-
-    for node in graph:
-        visit(node, [])
-    return cycles
 
 
 def repository_identity(node):

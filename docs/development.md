@@ -10,14 +10,14 @@ Review `.envrc`, then run `direnv allow`. Alternatively, run `nix develop --no-u
 
 ## Tools and checks
 
-The root lock supplies Nix, nil, nixfmt, statix, deadnix, treefmt, shfmt, Prettier, Git, jq, Python/PyYAML, Ruff, and actionlint. `policy/pins.json` separately records the approved shared pins.
+The root lock supplies Nix, nil, nixfmt, statix, deadnix, treefmt, shfmt, Prettier, Git, jq, Python/PyYAML, Ruff, and actionlint. `data/pins.json` separately holds the stable and unstable pins that the checker bundles.
 
 ```bash
 nix fmt --no-update-lock-file
 nix flake check --no-update-lock-file --print-build-logs
 ```
 
-`nix flake check` runs checker tests, record validation, formatting, Nix lint, Python lint, and workflow validation for the host architecture. CI runs these checks on both supported Linux architectures. This repository has no VM tests.
+`nix flake check` runs checker tests, bundled data validation, formatting, Nix lint, Python lint, and workflow validation for the host architecture. CI runs these checks on both supported Linux architectures. This repository has no VM tests.
 
 Development shells, formatter, and check outputs cover `x86_64-linux` and `aarch64-linux`. The default app and the `default` and `policy-check` packages expose `nixos-project-policy` for every system in the pinned nixpkgs package sets. Those additional package outputs do not imply CI coverage on every system.
 
@@ -28,42 +28,48 @@ The formatter covers Nix, shell, Markdown, YAML, JSON, and Python. It preserves 
 ```bash
 nix develop --no-update-lock-file --command python -m unittest discover -s tests -v
 nix fmt --no-update-lock-file -- --ci
-nix run --no-update-lock-file .# -- --policy-root . validate
+nix run --no-update-lock-file .# -- validate
 nix run --no-update-lock-file .# -- --version
 ```
 
 ### Host tests
 
-These tests run outside Nix build sandboxes because they invoke Nix themselves. The CI workflow runs both in one development-shell invocation on each supported architecture:
+These tests run outside Nix build sandboxes because they invoke Nix themselves. The CI workflow runs them in one development-shell invocation on each supported architecture:
 
 ```bash
-nix develop --no-update-lock-file --command python -m unittest tests.nix_compatibility tests.packaged_policy -v
+nix develop --no-update-lock-file --command python -m unittest tests.nix_compatibility tests.nix_vm tests.packaged_policy -v
 ```
 
-`tests.nix_compatibility` runs real metadata queries and root checks with both exact nixpkgs overrides. It checks lock preservation, rejection of required default-lock updates, nonempty host checks under the committed lock, and the explicit default development-shell requirement.
+`tests.nix_compatibility` runs `test` against real fixture flakes in every nixpkgs mode. It checks that the overrides replace root `nixpkgs`, lock preservation, rejection of required lock updates, nonempty host checks, and the explicit default development-shell requirement. It also runs `check` on a real fixture flake with a release tag to prove public-output evaluation, empty-namespace notices, and the removal comparison.
 
-`tests.packaged_policy` builds the checker from a controlled clean repository. It exercises member checks, checks before enrollment, audits, and integration agreement using the current release contract.
+`tests.nix_vm` checks that `vm` discovers and builds `legacyPackages.<system>.vmTests`, reports failing entries by name, returns `not-applicable` without VM tests, and that `nix flake check` does not build them.
 
-Test adapters supply unpublished release metadata, GitHub responses, and Nix process results. Git operations, record processing, checker code, and packaged commands execute normally. Use the real-Nix test to verify native override behavior. Neither host test verifies live GitHub merge protection.
+`tests.packaged_policy` builds the checker from a controlled clean repository whose bundled pins differ from the committed ones. It runs the packaged commands without any data checkout and asserts that reports use the bundled pins.
 
-CI also smoke-tests the default development shell and evaluates the formatter:
+Test adapters supply Nix process results. Git operations, bundled data loading, checker code, and packaged commands execute normally. Use the real-Nix test to verify native override behavior.
+
+CI also runs the checker against this repository, which starts its default development shell and evaluates its formatter:
 
 ```bash
-nix run --no-update-lock-file .# -- shell .
+nix run --no-update-lock-file .# -- check .
 ```
 
-## Member checks
+## Checking another repo
 
-When the member selects the version in this checkout's `VERSION`, run the local checker with explicit trusted records:
+Run this checkout's checker against a repo beside it:
 
 ```bash
-nix run --no-update-lock-file .# -- --policy-root . check ../PROJECT --project PROJECT
+nix run --no-update-lock-file .# -- check ../REPO
+nix run --no-update-lock-file .# -- test ../REPO --nixpkgs stable
+nix run --no-update-lock-file .# -- survey ..
 ```
 
-For another selected release, use that release's checker with a separate current record checkout, as shown in the [checker reference](checker.md#commands). Add `--shell` to smoke-test the member's development environment and evaluate its formatter. The default check reads files; compatibility execution uses the separate `compatibility` command. Checks and audits do not update member sources or lockfiles, though shell and compatibility commands execute member code. See the [checker reference](checker.md) for results and limits.
+`survey` runs `check` on every Git repo directly under the workspace directory, marks the repos listed in `data/repos.json`, and prints a table of rule results per repo to standard error. The commands do not update the checked repo's sources or lock, though `check` and `test` execute its code.
 
 ## Nix conventions
 
-Follow the [shared Nix rules](../POLICY.md#nix-code-and-tests). Root `flake.nix` declares `systems`, inputs, and public outputs. Expressions in `nix/` supply the package and formatter through `pkgs.callPackage`. The check constructor takes named arguments; its callers appear above its implementation.
+Root `flake.nix` declares `systems`, inputs, and public outputs. Expressions in `nix/` supply the package and formatter through `pkgs.callPackage`. The check constructor takes named arguments; its callers appear above its implementation.
 
-The shell probe uses `nix eval --impure --expr builtins.currentSystem` to identify the host before checking its default development shell and formatter. Dependency and build evaluation use the locked flake. Review command usage, module dependencies, and names as well as lint results.
+The `shell` and `formatter` rules use `nix eval --impure --expr builtins.currentSystem` to identify the host before checking its default development shell and formatter. Dependency and build evaluation use the locked flake. Review command usage, module dependencies, and names as well as lint results.
+
+Probes that must reject lock updates pass `--no-update-lock-file` alone. Do not add `--no-write-lock-file`: in Nix 2.34.6, disabling writes bypasses the update rejection and permits an in-memory replacement lock. `test --nixpkgs stable|unstable` overrides root `nixpkgs` with `--override-input`, which implies `--no-write-lock-file`, so it tests the pins rather than the committed lock.

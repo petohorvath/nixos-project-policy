@@ -1,4 +1,8 @@
-"""Host fixture: the built release package with controlled external services."""
+"""Host fixture: the built release package with controlled Nix commands.
+
+The package is built from a copy whose bundled data holds fixture pins that
+differ from the committed ones, so every report proves which data it used.
+"""
 
 import json
 import os
@@ -8,22 +12,30 @@ import sys
 import unittest
 
 
-from tests.fixtures.family import FamilyFixture, write_json
-from tests.fixtures.data import (
-    PAIR,
-    POLICY_REPO,
-    RELEASE,
-)
-from tests.fixtures.process import REAL_RUN
-from tests.fixtures.projects import enabled_enforcement
-from tools import policy, records
+from tests.fixtures.data import PAIR
+from tests.fixtures.process import REAL_RUN, commit, isolated_git
+from tests.fixtures.repos import RepoFixture
+from tools import ci, data, policy
+
+
+def write_json(path, value):
+    path.write_text(json.dumps(value, indent=2) + "\n")
 
 
 class PackagedPolicyTests(unittest.TestCase):
     def setUp(self):
-        self.fixture = self.enterContext(FamilyFixture().prepared())
+        self.fixture = self.enterContext(RepoFixture().prepared())
         fixture = self.fixture
-        self.workspace = fixture.workspace.parent
+        # The checked repo, alpha, is a listed repo in a workspace of repos.
+        self.workspace = Path(fixture.temp.name)
+        self.repos_dir = self.workspace / "repos"
+        self.repos_dir.mkdir()
+        self.alpha = self.repos_dir / "alpha"
+        fixture.root.rename(self.alpha)
+        fixture.root = self.alpha
+        fixture.repos.append("owner/alpha")
+        self.enterContext(isolated_git(self.workspace))
+        commit(self.alpha)
         authority = self.workspace / "authority"
         shutil.copytree(
             policy.SOURCE_ROOT,
@@ -32,12 +44,11 @@ class PackagedPolicyTests(unittest.TestCase):
                 ".git", ".direnv", "__pycache__", ".ruff_cache"
             ),
         )
-        shutil.copytree(
-            fixture.baseline / "policy", authority / "policy", dirs_exist_ok=True
-        )
-        fixture.baseline = authority
-        fixture.commit(authority)
-        self.base = policy.git_revision(authority)
+        committed = data.read_json(policy.SOURCE_ROOT / "data/pins.json")
+        self.assertNotEqual({channel: committed[channel] for channel in PAIR}, PAIR)
+        fixture.write_data(authority / "data")
+        self.authority = authority
+        commit(authority)
         built = json.loads(
             self.command(
                 [
@@ -53,24 +64,12 @@ class PackagedPolicyTests(unittest.TestCase):
         self.program = str(
             Path(built[0]["outputs"]["out"]) / "bin/nixos-project-policy"
         )
-        self.state = self.workspace / "github.json"
-        self.save({"github": {}})
         self.config = self.workspace / "adapter.json"
         write_json(
             self.config,
             {
-                "state": str(self.state),
                 "commands": str(self.workspace / "nix-commands.jsonl"),
-                "members": {name: str(root) for name, root in fixture.roots.items()},
                 "system": "x86_64-linux",
-                "policyRepository": POLICY_REPO,
-                "releases": {
-                    RELEASE: {
-                        "revision": self.base,
-                        "program": self.program,
-                        "requirements": str(authority / "policy/requirements.json"),
-                    },
-                },
             },
         )
         startup = self.workspace / "startup"
@@ -86,9 +85,7 @@ class PackagedPolicyTests(unittest.TestCase):
             **os.environ,
             "PYTHONPATH": str(startup),
             "POLICY_PACKAGE_FIXTURE": str(self.config),
-            "GH_TOKEN": "fixture-token",
         }
-        self.counter = 0
 
     def command(
         self, arguments, *, binary=False, environment=None, cwd=None, expected=0
@@ -111,46 +108,31 @@ class PackagedPolicyTests(unittest.TestCase):
     def call(self, *arguments, system="x86_64-linux"):
         result = json.loads(
             self.command(
-                [
-                    self.program,
-                    "--policy-root",
-                    str(self.fixture.baseline),
-                    *map(str, arguments),
-                ],
+                [self.program, *map(str, arguments)],
                 environment={**self.environment, "POLICY_PACKAGE_SYSTEM": system},
+                # No checkout of the policy repository is reachable from here.
+                cwd=self.repos_dir,
             )
         )
         self.assertNotIn(result.get("status"), {"error", "fail"}, result)
         return result
 
-    def save(self, value):
-        write_json(self.state, value)
-
-    def gates(self, root, name, *, enrolled):
-        planned = self.call("ci", root, "--project", name)
-        self.assertEqual(planned["enrollment"], enrolled)
-        self.call("vm", root, "--project", name)
-        for system in records.load_requirements()["ci"]["runners"]:
-            checked = self.call(
-                "check", root, "--project", name, "--shell", system=system
-            )
-            self.assertEqual(checked["enrollment"], enrolled)
-            for channel in PAIR:
-                output = self.workspace / f"compatibility-{self.counter}"
-                self.counter += 1
-                report = self.call(
-                    "compatibility",
-                    root,
-                    "--project",
-                    name,
-                    "--channel",
-                    channel,
-                    "--output",
-                    output,
-                    system=system,
-                )
-                self.assertEqual(report["checkerRevision"], self.base)
-                self.assertEqual(report["pinStatus"], "approved")
+    def gates(self, root):
+        planned = self.call("ci", root)
+        self.assertEqual(planned["systems"], list(ci.DEFAULT_SYSTEMS))
+        self.assertEqual(planned["requiredChecks"][-1], "Policy / VM tests")
+        report = self.call("vm", root)
+        self.assertEqual(report["vmTests"], ["boot"])
+        for system in planned["systems"]:
+            self.call("check", root, system=system)
+            for mode in ["locked", *PAIR]:
+                report = self.call("test", root, "--nixpkgs", mode, system=system)
+                # The fixture lock holds the stable pin as its root nixpkgs.
+                expected = PAIR.get(mode, PAIR["stable"])
+                self.assertEqual(report["nixpkgs"], mode)
+                self.assertEqual(report["system"], system)
+                self.assertEqual(report["expectedRevision"], expected)
+                self.assertEqual(report["resolvedRevision"], expected)
             # The separate real-Nix fixture establishes actual host builds.
             self.command(
                 [
@@ -162,100 +144,17 @@ class PackagedPolicyTests(unittest.TestCase):
                 environment={**self.environment, "POLICY_PACKAGE_SYSTEM": system},
             )
 
-    def test_packaged_member_checks_audit_and_integration(self):
+    def test_packaged_checker_uses_bundled_data_without_a_data_checkout(self):
         fixture = self.fixture
-        self.assertIn("0.4.0", self.command([self.program, "--version"]))
+        version = (policy.SOURCE_ROOT / "VERSION").read_text().strip()
+        self.assertEqual(
+            self.command([self.program, "--version"]).strip(),
+            f"nixos-project-policy {version}",
+        )
         self.command([self.program, "--help"])
-        self.call("validate")
-        baseline = policy.fingerprints(fixture.baseline)
-        before = self.call("audit", fixture.workspace)
-        self.assertEqual(
-            {project["policyVersion"] for project in before["projects"]},
-            {RELEASE},
-        )
-        alpha = fixture.roots["alpha"]
-        self.gates(alpha, "alpha", enrolled="enrolled")
-        pending = fixture.workspace / "pending"
-        shutil.copytree(alpha, pending, ignore=shutil.ignore_patterns(".git"))
-        workflow = records.read_json(pending / ".github/workflows/policy.yml")
-        workflow["jobs"]["policy"]["with"].update(
-            project="pending", vm_targets="[]", additional_required_checks="[]"
-        )
-        write_json(pending / ".github/workflows/policy.yml", workflow)
-        fixture.commit(pending)
-        self.gates(pending, "pending", enrolled="not-enrolled")
-        audited = self.call("audit", fixture.workspace)
-        self.assertEqual(
-            {project["policyVersion"] for project in audited["projects"]},
-            {RELEASE},
-        )
-        self.hosted_audit(audited)
-        integration = self.call("agreement", fixture.root, "--project", "example")
-        self.assertEqual(
-            {
-                member["project"]: member["revision"]
-                for member in integration["members"]
-            },
-            fixture.locked,
-        )
-        self.assertEqual(integration["behavioralIntegration"], "not-run")
-        self.assertTrue(integration["dependencySetDigest"])
-        self.assertEqual(policy.fingerprints(fixture.baseline), baseline)
-
-    def hosted_audit(self, audited):
-        state = records.read_json(self.state)
-        for member in audited["projects"]:
-            repository = f"repos/{member['repository']}"
-            state["github"].update(
-                {
-                    repository: {
-                        "default_branch": "main",
-                        "allow_squash_merge": True,
-                        "allow_merge_commit": False,
-                        "allow_rebase_merge": False,
-                    },
-                    f"{repository}/rules/branches/main": [
-                        {"type": "pull_request"},
-                        {
-                            "type": "required_status_checks",
-                            "parameters": {
-                                "required_status_checks": [
-                                    {"context": check}
-                                    for check in member["requiredChecks"]
-                                ]
-                            },
-                        },
-                    ],
-                    **enabled_enforcement(repository),
-                }
-            )
-        self.save(state)
-        passing = self.call("audit", self.fixture.workspace, "--github")
-        self.assertTrue(
-            all(member["status"] == "pass" for member in passing["projects"])
-        )
-        state = records.read_json(self.state)
-        path = (
-            f"repos/{audited['projects'][0]['repository']}/actions/workflows/policy.yml"
-        )
-        state["github"][path]["state"] = "disabled_manually"
-        self.save(state)
-        failed = json.loads(
-            self.command(
-                [
-                    self.program,
-                    "--policy-root",
-                    str(self.fixture.baseline),
-                    "audit",
-                    str(self.fixture.workspace),
-                    "--github",
-                ],
-                environment=self.environment,
-                expected=1,
-            )
-        )
-        self.assertEqual(failed["projects"][0]["status"], "fail")
-        self.assertIn("disabled_manually", " ".join(failed["projects"][0]["issues"]))
-        state = records.read_json(self.state)
-        state["github"][path]["state"] = "active"
-        self.save(state)
+        report = self.call("validate")
+        self.assertEqual(report["pins"], fixture.pins)
+        self.assertEqual(report["repos"], ["owner/example", "owner/alpha"])
+        baseline = policy.fingerprints(self.authority)
+        self.gates(self.alpha)
+        self.assertEqual(policy.fingerprints(self.authority), baseline)

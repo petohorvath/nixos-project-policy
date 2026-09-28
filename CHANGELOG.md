@@ -1,12 +1,42 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
-- Reject member Markdown that passes `..` or a `../` path to `--policy-root`. Clone records for local commands into a `mktemp -d` directory, as the README and checker reference now show.
+This release reduces the policy to three guarantees for each repo: its inputs, its public outputs, and its tests ([ADR 0009](docs/adr/0009-inputs-public-outputs-and-tests.md)). It breaks compatibility with v0.4.0.
 
-### Migration
+### Breaking changes
 
-Before selecting this release, replace sibling record paths such as `--policy-root ../nixos-project-policy-records` in member Markdown with a temporary directory from `mktemp -d`.
+- Replace the rules in `POLICY.md` with the input, public-output, and test guarantees and a short list of conventions. Remove the style, file, `.envrc`, Markdown-link, shared-pin, and nixpkgs input-name rules.
+- Reduce the reusable workflow's inputs to the optional `systems`, a JSON list in a string that defaults to `'["x86_64-linux", "aarch64-linux"]'`. Remove `project`, `policy_version`, `required_architectures`, `vm_targets`, `vm_architecture`, and `additional_required_checks`. The workflow runs the checker from its own commit and no longer checks out `main`, verifies `VERSION` against the tag, validates the caller, or inspects published releases.
+- Rename the required statuses. `Policy / Compliance (<system>)` becomes `Policy / Check (<system>)`; `Policy / Project tests (<system>)` becomes `Policy / Tests (locked, <system>)`; `Policy / Compatibility (stable|unstable, <system>)` becomes `Policy / Tests (stable|unstable, <system>)`; `Policy / VM tests (<system>)` becomes `Policy / VM tests`, required only when the repo provides `vmTests`. `Policy / Verify policy version and load shared pins` is gone.
+- Bundle the pins and the listed repos with the checker in `data/pins.json` and `data/repos.json`, and remove `--policy-root`. `validate` checks both files. Remove `policy/requirements.json`; job names, status names, and runners are fixed in the checker.
+- Replace the `check` rules with the input rules: root `nixpkgs` is a locked `NixOS/nixpkgs` commit on any branch; extra nixpkgs inputs are reported; inputs from other repos (any repository under the GitHub owner of the listed repos, except the policy repository) reference a release tag (a commit is reported as temporary), appear at one revision, and follow root `nixpkgs`; the policy repository is never an input. Only the root `flake.lock` is read. Reports name each rule by a stable id in `rules`, `issues`, and `notices`.
+- Add the public-output rules to `check`: every public output (each top-level output except `checks`, `devShells`, and `formatter`) must evaluate on the host system, empty namespaces are reported, and removing a public output after a release tag requires a minor or major bump in the topmost `CHANGELOG.md` release heading. Without a release tag, the comparison is skipped and the report recommends a first tag; on a shallow clone, the comparison fails, so the workflow's `Check` job fetches the full history. The report adds `release`.
+- Always start the default development shell and evaluate the formatter in `check`, as the `shell` and `formatter` rules. The shell starts in an empty temporary directory, so its `shellHook` cannot write to the checked or calling repo. Remove the `--shell` option and the `shell` command.
+- Replace `compatibility` and `host-checks` with `test PATH --nixpkgs locked|stable|unstable`. Every mode runs `nix flake check`, requires nonempty `checks.<system>`, and fails when the repo's lock or sources change. `stable` and `unstable` first verify the pin override through Nix metadata.
+- Discover VM tests from `legacyPackages.<system>.vmTests` instead of declaring them. `vm PATH` builds every entry on the host system, continues after a failure, reports failing names, and returns `not-applicable` without VM tests.
+- Replace `ci --project NAME` with `ci PATH [--systems JSON]`, which reports `checkMatrix`, `testMatrix`, `vmTests`, `vmJob`, and `requiredChecks`. No command takes `--project` or reads the caller workflow.
+- Remove the `audit`, `agreement`, and `candidate` commands, the audit and agreement workflows, the integration caller template, and the `pin-proposal` artifact. The checker no longer calls the GitHub API. Remove source and data digests, replay data, and the `--output` evidence directories from reports.
+
+### Added
+
+- `survey WORKSPACE` runs `check` on every Git repo directly under a workspace directory, marks listed repos, and prints a JSON report with a pass or fail table per repo and rule. The table also goes to standard error.
+- Pin bumps are automated patch releases. The weekly or manually dispatched Propose pin bump workflow opens an `automation/pin-bump` PR that updates `data/pins.json`, the transitional `policy/pins.json`, `VERSION`, and the changelog. The Pin-bump tests workflow runs `test --nixpkgs stable`, `test --nixpkgs unstable`, and `vm` from the PR head against the `main` branch of every listed repo. Merging the PR tags the next patch release and moves the minor-series tag.
+
+### Migration from v0.4.0
+
+1. Replace the policy caller with [templates/policy-caller.yml](templates/policy-caller.yml): `uses: petohorvath/nixos-project-policy/.github/workflows/check.yml@v0.5`. Delete the removed inputs. Set `systems` only when the repo needs systems other than both Linux systems; move additional required checks into the repo's own workflows.
+2. Reference `@v0.5`, not an exact tag. The `v0.5` tag moves to every patch release, so pin bumps and fixes arrive without a caller change.
+3. Move VM tests to `legacyPackages.<system>.vmTests`, outside `checks`.
+4. Update the required statuses to the new names listed in `POLICY.md`: `Policy / Check (<system>)`, `Policy / Tests (locked|stable|unstable, <system>)`, and `Policy / VM tests` when the repo has VM tests. The `Plan` job writes the list to its step summary.
+5. Replace local checks that passed `--policy-root` with `nix run github:petohorvath/nixos-project-policy/v0.5 -- check .`, and remove policy procedures copied into the repo's documentation.
+6. Fix what the new rules report: move inputs from other repos to release tags and make them follow root `nixpkgs`, state the reason for a second nixpkgs input in `flake.nix`, and tag a first release to turn on the public-output removal comparison.
+
+`policy/pins.json` and `policy/members.json` stay on `main` unchanged until nixos-registry and nixos-cross-config call `@v0.5`, so v0.4.0 callers keep working.
+
+### Publishing
+
+A human merges the release PR, tags the merge commit `v0.5.0`, and creates `v0.5` at the same commit. Until `v0.5.0` exists, the Propose pin bump workflow fails with "VERSION 0.5.0 has no release tag v0.5.0". The proposal also needs Actions permission to create pull requests; see [pin bumps](README.md#pin-bumps).
 
 ## 0.4.0
 
@@ -40,12 +70,12 @@ Before selecting this release, replace sibling record paths such as `--policy-ro
 
 This release breaks compatibility with earlier policy contracts. Releases below v0.4.0 are unsupported; current records and tools no longer provide adapters for them.
 
-- After publication, replace the member caller with [the policy caller template](templates/policy-caller.yml). Set both the reusable workflow reference and `policy_version` to `v0.4.0`, retain the literal project identity, and update policy documentation links to the same release.
+- After publication, replace the member caller with [the policy caller template](https://github.com/petohorvath/nixos-project-policy/blob/v0.4.0/templates/policy-caller.yml). Set both the reusable workflow reference and `policy_version` to `v0.4.0`, retain the literal project identity, and update policy documentation links to the same release.
 - Move required architectures, VM targets, and additional required checks from central records into the caller's `required_architectures`, `vm_targets`, and `additional_required_checks` inputs. Encode each list as a literal JSON string. Preserve existing coverage; optional lists default to empty. `vm_architecture` defaults to `x86_64-linux`; other Linux VM systems require matching self-hosted runners with KVM.
 - Run the selected checker's `ci` command with an explicit trusted `--policy-root` checkout and use its generated status names when updating merge gates. Retain member-owned formatting and lint checks after removing the policy-owned formatting/lint gate and `lint` command.
 - Provide an explicit default development shell and nonempty host checks under the committed lock. Validate committed-lock checks, both shared-pin compatibility channels on every required architecture, and applicable VM and additional gates before completing the upgrade.
-- Use current identity-only enrollment and pin records. Replace retired batch, readiness, cleanup, and old-release commands with the procedures in [maintenance](docs/maintenance.md); retain pin approval evidence in reviewed PRs and CI artifacts.
-- Integration projects must upgrade their policy selection and complete consumed member dependency set together. Use [the integration caller template](templates/integration-caller.yml), preserve its source and record snapshot bindings, and require `Integration / Policy agreement` alongside behavioral integration tests.
+- Use current identity-only enrollment and pin records. Replace retired batch, readiness, cleanup, and old-release commands with the procedures in [maintenance](https://github.com/petohorvath/nixos-project-policy/blob/v0.4.0/docs/maintenance.md); retain pin approval evidence in reviewed PRs and CI artifacts.
+- Integration projects must upgrade their policy selection and complete consumed member dependency set together. Use [the integration caller template](https://github.com/petohorvath/nixos-project-policy/blob/v0.4.0/templates/integration-caller.yml), preserve its source and record snapshot bindings, and require `Integration / Policy agreement` alongside behavioral integration tests.
 
 Member upgrades, enrollment, and live merge-setting changes require separate reviewed decisions. Publishing this release does not perform those migrations.
 

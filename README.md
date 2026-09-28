@@ -1,62 +1,53 @@
 # nixos-project-policy
 
-Shared development and maintenance rules for independent Nix and NixOS projects. Each member owns its flake, tools, tests, and lockfiles. This repository supplies the rules and checks that run outside member flakes.
+Shared rules for the Nix flake repos in devnix-labs. [POLICY.md](POLICY.md) states what each repo guarantees about its inputs, public outputs, and tests, and [CONTEXT.md](CONTEXT.md) defines the terms. This repository holds the checker that enforces the rules, the reusable workflow that runs it, and the stable and unstable pins that each release bundles in [data/pins.json](data/pins.json).
 
-## Support
+## Caller workflow
 
-Development shells, formatting, and checks support `x86_64-linux` and `aarch64-linux`. The flake exposes the checker package and default app for every system in its pinned nixpkgs package sets. This repository has no VM tests.
+Copy [templates/policy-caller.yml](templates/policy-caller.yml) into the repo's `.github/workflows/`. Its job calls `check.yml@v0.5` with one optional input, `systems`: a JSON list in a string that defaults to `'["x86_64-linux", "aarch64-linux"]'`.
 
-Support starts at v0.4.0. [VERSION](VERSION) identifies the current checker version. Publish new releases through the [release procedure](docs/maintenance.md#releases). Policy releases contain the rules and checker code. Current [records on `main`](docs/maintenance.md#records) contain shared pins, the stable update branch, and member enrollment.
-
-## Quickstart
-
-Install the [host prerequisites](docs/development.md#host-prerequisites), then run:
-
-```bash
-direnv allow
-nix flake check --no-update-lock-file --print-build-logs
-nix run --no-update-lock-file .# -- --policy-root . validate
+```yaml
+jobs:
+  policy:
+    name: Policy
+    uses: petohorvath/nixos-project-policy/.github/workflows/check.yml@v0.5
+    # Optional; defaults to both Linux systems.
+    # with:
+    #   systems: '["x86_64-linux"]'
 ```
 
-Use `nix develop --no-update-lock-file` to enter the shell without direnv. `nix flake check` runs checker tests, record validation, formatting, and lint checks for the host architecture. `validate` checks the selected record checkout and reports whether it contains an approved pin pair; it does not check member compliance or approve pins.
+[POLICY.md](POLICY.md#caller) lists the statuses to require; the workflow's `Plan` job also writes them to its step summary.
 
-## Member projects
+`v0.5` moves to every patch release, so pin bumps and fixes reach the repo without a change to its caller. Breaking rule changes start a new minor series, such as `v0.6`.
 
-Use the [policy caller template](templates/policy-caller.yml) to select a published immutable policy release and declare the member name and required architectures. Optional settings select VM targets, their Linux architecture, and additional required checks. Keep the policy repository outside member flake inputs, shells, and builds. Follow the [enrollment procedure](docs/maintenance.md#enrollment) to add a member to the central roster; a passing check does not enroll it.
+## Local check
 
-Members choose their root `nixpkgs` revision independently. Policy CI runs separate compliance, committed-lock project tests, and stable/unstable compatibility jobs on every required architecture. Compatibility jobs override the root input with the approved shared pins and run full root checks. Other nixpkgs lock scopes remain subject to shared-pin requirements. Declared VM tests run separately.
-
-For local checks, run the member's selected checker release with an explicit trusted checkout of current records. Clone the records from `main` into a temporary directory, and remove it after the last command that uses it:
+Run the checker from the repo root:
 
 ```bash
-PROJECT_RECORDS_DIR=$(mktemp -d)
-git clone --branch main --single-branch \
-  https://github.com/petohorvath/nixos-project-policy.git "$PROJECT_RECORDS_DIR"
-nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
-  --policy-root "$PROJECT_RECORDS_DIR" \
-  check ../PROJECT --project PROJECT --shell
-rm -rf "${PROJECT_RECORDS_DIR:?}"
+nix run github:petohorvath/nixos-project-policy/v0.5 -- check .
 ```
 
-Replace the tag with the member's selected release and `PROJECT` with its name. In the variable name, write the name in upper case with underscores, such as `NIXOS_REGISTRY_RECORDS_DIR`. The command does not fetch records, so clone them again for each check of current approval. Keep the records out of sibling directories: `check` rejects member Markdown that passes a `../` path to `--policy-root`. `check` inspects structure, locks, and the policy caller. `--shell` also smoke-tests the default development shell and evaluates the formatter. Compatibility execution requires separate `compatibility` commands for `stable` and `unstable`.
+`check` applies the input and public-output rules, starts the default development shell, and evaluates the formatter. CI also runs `test . --nixpkgs locked`, `stable`, and `unstable` on each system, and `vm .` when the flake has `legacyPackages.<system>.vmTests`; `--help` lists every command. Each command prints a JSON report and exits 0 on success, 1 when a rule or test fails, and 2 when the request cannot be processed.
 
-The checker also plans CI gates, audits enrolled members, checks integration policy agreement at locked member revisions, and executes declared VM targets. See the [checker reference](docs/checker.md#commands) for commands, JSON results, and validation limits.
+Nix caches the `v0.5` reference for up to an hour. Add `--refresh` after `nix run` to use a patch release published within that time.
+
+## Pin bumps
+
+1. The [Propose pin bump](.github/workflows/pins.yml) workflow runs weekly, or on manual dispatch with both an exact `stable_revision` and `unstable_revision`. When the pins change, it opens the `automation/pin-bump` PR, which updates the pins, sets `VERSION` to the next patch release, and adds a changelog section.
+2. The [Pin-bump tests](.github/workflows/pin-bump-tests.yml) workflow runs `test --nixpkgs stable` and `test --nixpkgs unstable` on each system, and `vm`, from the PR against the `main` branch of every repo in [data/repos.json](data/repos.json). Fix a failing repo through a PR in that repo, then re-run the failed jobs.
+3. After a human merges the PR, the [Tag pin-bump release](.github/workflows/pin-bump-release.yml) workflow tags `vX.Y.Z` and moves `vX.Y` to it.
+
+The proposal needs Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to create and approve pull requests". Listed repos must be public. If rulesets are added, let GitHub Actions force-push `automation/pin-bump`, create `vX.Y.Z` tags, and force-update `vX.Y` tags.
+
+## Releases
+
+`VERSION` holds the current version; its release tag adds a `v` prefix. Patch releases carry pin bumps and fixes. A breaking change bumps `VERSION` to the next minor version in the PR that makes it, so every patch release from `main` stays compatible with its series.
+
+For a release by hand, merge a PR that sets `VERSION` and moves the `Unreleased` changelog entries under the version heading. Tag the merge commit `vX.Y.Z` and create or move `vX.Y` to it. Pin-bump proposals fail until the tag for `VERSION` exists. Never move or reuse a `vX.Y.Z` tag.
+
+Until nixos-registry and nixos-cross-config call `@v0.5`, keep `policy/pins.json` and `policy/members.json` on `main` for their v0.4.0 callers. Pin bumps update `policy/pins.json` as well.
 
 ## Development
 
-Run the formatter and flake checks listed under [tools and checks](docs/development.md#tools-and-checks) before submitting changes. CI also runs real-Nix and packaged-checker host tests on both supported Linux architectures and smoke-tests the development shell. See [development](docs/development.md) for tools, focused tests, and host test commands.
-
-## Contributing
-
-Follow [CONTRIBUTING.md](CONTRIBUTING.md) and the shared requirements in [POLICY.md](POLICY.md). Submit changes through PRs. Every merge requires human approval.
-
-## Documentation
-
-- [Policy](POLICY.md): shared requirements.
-- [Checker](docs/checker.md): commands, records, results, and limits.
-- [Maintenance](docs/maintenance.md): pins, enrollment, and releases.
-- [Design](docs/normalization-design.md): structure and decisions.
-- [Glossary](CONTEXT.md): shared terms.
-- [Changelog](CHANGELOG.md): release changes.
-
-Original code uses the [MIT license](LICENSE).
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/development.md](docs/development.md). Design decisions are in [docs/adr/](docs/adr/), and release changes in [CHANGELOG.md](CHANGELOG.md). Original code uses the [MIT license](LICENSE).

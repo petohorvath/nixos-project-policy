@@ -2,9 +2,9 @@
 
 import unittest
 
-from tests.fixtures.projects import ProjectFixture
+from tests.fixtures.repos import RepoFixture
 
 
-class ProjectTestCase(unittest.TestCase, ProjectFixture):
+class RepoTestCase(unittest.TestCase, RepoFixture):
     def setUp(self):
         self.enterContext(self.prepared())

@@ -7,7 +7,7 @@
   };
 
   outputs =
-    { self, nixpkgs, ... }:
+    { nixpkgs, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -21,10 +21,7 @@
           pkgs = nixpkgs.legacyPackages.${system};
           python = pkgs.python3.withPackages (packages: [ packages.pyyaml ]);
           formatter = pkgs.callPackage ./nix/formatter.nix { };
-          checker = pkgs.callPackage ./nix/package.nix {
-            python3 = python;
-            checkerRevision = self.rev or "";
-          };
+          checker = pkgs.callPackage ./nix/package.nix { };
           checks = {
             tests = mkCheck {
               name = "policy-tests";
@@ -58,7 +55,7 @@
                 statix check .
                 deadnix --fail .
                 ruff check tools tests
-                actionlint .github/workflows/*.yml
+                actionlint -config-file .github/actionlint.yaml .github/workflows/*.yml
               '';
             };
           };
@@ -114,7 +111,7 @@
         default = {
           type = "app";
           program = "${project.${system}.checker}/bin/nixos-project-policy";
-          meta.description = "Inspect project compliance and pin proposals";
+          meta.description = "Check a repo against the policy";
         };
       });
     };

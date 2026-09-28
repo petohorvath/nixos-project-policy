@@ -3,76 +3,95 @@
 import json
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import unittest
 
-from tools import policy, records
+from tests.fixtures.cli import checker_command
+from tools import data, locks, policy
 
 
 class NixCompatibilityTests(unittest.TestCase):
-    def test_committed_lock_requires_nonempty_host_checks(self):
+    def test_locked_mode_requires_nonempty_checks_and_builds_them(self):
         system = self.run_command(
             ["nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem"]
         ).strip()
+        graph = locks.LockGraph(data.read_json(policy.SOURCE_ROOT / "flake.lock"))
+        revision = graph.nodes[graph.resolve(["nixpkgs"])]["locked"]["rev"]
         with tempfile.TemporaryDirectory(prefix="policy-checks-fixture-") as temporary:
-            root = Path(temporary)
+            workspace = Path(temporary)
+            data_root = self.write_data(
+                workspace, {"stable": revision, "unstable": revision}
+            )
+            root = workspace / "repo"
+            root.mkdir()
             flake = root / "flake.nix"
-            for output, passes in [
-                ("", False),
-                (f'checks."{system}" = {{}};', False),
-                ('checks."another-system" = { behavior = null; };', False),
-                (f'checks."{system}" = {{ behavior = null; }};', True),
+            build = (
+                'nixpkgs.legacyPackages."SYSTEM".runCommand "behavior" {} "touch $out"'
+            ).replace("SYSTEM", system)
+            for output, outcome in [
+                ("", "does not evaluate"),
+                (f'checks."{system}" = {{}};', "at least one check"),
+                (
+                    'checks."another-system" = { behavior = null; };',
+                    "does not evaluate",
+                ),
+                # The name guard passes; nix flake check still validates values.
+                (f'checks."{system}" = {{ behavior = null; }};', "flake check"),
+                (f'checks."{system}" = {{ behavior = {build}; }};', None),
             ]:
                 with self.subTest(output=output):
-                    flake.write_text("{ outputs = { self }: { " + output + " }; }")
+                    flake.write_text(
+                        '{ inputs.nixpkgs.url = "github:NixOS/nixpkgs/REVISION";'
+                        " outputs = { nixpkgs, ... }: { OUTPUT }; }".replace(
+                            "REVISION", revision
+                        ).replace("OUTPUT", output)
+                    )
                     self.run_command(["nix", "flake", "lock", str(root)])
                     before = policy.fingerprints(root)
-                    if output == "":
-                        # A bare flake check accepts a flake without tests.
-                        self.run_command(
-                            [
-                                "nix",
-                                "flake",
-                                "check",
-                                str(root),
-                                "--no-update-lock-file",
-                            ]
-                        )
                     process = subprocess.run(
                         [
-                            sys.executable,
-                            str(policy.SOURCE_ROOT / "tools/policy.py"),
-                            "host-checks",
+                            *checker_command(data_root),
+                            "test",
                             str(root),
+                            "--nixpkgs",
+                            "locked",
                         ],
                         text=True,
-                        capture_output=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
                         check=False,
                     )
                     report = json.loads(process.stdout)
-                    self.assertEqual(process.returncode, 0 if passes else 1, report)
+                    self.assertEqual(
+                        process.returncode, 0 if outcome is None else 1, report
+                    )
                     self.assertEqual(report["system"], system)
+                    self.assertEqual(report["resolvedRevision"], revision)
                     self.assertEqual(policy.fingerprints(root), before)
-                    if passes:
+                    if outcome is None:
                         self.assertEqual(report["checks"], ["behavior"])
-                        # The guard only requires names; flake check still validates values.
-                        build = subprocess.run(
-                            [
-                                "nix",
-                                "flake",
-                                "check",
-                                str(root),
-                                "--no-update-lock-file",
-                            ],
-                            text=True,
-                            capture_output=True,
-                            check=False,
+                    elif outcome == "flake check":
+                        self.assertEqual(report["checks"], ["behavior"])
+                        self.assertEqual(
+                            report["commands"][-1]["command"][:3],
+                            ["nix", "flake", "check"],
                         )
-                        self.assertNotEqual(build.returncode, 0)
+                        self.assertNotEqual(report["commands"][-1]["returncode"], 0)
+                    else:
+                        self.assertIn(outcome, " ".join(report["issues"]))
+
+    @staticmethod
+    def write_data(workspace, pins):
+        data_root = workspace / "data"
+        data_root.mkdir()
+        (data_root / "pins.json").write_text(
+            json.dumps({"stableBranch": "nixos-26.05", **pins})
+        )
+        (data_root / "repos.json").write_text(json.dumps({"repos": []}))
+        return data_root
 
     def test_shell_probe_requires_working_default_shell_without_fixed_tools(self):
-        graph = policy.LockGraph(records.read_json(policy.SOURCE_ROOT / "flake.lock"))
+        graph = locks.LockGraph(data.read_json(policy.SOURCE_ROOT / "flake.lock"))
         revision = graph.nodes[graph.resolve(["nixpkgs"])]["locked"]["rev"]
         with tempfile.TemporaryDirectory(prefix="policy-shell-fixture-") as temporary:
             root = Path(temporary)
@@ -128,9 +147,9 @@ class NixCompatibilityTests(unittest.TestCase):
                             "SHELL_HOOK", hook
                         )
                     )
-                    issues = policy.check_shell(root)
+                    problem = policy.shell_problem(root, policy.host_system())
                     if passes:
-                        self.assertEqual(issues, [])
+                        self.assertIsNone(problem)
                         self.run_command(
                             [
                                 "nix",
@@ -145,8 +164,8 @@ class NixCompatibilityTests(unittest.TestCase):
                             ]
                         )
                     else:
-                        self.assertTrue(
-                            issues,
+                        self.assertIsNotNone(
+                            problem,
                             "Missing or broken default shells must fail the probe",
                         )
                     self.assertEqual((root / "flake.lock").read_bytes(), lock_before)
@@ -163,7 +182,7 @@ class NixCompatibilityTests(unittest.TestCase):
     def test_real_overrides_build_checks_preserve_locks_and_reject_default_updates(
         self,
     ):
-        graph = policy.LockGraph(records.read_json(policy.SOURCE_ROOT / "flake.lock"))
+        graph = locks.LockGraph(data.read_json(policy.SOURCE_ROOT / "flake.lock"))
         pins = {
             channel: graph.nodes[graph.resolve([name])]["locked"]["rev"]
             for channel, name in [
@@ -173,9 +192,9 @@ class NixCompatibilityTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory(prefix="policy-nix-fixture-") as temporary:
             workspace = Path(temporary)
-            project = workspace / "project"
-            project.mkdir()
-            flake = project / "flake.nix"
+            repo = workspace / "repo"
+            repo.mkdir()
+            flake = repo / "flake.nix"
             flake.write_text(
                 """{
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/STABLE";
@@ -190,40 +209,15 @@ class NixCompatibilityTests(unittest.TestCase):
 }
 """.replace("STABLE", pins["stable"])
             )
-            release = "v" + (policy.SOURCE_ROOT / "VERSION").read_text().strip()
-            caller = project / ".github/workflows/policy.yml"
-            caller.parent.mkdir(parents=True)
-            caller.write_text(
-                json.dumps(
-                    {
-                        "on": {
-                            "pull_request": {
-                                "types": ["opened", "synchronize", "reopened", "edited"]
-                            }
-                        },
-                        "jobs": {
-                            "policy": {
-                                "name": "Policy",
-                                "uses": f"petohorvath/nixos-project-policy/.github/workflows/check.yml@{release}",
-                                "with": {
-                                    "project": "fixture",
-                                    "policy_version": release,
-                                    "required_architectures": '["x86_64-linux", "aarch64-linux"]',
-                                },
-                            }
-                        },
-                    }
-                )
-            )
-            self.run_command(["git", "init", "-q", str(project)])
-            self.run_command(["git", "-C", str(project), "add", "flake.nix", ".github"])
-            self.run_command(["nix", "flake", "lock", str(project)])
-            self.run_command(["git", "-C", str(project), "add", "flake.lock"])
+            self.run_command(["git", "init", "-q", str(repo)])
+            self.run_command(["git", "-C", str(repo), "add", "flake.nix"])
+            self.run_command(["nix", "flake", "lock", str(repo)])
+            self.run_command(["git", "-C", str(repo), "add", "flake.lock"])
             self.run_command(
                 [
                     "git",
                     "-C",
-                    str(project),
+                    str(repo),
                     "-c",
                     "user.name=Fixture",
                     "-c",
@@ -233,71 +227,198 @@ class NixCompatibilityTests(unittest.TestCase):
                     "test: Create compatibility fixture",
                 ]
             )
-            record_directory = workspace / "records/policy"
-            record_directory.mkdir(parents=True)
-            (record_directory / "pins.json").write_text(
-                json.dumps(
-                    {
-                        "schemaVersion": 1,
-                        "stableBranch": "nixos-26.05",
-                        "approved": pins,
-                    }
-                )
-            )
-            (record_directory / "members.json").write_text(
-                json.dumps({"schemaVersion": 1, "members": {}})
-            )
-            lock_before = (project / "flake.lock").read_bytes()
+            data_root = self.write_data(workspace, pins)
+            lock_before = (repo / "flake.lock").read_bytes()
             self.run_command(
                 [
                     "nix",
                     "flake",
                     "check",
-                    str(project),
+                    str(repo),
                     "--no-update-lock-file",
                     "--print-build-logs",
                 ]
             )
-            for channel, revision in pins.items():
-                with self.subTest(channel=channel):
-                    evidence = workspace / channel
+            # The fixture locks the stable pin, so the locked mode resolves it too.
+            for mode, revision in [("locked", pins["stable"]), *pins.items()]:
+                with self.subTest(nixpkgs=mode):
                     report = json.loads(
                         self.run_command(
                             [
-                                sys.executable,
-                                str(policy.SOURCE_ROOT / "tools/policy.py"),
-                                "--policy-root",
-                                str(record_directory.parent),
-                                "compatibility",
-                                str(project),
-                                "--project",
-                                "fixture",
-                                "--channel",
-                                channel,
-                                "--output",
-                                str(evidence),
+                                *checker_command(data_root),
+                                "test",
+                                str(repo),
+                                "--nixpkgs",
+                                mode,
                             ]
                         )
                     )
                     self.assertEqual(report["status"], "pass", report)
+                    self.assertEqual(report["expectedRevision"], revision)
                     self.assertEqual(report["resolvedRevision"], revision)
+                    self.assertEqual(report["checks"], ["selectedInput"])
                     self.assertEqual(report["commands"][-1]["returncode"], 0)
-                    self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
-                    self.assertTrue((evidence / "metadata.json").is_file())
+                    self.assertEqual((repo / "flake.lock").read_bytes(), lock_before)
+                    self.assertEqual(
+                        self.selected_input(repo, report["system"], mode, pins),
+                        revision,
+                    )
             flake.write_text(
                 flake.read_text().replace(pins["stable"], pins["unstable"])
             )
             default = subprocess.run(
-                ["nix", "flake", "check", str(project), "--no-update-lock-file"],
+                ["nix", "flake", "check", str(repo), "--no-update-lock-file"],
                 text=True,
                 capture_output=True,
                 check=False,
             )
             self.assertNotEqual(default.returncode, 0)
             self.assertIn("lock file", default.stderr)
-            self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
-            self.assertEqual(policy.check_host_checks(project)["status"], "fail")
-            self.assertEqual((project / "flake.lock").read_bytes(), lock_before)
+            self.assertEqual((repo / "flake.lock").read_bytes(), lock_before)
+            stale = subprocess.run(
+                [*checker_command(data_root), "test", str(repo), "--nixpkgs", "locked"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            self.assertEqual(stale.returncode, 1, stale.stdout)
+            self.assertEqual((repo / "flake.lock").read_bytes(), lock_before)
+
+    def test_check_evaluates_public_outputs_and_compares_the_release_tag(self):
+        graph = locks.LockGraph(data.read_json(policy.SOURCE_ROOT / "flake.lock"))
+        revision = graph.nodes[graph.resolve(["nixpkgs"])]["locked"]["rev"]
+        with tempfile.TemporaryDirectory(prefix="policy-outputs-fixture-") as temporary:
+            workspace = Path(temporary)
+            data_root = self.write_data(
+                workspace, {"stable": revision, "unstable": revision}
+            )
+            root = workspace / "repo"
+            root.mkdir()
+            source = """{
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/REVISION";
+  outputs = { nixpkgs, ... }: let
+    forSystems = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ];
+    pkgs = system: nixpkgs.legacyPackages.${system};
+  in {
+    packages = forSystems (system: { hello = (pkgs system).hello; PACKAGES });
+    lib = { greeting = "hello"; LIB };
+    nixosModules = { };
+    devShells = forSystems (system: {
+      default = (pkgs system).mkShellNoCC { };
+    });
+    formatter = forSystems (system: (pkgs system).nixfmt);
+    checks = forSystems (system: { private = throw "checks are not public"; });
+  };
+}
+""".replace("REVISION", revision)
+
+            def stage(packages, library=""):
+                (root / "flake.nix").write_text(
+                    source.replace("PACKAGES", packages).replace("LIB", library)
+                )
+
+            def check():
+                process = subprocess.run(
+                    [*checker_command(data_root), "check", str(root)],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                return process.returncode, json.loads(process.stdout)
+
+            def git(*arguments):
+                self.run_command(
+                    [
+                        "git",
+                        "-C",
+                        str(root),
+                        "-c",
+                        "user.name=Fixture",
+                        "-c",
+                        "user.email=fixture@example.invalid",
+                        *arguments,
+                    ]
+                )
+
+            stage("tool = (pkgs system).jq;")
+            self.run_command(["git", "init", "-q", str(root)])
+            git("add", ".")
+            self.run_command(["nix", "flake", "lock", str(root)])
+            git("add", ".")
+            git("commit", "-qm", "feat: Publish tool")
+
+            code, report = check()
+            self.assertEqual(code, 0, report)
+            self.assertEqual(report["rules"]["outputs-removal"], "not-run")
+            self.assertIn("v0.1.0", " ".join(n["message"] for n in report["notices"]))
+            self.assertEqual(report["rules"]["shell"], "pass")
+            self.assertEqual(report["rules"]["formatter"], "pass")
+            # The throwing check stays private; nixosModules is an empty namespace.
+            self.assertEqual(report["rules"]["outputs-evaluate"], "pass")
+            self.assertEqual(
+                [
+                    n["output"]
+                    for n in report["notices"]
+                    if n["rule"] == "outputs-empty"
+                ],
+                ["nixosModules"],
+            )
+            git("tag", "v0.1.0")
+
+            stage(
+                'broken = throw "broken package";',
+                "missing = nixpkgs.lib.doesNotExist;",
+            )
+            git("commit", "-qam", "fix!: Drop tool")
+            code, report = check()
+            self.assertEqual(code, 1, report)
+            failures = {(i["rule"], i["output"]) for i in report["issues"]}
+            system = self.run_command(
+                ["nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem"]
+            ).strip()
+            self.assertEqual(
+                failures,
+                {
+                    ("outputs-evaluate", f"packages.{system}.broken"),
+                    # An undefined attribute is not catchable per value.
+                    ("outputs-evaluate", "lib"),
+                    ("outputs-removal", "packages.aarch64-linux.tool"),
+                    ("outputs-removal", "packages.x86_64-linux.tool"),
+                },
+            )
+            self.assertEqual(report["release"], {"tag": "v0.1.0", "version": None})
+
+            stage("")
+            (root / "CHANGELOG.md").write_text(
+                "# Changelog\n\n## 0.2.0\n\n- Drop tool.\n"
+            )
+            git("add", ".")
+            git("commit", "-qm", "chore: Release 0.2.0")
+            code, report = check()
+            self.assertEqual(code, 0, report)
+            self.assertEqual(report["rules"]["outputs-removal"], "pass")
+            self.assertEqual(report["release"], {"tag": "v0.1.0", "version": "0.2.0"})
+
+    def selected_input(self, repo, system, mode, pins):
+        """Return the nixpkgs revision that the built check recorded."""
+        flags = (
+            ["--no-update-lock-file"]
+            if mode == "locked"
+            else ["--override-input", "nixpkgs", f"github:NixOS/nixpkgs/{pins[mode]}"]
+        )
+        output = self.run_command(
+            [
+                "nix",
+                "build",
+                "--no-link",
+                "--print-out-paths",
+                f"{repo}#checks.{system}.selectedInput",
+                *flags,
+            ]
+        ).strip()
+        return Path(output).read_text()
 
 
 if __name__ == "__main__":

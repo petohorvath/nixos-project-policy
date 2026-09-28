@@ -1,0 +1,3 @@
+{
+  "repos": ["petohorvath/nixos-cross-config", "petohorvath/nixos-registry"]
+}

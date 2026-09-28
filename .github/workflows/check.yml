@@ -1,223 +1,126 @@
-name: Shared policy
+name: Policy
 
 on:
   workflow_call:
     inputs:
-      project:
-        required: true
+      systems:
+        description: JSON list of the Nix systems to check and test
+        default: '["x86_64-linux", "aarch64-linux"]'
         type: string
-      policy_version:
-        description: Exact release tag, identical to the caller's uses reference
-        required: true
-        type: string
-      required_architectures:
-        description: Literal nonempty JSON list of Nix systems
-        required: true
-        type: string
-      vm_targets:
-        description: Literal JSON list of VM build targets
-        default: "[]"
-        type: string
-      vm_architecture:
-        description: Literal Linux Nix system for VM execution
-        default: x86_64-linux
-        type: string
-      additional_required_checks:
-        description: Literal JSON list of additional GitHub merge gates
-        default: "[]"
-        type: string
-    outputs:
-      project_revision:
-        description: Exact member commit captured for all Policy jobs
-        value: ${{ jobs.records.outputs.project_revision }}
-      records_revision:
-        description: Exact central record commit captured for all Policy jobs
-        value: ${{ jobs.records.outputs.revision }}
 
 permissions:
   contents: read
 
+# Every job runs the checker from the commit of this workflow file, so the
+# checker and its bundled pins match the ref the caller selected.
 jobs:
-  records:
-    name: Verify policy version and load shared pins
+  plan:
+    name: Plan
     runs-on: ubuntu-24.04
     outputs:
-      revision: ${{ steps.snapshot.outputs.revision }}
-      checker_revision: ${{ steps.snapshot.outputs.checker_revision }}
-      project_revision: ${{ steps.snapshot.outputs.project_revision }}
-      matrix: ${{ steps.ci.outputs.matrix }}
-      compatibility_matrix: ${{ steps.ci.outputs.compatibility_matrix }}
+      check_matrix: ${{ steps.ci.outputs.check_matrix }}
+      test_matrix: ${{ steps.ci.outputs.test_matrix }}
       vm_job: ${{ steps.ci.outputs.vm_job }}
-      vm_required: ${{ steps.ci.outputs.vm_required }}
     steps:
-      - name: Verify immutable policy release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          POLICY_VERSION: ${{ inputs.policy_version }}
-        run: |
-          [[ "$POLICY_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          release=$(gh api "repos/petohorvath/nixos-project-policy/releases/tags/$POLICY_VERSION")
-          jq -e --arg version "$POLICY_VERSION" '
-            .tag_name == $version and .immutable == true and .draft == false and .prerelease == false
-          ' <<< "$release"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: petohorvath/nixos-project-policy
-          ref: refs/tags/${{ inputs.policy_version }}
+          path: repo
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: policy
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: petohorvath/nixos-project-policy
-          ref: main
-          path: policy-state
-          persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          path: project
-          persist-credentials: false
-      - id: snapshot
-        env:
-          POLICY_VERSION: ${{ inputs.policy_version }}
-        run: |
-          test "$(cat policy/VERSION)" = "${POLICY_VERSION#v}"
-          revision=$(git -C policy-state rev-parse HEAD)
-          checker_revision=$(git -C policy rev-parse HEAD)
-          project_revision=$(git -C project rev-parse HEAD)
-          printf 'revision=%s\nchecker_revision=%s\nproject_revision=%s\n' \
-            "$revision" "$checker_revision" "$project_revision" >> "$GITHUB_OUTPUT"
-          printf 'Policy %s: %s\nRecords: %s\nProject: %s\n' "$POLICY_VERSION" "$checker_revision" "$revision" "$project_revision"
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
         with:
           install_url: https://releases.nixos.org/nix/nix-2.34.6/install
-      - name: Load required architectures and checks
+      - name: Plan jobs and required statuses
         id: ci
         env:
-          PROJECT: ${{ inputs.project }}
-          WORKFLOW_INPUTS: ${{ toJSON(inputs) }}
+          SYSTEMS: ${{ inputs.systems }}
         run: |
-          nix run --no-update-lock-file ./policy -- --policy-root ./policy-state ci ./project --project "$PROJECT" --inputs-json "$WORKFLOW_INPUTS" > ci.json
-          vm_job=$(jq -ce '.vmJob' ci.json)
-          printf 'vm_job=%s\n' "$vm_job" >> "$GITHUB_OUTPUT"
-          vm_required=$(jq -r '.vmTargets | length > 0' ci.json)
-          printf 'vm_required=%s\n' "$vm_required" >> "$GITHUB_OUTPUT"
-          matrix=$(jq -ce '.matrix' ci.json)
-          compatibility_matrix=$(jq -ce '.compatibilityMatrix' ci.json)
-          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
-          printf 'compatibility_matrix=%s\n' "$compatibility_matrix" >> "$GITHUB_OUTPUT"
-  policy:
-    name: ${{ matrix.check }} (${{ matrix.system }})
-    needs: records
+          nix run --no-update-lock-file ./policy -- ci ./repo --systems "$SYSTEMS" > ci.json
+          check_matrix=$(jq -ce '.checkMatrix' ci.json)
+          test_matrix=$(jq -ce '.testMatrix' ci.json)
+          vm_job=$(jq -re '.vmJob | booleans | tostring' ci.json)
+          required=$(jq -r '.requiredChecks[] | "- `" + . + "`"' ci.json)
+          {
+            printf 'check_matrix=%s\n' "$check_matrix"
+            printf 'test_matrix=%s\n' "$test_matrix"
+            printf 'vm_job=%s\n' "$vm_job"
+          } >> "$GITHUB_OUTPUT"
+          printf '## Required statuses\n\n%s\n' "$required" >> "$GITHUB_STEP_SUMMARY"
+  check:
+    name: Check (${{ matrix.system }})
+    needs: plan
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.records.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.check_matrix) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          path: project
-          ref: ${{ needs.records.outputs.project_revision }}
+          path: repo
+          # Full history with every tag: the removal comparison needs the
+          # last release tag, and check fails on a shallow clone.
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: petohorvath/nixos-project-policy
-          ref: ${{ needs.records.outputs.checker_revision }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: policy
-          persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: petohorvath/nixos-project-policy
-          ref: ${{ needs.records.outputs.revision }}
-          path: policy-state
           persist-credentials: false
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
         with:
           install_url: https://releases.nixos.org/nix/nix-2.34.6/install
-      - name: Report checked revisions
-        run: |
-          git -C project rev-parse HEAD
-          git -C policy rev-parse HEAD
-          git -C policy-state rev-parse HEAD
-      - name: Check shared requirements
-        if: matrix.check == 'Compliance'
-        env:
-          PROJECT: ${{ inputs.project }}
-        run: |
-          nix run --no-update-lock-file ./policy -- --policy-root ./policy-state check ./project --project "$PROJECT" --shell
-      - name: Run project tests
-        if: matrix.check == 'Project tests'
-        run: |
-          nix run --no-update-lock-file ./policy -- --policy-root ./policy-state host-checks ./project
-          nix flake check ./project --no-update-lock-file --print-build-logs
-  compatibility:
-    name: ${{ matrix.check }}
-    needs: records
+      - name: Check the repo
+        run: nix run --no-update-lock-file ./policy -- check ./repo
+  tests:
+    name: Tests (${{ matrix.nixpkgs }}, ${{ matrix.system }})
+    needs: plan
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.records.outputs.compatibility_matrix) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.test_matrix) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          path: project
-          ref: ${{ needs.records.outputs.project_revision }}
+          path: repo
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: petohorvath/nixos-project-policy
-          ref: ${{ needs.records.outputs.checker_revision }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: policy
-          persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: petohorvath/nixos-project-policy
-          ref: ${{ needs.records.outputs.revision }}
-          path: policy-state
           persist-credentials: false
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
         with:
           install_url: https://releases.nixos.org/nix/nix-2.34.6/install
-      - name: Run root checks with the recorded compatibility pin
+      - name: Run nix flake check
         env:
-          PROJECT: ${{ inputs.project }}
-          CHANNEL: ${{ matrix.channel }}
-          EVIDENCE: ${{ runner.temp }}/compatibility
-        run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state compatibility ./project --project "$PROJECT" --channel "$CHANNEL" --output "$EVIDENCE"
-      - name: Upload compatibility evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: compatibility-${{ matrix.channel }}-${{ matrix.system }}
-          path: ${{ runner.temp }}/compatibility
-          if-no-files-found: error
+          NIXPKGS: ${{ matrix.nixpkgs }}
+        run: nix run --no-update-lock-file ./policy -- test ./repo --nixpkgs "$NIXPKGS"
   vm:
-    name: ${{ fromJSON(needs.records.outputs.vm_job).check }}
-    needs: records
-    if: needs.records.outputs.vm_required == 'true'
-    runs-on: ${{ fromJSON(needs.records.outputs.vm_job).runner }}
+    name: VM tests
+    needs: plan
+    if: needs.plan.outputs.vm_job == 'true'
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          path: project
-          ref: ${{ needs.records.outputs.project_revision }}
+          path: repo
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: petohorvath/nixos-project-policy
-          ref: ${{ needs.records.outputs.checker_revision }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: policy
-          persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: petohorvath/nixos-project-policy
-          ref: ${{ needs.records.outputs.revision }}
-          path: policy-state
           persist-credentials: false
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
         with:
           install_url: https://releases.nixos.org/nix/nix-2.34.6/install
           enable_kvm: true
-      - name: Run applicable VM suites
-        env:
-          PROJECT: ${{ inputs.project }}
-        run: nix run --no-update-lock-file ./policy -- --policy-root ./policy-state vm ./project --project "$PROJECT"
+      - name: Build discovered VM tests
+        run: nix run --no-update-lock-file ./policy -- vm ./repo

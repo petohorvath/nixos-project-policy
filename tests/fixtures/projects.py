@@ -96,13 +96,3 @@ class ProjectFixture:
             args = ("ci", str(self.root), *args[1:])
         records = self.write_records()
         return invoke("--policy-root", str(records), *args)
-
-
-def enabled_enforcement(repository):
-    return {
-        f"{repository}/actions/permissions": {"enabled": True},
-        f"{repository}/actions/workflows/policy.yml": {
-            "path": ".github/workflows/policy.yml",
-            "state": "active",
-        },
-    }

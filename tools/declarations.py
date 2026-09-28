@@ -32,10 +32,10 @@ class UniqueLoader(yaml.BaseLoader):
         return result
 
 
-def discover(root, repository, *, workflow_name="check.yml"):
+def discover(root, repository):
     """Return the unique caller even when its trigger or settings are invalid."""
     candidates = []
-    prefix = f"{repository}/.github/workflows/{workflow_name}@"
+    prefix = f"{repository}/.github/workflows/check.yml@"
     for path in sorted((root / ".github/workflows").glob("*")):
         if path.suffix not in {".yml", ".yaml"}:
             continue
@@ -61,22 +61,6 @@ def discover(root, repository, *, workflow_name="check.yml"):
     return candidates[0]
 
 
-def read_identity(root, repository, name):
-    """Read a literal member selection without imposing one release's settings."""
-    path, workflow, job, version = discover(root, repository)
-    require_policy_version(version)
-    inputs = job.get("with")
-    if (
-        not isinstance(inputs, dict)
-        or inputs.get("project") != name
-        or inputs.get("policy_version") != version
-    ):
-        raise ValueError(
-            "Policy caller identity and policy_version must agree with its selection"
-        )
-    return path, workflow, job, version
-
-
 def inspect(
     root, repository, name, requirements, *, checker_version=None, hosted_inputs=None
 ):
@@ -97,7 +81,7 @@ def inspect(
     return {**member, "declaration": str(path.relative_to(root))}
 
 
-def require_execution(workflow, job, caller_name, *, needs=None):
+def require_execution(workflow, job, caller_name):
     if job.get("name") != caller_name:
         raise ValueError(f"Policy caller job must be named '{caller_name}'")
     for forbidden in ("if", "strategy", "continue-on-error"):
@@ -105,12 +89,8 @@ def require_execution(workflow, job, caller_name, *, needs=None):
             raise ValueError(
                 f"Policy caller must run unconditionally and cannot contain {forbidden}"
             )
-    if (needs is None and "needs" in job) or (
-        needs is not None and job.get("needs") != needs
-    ):
-        raise ValueError(
-            "Policy caller needs must use only its required snapshot dependency"
-        )
+    if "needs" in job:
+        raise ValueError("Policy caller cannot contain needs")
     events = workflow.get("on")
     trigger = events.get("pull_request") if isinstance(events, dict) else None
     if not (

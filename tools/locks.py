@@ -58,23 +58,6 @@ class LockGraph:
         return result
 
 
-def dependency_cycles(graph):
-    visited = set()
-    cycles = []
-
-    def visit(node, stack):
-        if node in stack:
-            cycles.append([*stack[stack.index(node) :], node])
-        elif node not in visited:
-            for dependency in graph.get(node, []):
-                visit(dependency, [*stack, node])
-            visited.add(node)
-
-    for node in graph:
-        visit(node, [])
-    return cycles
-
-
 def repository_identity(node):
     for source in [node.get("locked", {}), node.get("original", {})]:
         host = source.get("host", "github.com")

@@ -9,31 +9,18 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
-from urllib.error import HTTPError
-from urllib.parse import quote
-from urllib.request import Request, urlopen
 
 if __package__:
-    from . import (
-        agreement,
-        declarations,
-        locks,
-        records,
-        releases,
-    )
+    from . import declarations, locks, records
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import agreement
     import declarations
     import locks
     import records
-    import releases
 
 ci_plan = declarations.ci_plan
 LockGraph = locks.LockGraph
 repository_identity = locks.repository_identity
-dependency_cycles = locks.dependency_cycles
 
 
 REVISION = records.REVISION
@@ -67,12 +54,6 @@ def main(argv=None):
         "--inputs-json",
         help="Hosted workflow inputs to compare with local declarations",
     )
-    agreement_command = commands.add_parser(
-        "agreement",
-        help="Compare policy selections at committed member dependency revisions",
-    )
-    agreement_command.add_argument("project_dir", type=Path)
-    agreement_command.add_argument("--project", required=True)
     check = commands.add_parser(
         "check", help="Check one project; missing approval fails"
     )
@@ -89,9 +70,6 @@ def main(argv=None):
     compatibility.add_argument(
         "--channel", required=True, choices=["stable", "unstable"]
     )
-    compatibility.add_argument(
-        "--output", type=Path, help="New evidence directory outside the project"
-    )
     shell = commands.add_parser(
         "shell", help="Smoke-test the default development shell and root formatter"
     )
@@ -105,16 +83,6 @@ def main(argv=None):
     )
     vm.add_argument("project_dir", type=Path)
     vm.add_argument("--project", required=True)
-    audit = commands.add_parser(
-        "audit", help="Inspect every enrolled member's selected policy"
-    )
-    audit.add_argument("workspace", type=Path)
-    audit.add_argument(
-        "--fetch", action="store_true", help="Clone missing public checkouts"
-    )
-    audit.add_argument(
-        "--github", action="store_true", help="Inspect enrolled members' merge gates"
-    )
     candidate = commands.add_parser(
         "candidate", help="Print an unapproved pin proposal"
     )
@@ -124,15 +92,7 @@ def main(argv=None):
     try:
         declarations.require_policy_version(f"v{version}")
         if (
-            args.command
-            in {
-                "check",
-                "audit",
-                "vm",
-                "compatibility",
-                "ci",
-                "agreement",
-            }
+            args.command in {"check", "vm", "compatibility", "ci"}
             and args.policy_root is None
         ):
             raise ValueError(
@@ -142,7 +102,7 @@ def main(argv=None):
         records_root = args.policy_root or SOURCE_ROOT
         config, pins = records.load(records_root)
         project = None
-        if args.command in {"check", "ci", "compatibility", "vm", "agreement"}:
+        if args.command in {"check", "ci", "compatibility", "vm"}:
             project = member_project(
                 args.project_dir,
                 args.project,
@@ -156,20 +116,6 @@ def main(argv=None):
                 "status": "valid",
                 "approvedPins": pins["approved"] is not None,
             }
-        elif args.command == "agreement":
-            result = agreement.inspect(
-                args.project_dir,
-                project,
-                config,
-                pins,
-                records_root,
-                git_revision=git_revision,
-                git_dirty=git_dirty,
-            )
-            result.update(
-                memberSettings=member_settings(project),
-                enrollment=enrollment(config, args.project),
-            )
         elif args.command == "ci":
             result = {
                 "status": "planned",
@@ -190,14 +136,12 @@ def main(argv=None):
         elif args.command == "host-checks":
             result = check_host_checks(args.project_dir)
         elif args.command == "compatibility":
-            records_revision = git_revision(records_root)
             result = check_compatibility(
                 args.project_dir,
                 args.project,
                 config,
                 pins,
                 args.channel,
-                args.output,
                 project=project,
             )
         elif args.command == "vm":
@@ -221,7 +165,7 @@ def main(argv=None):
                 "memberSettings": member_settings(project),
                 "enrollment": enrollment(config, args.project),
             }
-        elif args.command == "check":
+        else:
             result = inspect_project(
                 args.project_dir,
                 args.project,
@@ -233,28 +177,9 @@ def main(argv=None):
                 result["issues"].extend(check_shell(args.project_dir))
                 if result["issues"]:
                     result["status"] = "fail"
-        else:
-            result = audit_family(
-                args.workspace,
-                config,
-                pins,
-                args.fetch,
-                args.github,
-                records_root=records_root,
-            )
         if project is not None:
             result["selectionStatus"] = "supported"
         result["checkerVersion"] = f"v{version}"
-        result["policyRecordsRevision"] = (
-            records_revision
-            if args.command == "compatibility"
-            else git_revision(records_root)
-        )
-        result["policyRecordsDigest"] = records.digest(config, pins)
-        if args.command == "compatibility" and "artifacts" in result:
-            (Path(result["artifacts"]) / "result.json").write_text(
-                json.dumps(result, indent=2, sort_keys=True) + "\n"
-            )
         print(json.dumps(result, indent=2, sort_keys=True))
         return {"fail": 1, "error": 2}.get(result.get("status"), 0)
     except (
@@ -269,12 +194,12 @@ def main(argv=None):
                 {
                     "status": "error",
                     "selectionStatus": "invalid"
-                    if isinstance(error, (InvalidDeclaration, releases.InvalidRelease))
+                    if isinstance(error, InvalidDeclaration)
                     else "unknown",
                     "error": str(error),
                 }
             ),
-            file=sys.stdout if args.command in {"audit", "agreement"} else sys.stderr,
+            file=sys.stderr,
         )
         return 2
 
@@ -285,7 +210,7 @@ class InvalidDeclaration(ValueError):
 
 def member_project(root, name, config, *, hosted_inputs=None):
     try:
-        project = declarations.inspect(
+        return declarations.inspect(
             root.resolve(),
             config["policyRepository"],
             name,
@@ -293,9 +218,6 @@ def member_project(root, name, config, *, hosted_inputs=None):
             checker_version=f"v{(SOURCE_ROOT / 'VERSION').read_text().strip()}",
             hosted_inputs=hosted_inputs,
         )
-        if agreement.GATE in project["additionalRequiredChecks"]:
-            agreement.require_caller(root, project, config["policyRepository"])
-        return project
     except ValueError as error:
         raise InvalidDeclaration(str(error)) from error
 
@@ -495,38 +417,15 @@ def check_structure(root, config, version):
     return issues
 
 
-def check_compatibility(
-    root, name, config, pins, channel, output=None, *, project=None
-):
+def check_compatibility(root, name, config, pins, channel, *, project=None):
     root = root.resolve()
     project = project or member_project(root, name, config)
-    artifacts = (
-        output.resolve()
-        if output
-        else Path(tempfile.mkdtemp(prefix="nixos-policy-compatibility-"))
-    )
-    if artifacts.is_relative_to(root):
-        raise ValueError("Compatibility evidence must be outside the project checkout")
-    if output:
-        artifacts.mkdir(parents=True, exist_ok=False)
     result = {
         "project": name,
         "policyVersion": project["policyVersion"],
         "memberSettings": member_settings(project),
         "enrollment": enrollment(config, name),
         "revision": git_revision(root),
-        "checkerRevision": globals().get("PACKAGED_REVISION")
-        or git_revision(SOURCE_ROOT),
-        "checkerSourceDigest": hashlib.sha256(
-            b"".join(
-                path.read_bytes()
-                for path in (
-                    *sorted((SOURCE_ROOT / "tools").glob("*.py")),
-                    SOURCE_ROOT / "policy/requirements.json",
-                    SOURCE_ROOT / "VERSION",
-                )
-            )
-        ).hexdigest(),
         "channel": channel,
         "system": None,
         "expectedRevision": None,
@@ -535,17 +434,12 @@ def check_compatibility(
         "status": "error",
         "commands": [],
         "issues": [],
-        "artifacts": str(artifacts),
     }
     before = None
     source_before = None
     try:
         records.require_revision(result["revision"])
-        result["sourceDirty"] = git_dirty(root)
         source_before = fingerprints(root)
-        result["sourceDigest"] = hashlib.sha256(
-            json.dumps(source_before, sort_keys=True).encode()
-        ).hexdigest()
         before = (root / "flake.lock").read_bytes()
         committed_lock = subprocess.check_output(
             ["git", "-C", str(root), "show", "HEAD:flake.lock"],
@@ -587,7 +481,6 @@ def check_compatibility(
             ],
             capture=True,
         )
-        (artifacts / "metadata.json").write_text(metadata)
         lock = LockGraph(json.loads(metadata)["locks"])
         node = selected_nixpkgs(lock)
         result["resolvedRevision"] = lock.nodes[node]["locked"]["rev"]
@@ -778,343 +671,6 @@ def fingerprints(root):
     }
 
 
-def audit_family(
-    workspace, config, pins, fetch=False, github=False, *, records_root=None
-):
-    reports = []
-    graph = {}
-    snapshot = records.identity(config, pins, git_revision(records_root))
-    for name, repository in config["_members"].items():
-        root = workspace / name
-        report = {
-            "project": name,
-            "repository": repository,
-            "enrollment": "enrolled",
-            "revision": None,
-            "policyVersion": None,
-            "selectionStatus": "unknown",
-            "checkerVersion": None,
-            "checkerRepository": config["policyRepository"],
-            "checkerRevision": None,
-            "records": snapshot,
-            "status": "fail",
-            "issues": [],
-        }
-        try:
-            if fetch and not root.exists():
-                workspace.mkdir(parents=True, exist_ok=True)
-                subprocess.run(
-                    [
-                        "git",
-                        "clone",
-                        "--depth",
-                        "1",
-                        f"https://github.com/{repository}.git",
-                        str(root),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    timeout=180,
-                )
-            if not root.exists():
-                report["issues"].append("checkout missing")
-            else:
-                revision = git_revision(root)
-                records.require_revision(revision)
-                report["revision"] = revision
-                if git_dirty(root):
-                    raise ValueError("Audit requires a clean exact member commit")
-                try:
-                    caller_path, _, caller, version = declarations.read_identity(
-                        root, config["policyRepository"], name
-                    )
-                    report["policyVersion"] = version
-                    inputs = caller["with"]
-                except ValueError as error:
-                    report["selectionStatus"] = "invalid"
-                    report["issues"].append(f"ci: {error}")
-                else:
-                    report["selectionStatus"] = "supported"
-                    release = releases.inspect_release(
-                        config["policyRepository"], version
-                    )
-                    report["checkerRevision"] = release["revision"]
-                    settings = {
-                        field: json.loads(inputs.get(key, "[]"))
-                        for key, field in declarations.INPUT_FIELDS.items()
-                    }
-                    settings["vmArchitecture"] = inputs.get(
-                        "vm_architecture", "x86_64-linux"
-                    )
-                    assessed = releases.check_member(
-                        release,
-                        root,
-                        name,
-                        repository,
-                        revision,
-                        records_root,
-                        snapshot,
-                        settings=settings,
-                    )
-                    report.update(assessed)
-                    # Checker reports cannot redefine trusted enrollment or identity.
-                    report.update(
-                        repository=repository,
-                        enrollment="enrolled",
-                        records=snapshot,
-                    )
-                    report["assessment"] = assessed["status"]
-                    graph[name] = report["dependencies"]
-                    if github:
-                        report["issues"].extend(
-                            check_github(
-                                {"repository": repository},
-                                report["requiredChecks"],
-                                workflow=str(caller_path.relative_to(root)),
-                            )
-                        )
-                        if report["issues"]:
-                            report["status"] = "fail"
-                if git_revision(root) != revision or git_dirty(root):
-                    raise ValueError("Member checkout changed during audit")
-        except (
-            ValueError,
-            OSError,
-            KeyError,
-            TypeError,
-            subprocess.SubprocessError,
-        ) as error:
-            report["status"] = "error"
-            report["selectionStatus"] = (
-                "invalid" if isinstance(error, releases.InvalidRelease) else "unknown"
-            )
-            report["issues"].append(f"inspection: {error}")
-        reports.append(report)
-    # A released checker reads the same directory; reject a concurrently changed snapshot.
-    try:
-        current_config, current_pins = records.load(records_root)
-        changed = (
-            records.identity(current_config, current_pins, git_revision(records_root))
-            != snapshot
-        )
-    except (ValueError, OSError, KeyError, TypeError):
-        changed = True
-    if changed:
-        for report in reports:
-            report["status"] = "error"
-            report["issues"].append("Central records changed during audit")
-    cycles = dependency_cycles(graph)
-    return {
-        "status": "error"
-        if changed or any(item["status"] == "error" for item in reports)
-        else "fail"
-        if cycles or any(item["status"] == "fail" for item in reports)
-        else "reported",
-        "approvedPins": pins["approved"] is not None,
-        "projects": reports,
-        "cycles": cycles,
-        "records": snapshot,
-        "issues": ["Central records changed during audit"] if changed else [],
-    }
-
-
-def check_github(project, checks, *, workflow):
-    repository = project["repository"]
-    info = github_get(f"repos/{repository}")
-    if (
-        not isinstance(info, dict)
-        or not isinstance(info.get("default_branch"), str)
-        or not info["default_branch"]
-    ):
-        raise ValueError("GitHub branch inspection is incomplete; settings are unknown")
-    merge_settings = github_merge_settings(repository, info)
-    branch = quote(info["default_branch"], safe="")
-    rules = github_get(f"repos/{repository}/rules/branches/{branch}")
-    if not isinstance(rules, list) or any(
-        not isinstance(rule, dict) or not isinstance(rule.get("type"), str)
-        for rule in rules
-    ):
-        raise ValueError("GitHub rule inspection is incomplete; settings are unknown")
-    issues = []
-    if (
-        not merge_settings["allow_squash_merge"]
-        or merge_settings["allow_merge_commit"]
-        or merge_settings["allow_rebase_merge"]
-    ):
-        issues.append("github: configure squash as the only merge method")
-    pr_rule = any(rule["type"] == "pull_request" for rule in rules)
-    contexts = set()
-    for rule in rules:
-        if rule["type"] == "required_status_checks":
-            parameters = rule.get("parameters")
-            if not isinstance(parameters, dict):
-                raise ValueError(
-                    "GitHub required checks are incomplete; settings are unknown"
-                )
-            contexts.update(github_contexts(parameters.get("required_status_checks")))
-    if not pr_rule or not set(checks).issubset(contexts):
-        details = github_get(f"repos/{repository}/branches/{branch}")
-        if not isinstance(details, dict) or not isinstance(
-            details.get("protected"), bool
-        ):
-            raise ValueError(
-                "GitHub protection inspection is incomplete; settings are unknown"
-            )
-        if details["protected"]:
-            protection = github_get(f"repos/{repository}/branches/{branch}/protection")
-            if (
-                not isinstance(protection, dict)
-                or not {"required_pull_request_reviews", "required_status_checks"}
-                <= protection.keys()
-            ):
-                raise ValueError(
-                    "GitHub protection inspection is incomplete; settings are unknown"
-                )
-            reviews = protection["required_pull_request_reviews"]
-            if reviews is not None and (
-                not isinstance(reviews, dict)
-                or type(reviews.get("required_approving_review_count")) is not int
-                or reviews["required_approving_review_count"] < 0
-            ):
-                raise ValueError(
-                    "GitHub review inspection is incomplete; settings are unknown"
-                )
-            pr_rule = pr_rule or bool(protection.get("required_pull_request_reviews"))
-            status_checks = protection["required_status_checks"]
-            if status_checks is not None and (
-                not isinstance(status_checks, dict)
-                or not {"contexts", "checks"} & status_checks.keys()
-            ):
-                raise ValueError(
-                    "GitHub required checks are incomplete; settings are unknown"
-                )
-            status_checks = {} if status_checks is None else status_checks
-            if not isinstance(
-                status_checks, dict
-            ) or not declarations.valid_check_names(status_checks.get("contexts", [])):
-                raise ValueError(
-                    "GitHub required checks are incomplete; settings are unknown"
-                )
-            contexts.update(status_checks.get("contexts", []))
-            contexts.update(github_contexts(status_checks.get("checks", [])))
-    if not pr_rule:
-        issues.append("github: pull requests are not required")
-    for check in checks:
-        if check not in contexts:
-            issues.append(f"github: missing required check '{check}'")
-    issues.extend(check_github_enforcement(repository, workflow))
-    return issues
-
-
-def check_github_enforcement(repository, workflow):
-    permissions = github_get(f"repos/{repository}/actions/permissions")
-    if not isinstance(permissions, dict) or not isinstance(
-        permissions.get("enabled"), bool
-    ):
-        raise ValueError(
-            "GitHub Actions inspection is incomplete; enforcement is unknown"
-        )
-    details = github_get(
-        f"repos/{repository}/actions/workflows/{quote(Path(workflow).name, safe='')}"
-    )
-    if (
-        not isinstance(details, dict)
-        or details.get("path") != workflow
-        or not isinstance(details.get("state"), str)
-        or not details["state"]
-    ):
-        raise ValueError(
-            "GitHub workflow inspection is incomplete or disagrees with the discovered caller; enforcement is unknown"
-        )
-    issues = []
-    if not permissions["enabled"]:
-        issues.append("github: repository Actions are disabled")
-    if details["state"] != "active":
-        issues.append(
-            f"github: policy caller workflow {workflow} is not active ({details['state']})"
-        )
-    return issues
-
-
-def github_contexts(checks):
-    if not isinstance(checks, list) or any(
-        not isinstance(check, dict)
-        or not isinstance(check.get("context"), str)
-        or not check["context"].strip()
-        for check in checks
-    ):
-        raise ValueError("GitHub required checks are incomplete; settings are unknown")
-    return [check["context"] for check in checks]
-
-
-def github_merge_settings(repository, info):
-    fields = ("allow_squash_merge", "allow_merge_commit", "allow_rebase_merge")
-    if all(isinstance(info.get(field), bool) for field in fields):
-        return info
-
-    # Read-only tokens can inspect these settings through GraphQL even when
-    # GitHub omits them from the REST repository response.
-    owner, name = repository.split("/", 1)
-    result = github_request(
-        "graphql",
-        {
-            "query": """query($owner: String!, $name: String!) {
-                repository(owner: $owner, name: $name) {
-                    allow_squash_merge: squashMergeAllowed
-                    allow_merge_commit: mergeCommitAllowed
-                    allow_rebase_merge: rebaseMergeAllowed
-                }
-            }""",
-            "variables": {"owner": owner, "name": name},
-        },
-    )
-    data = (
-        result.get("data")
-        if isinstance(result, dict) and not result.get("errors")
-        else None
-    )
-    settings = data.get("repository") if isinstance(data, dict) else None
-    if not isinstance(settings, dict) or not all(
-        isinstance(settings.get(field), bool) for field in fields
-    ):
-        raise ValueError(
-            f"GitHub merge inspection unavailable for {repository}; settings are unknown"
-        )
-    return settings
-
-
-def github_get(path):
-    return github_request(path)
-
-
-def github_request(path, payload=None):
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise ValueError(
-            "GitHub inspection requires a token in GH_TOKEN or GITHUB_TOKEN with Actions, Administration, Contents, and Metadata read access to enrolled members; configure the MEMBER_AUDIT_TOKEN secret for maintenance"
-        )
-    headers["Authorization"] = f"Bearer {token}"
-    data = None
-    if payload is not None:
-        headers["Content-Type"] = "application/json"
-        data = json.dumps(payload).encode()
-    try:
-        with urlopen(
-            Request(f"https://api.github.com/{path}", data=data, headers=headers),
-            timeout=30,
-        ) as response:
-            return json.load(response)
-    except HTTPError as error:
-        raise ValueError(
-            f"GitHub inspection unavailable for {path}: HTTP {error.code}; verify repository access and read permissions; settings are unknown"
-        ) from error
-
-
 def source_files(root, filename, include_vendor=False):
     result = []
     excluded = EXCLUDED_DIRS - {"vendor"} if include_vendor else EXCLUDED_DIRS
@@ -1161,22 +717,6 @@ def git_revision(root):
         ).strip()
     except (OSError, subprocess.CalledProcessError):
         return None
-
-
-def git_dirty(root):
-    return bool(
-        subprocess.check_output(
-            [
-                "git",
-                "-C",
-                str(root),
-                "status",
-                "--porcelain",
-                "--untracked-files=normal",
-            ],
-            text=True,
-        ).strip()
-    )
 
 
 if __name__ == "__main__":

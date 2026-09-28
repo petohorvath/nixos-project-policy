@@ -40,7 +40,7 @@ rm -rf "${PROJECT_RECORDS_DIR:?}"
 
 Replace the tag with the member's selected release and `PROJECT` with its name. In the variable name, write the name in upper case with underscores, such as `NIXOS_REGISTRY_RECORDS_DIR`. The command does not fetch records, so clone them again for each check of current approval. Keep the records out of sibling directories: `check` rejects member Markdown that passes a `../` path to `--policy-root`. `check` inspects structure, locks, and the policy caller. `--shell` also smoke-tests the default development shell and evaluates the formatter. Compatibility execution requires separate `compatibility` commands for `stable` and `unstable`.
 
-The checker also plans CI gates, audits enrolled members, checks integration policy agreement at locked member revisions, and executes declared VM targets. See the [checker reference](docs/checker.md#commands) for commands, JSON results, and validation limits.
+The checker also plans CI gates and executes declared VM targets. See the [checker reference](docs/checker.md#commands) for commands, JSON results, and validation limits.
 
 ## Development
 

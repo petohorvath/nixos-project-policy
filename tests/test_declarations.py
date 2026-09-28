@@ -44,7 +44,6 @@ class DeclarationTests(ProjectTestCase):
                 ("check", ["--shell"]),
                 ("compatibility", ["--channel", "stable"]),
                 ("vm", []),
-                ("agreement", []),
             ]:
                 with self.subTest(version=version, command=command):
                     code, report = self.run_policy(

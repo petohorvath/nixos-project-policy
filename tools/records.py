@@ -1,6 +1,5 @@
-"""Load central records and compute their identities."""
+"""Load and validate central records."""
 
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -78,21 +77,6 @@ def load_members(root):
             )
         identities.add(repository.lower())
     return roster["members"]
-
-
-def digest(config, pins):
-    data = {
-        "pins": pins,
-        "members": {"schemaVersion": 1, "members": config["_members"]},
-    }
-    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
-
-
-def identity(config, pins, revision):
-    return {
-        "revision": revision,
-        "digest": digest(config, pins),
-    }
 
 
 def load_requirements():

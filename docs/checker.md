@@ -18,8 +18,8 @@ nix run --no-update-lock-file .# -- COMMAND
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `validate`                                           | Check the bundled pins and repo list and print them.                                             |
 | `ci PATH --project NAME`                             | Report CI matrices and required status names. Do not execute checks.                             |
-| `check PATH --project NAME`                          | Inspect a member checkout against its selected policy and approved pins.                         |
-| `check PATH --project NAME --shell`                  | Also smoke-test the member shell and evaluate its root formatter.                                |
+| `check PATH`                                         | Apply the input rules to the root `flake.lock`.                                                  |
+| `check PATH --shell`                                 | Also smoke-test the member shell and evaluate its root formatter.                                |
 | `compatibility PATH --project NAME --channel stable` | Verify the stable override and run full root host checks. Use `unstable` for the other revision. |
 | `host-checks PATH`                                   | Require nonempty `checks.<host-system>` under the committed lock, without building checks.       |
 | `vm PATH`                                            | Build every `legacyPackages.<host-system>.vmTests` entry. Return `not-applicable` if none exist. |
@@ -31,10 +31,10 @@ Run a selected release directly:
 
 ```bash
 nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
-  check ../member --project member --shell
+  check ../member --shell
 ```
 
-`check`, `ci`, and `compatibility` require one member caller selecting the executing checker release. The caller's `policy_version` must match its immutable workflow reference. Enrollment does not change this requirement.
+`ci` and `compatibility` require one member caller selecting the executing checker release. The caller's `policy_version` must match its immutable workflow reference. Enrollment does not change this requirement.
 
 ### Results
 
@@ -46,7 +46,7 @@ Record and member commands print JSON. Reports include `checkerVersion`. Member 
 | 1    | Enforced checks failed.                                                             |
 | 2    | The request, records, or inspection could not be processed.                         |
 
-A normal `check` can return `pass` before enrollment. Its separate `enrollment` field is `enrolled` or `not-enrolled`. Static checks report `compatibility: "not-run"`. No result changes enrollment or approves pins.
+`check` reads no caller workflow. Its report maps each rule id to `pass`, `fail`, `notice`, or `not-run` in `rules`. `issues` lists failures and `notices` lists findings that pass but need review; each names its `rule`, `input`, and `message`. `siblings` lists every sibling input with its repository, revision, and reference kind (`tag`, `commit`, or `branch`). No result changes enrollment or approves pins.
 
 `ci` returns `planned`, `matrix`, `compatibilityMatrix`, and the complete `requiredChecks`. Omit `PATH` only when the current directory is the member. Hosted `--inputs-json JSON` must normalize to the checked-out caller's inputs; it cannot replace member settings.
 
@@ -125,19 +125,25 @@ The `ci` fields define the caller name, common `requiredChecks`, per-architectur
 
 `data/pins.json` contains only `stable`, `unstable`, and `stableBranch`. The pins are exact 40-character lowercase commits. The stable branch names the NixOS update source.
 
-Static checks compare shared-pin lock scopes against this pair, excluding the independently selected root lock node. Compatibility execution tests both revisions through root input overrides.
+Compatibility execution tests both revisions through root input overrides.
 
 ## Implemented coverage
 
-The checker resolves version-7 lock graphs, including root-relative `follows`, across first-party lockfiles. It ignores unreachable nodes and vendor/cache directories. It identifies GitHub sources from GitHub inputs and Git URLs, checks immutable selections, flags ambiguous nixpkgs sources, and builds member dependency graphs. Policy repository flake dependencies fail.
+`check` reads only the root `flake.lock`; other lock files, such as independently locked examples, are ignored. It resolves the version-7 lock graph, including root-relative `follows`, and ignores unreachable nodes. It identifies GitHub sources from GitHub inputs and Git URLs. A sibling is any GitHub repository under an owner of a repo in `data/repos.json`, except the policy repository. Third-party inputs are not checked.
 
-Root `nixpkgs` must resolve to an immutable `NixOS/nixpkgs` flake. Its revision and update branch can differ from shared pins. The exemption includes references that follow the resolved root node.
+| Rule                      | Fails when                                                                                                      |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `lock`                    | The root `flake.lock` is missing or is not a valid version-7 lock graph. The other rules then report `not-run`. |
+| `root-nixpkgs`            | Root `nixpkgs` is missing or does not resolve to a `NixOS/nixpkgs` flake locked to an exact commit.             |
+| `extra-nixpkgs`           | Never. Another root input that resolves to a distinct `NixOS/nixpkgs` node is reported as a notice.             |
+| `sibling-tag`             | A root sibling input references a branch or the default branch. A commit reference is a temporary notice.       |
+| `sibling-one-revision`    | A sibling repository appears at more than one revision in the reachable lock graph.                             |
+| `sibling-follows-nixpkgs` | A reachable sibling's `nixpkgs` input does not resolve to the root `nixpkgs` node.                              |
+| `no-policy-input`         | The policy repository appears anywhere in the reachable lock graph.                                             |
 
-Additional root inputs, distinct transitive nodes, and independently locked examples require one allowed pair across the project. In these scopes, first-party stable inputs use `nixpkgs`; unstable inputs use `nixpkgs-unstable`. An absent input need not be added. Transitive input names and lock node identifiers are unrestricted. Branch declarations identify stable/unstable selections; exact revisions can identify them when they match one allowed value uniquely.
+`check --shell` adds the `shell` rule.
 
-Structural checks inspect the root development entrypoint, required files, and links to the selected release's `POLICY.md`. The checker requires a root `README.md` without inspecting its content or headings.
-
-Caller validation requires:
+Caller validation for `ci`, `compatibility`, and `vm` requires:
 
 - One exact release reference, matching `policy_version`, and literal job name `Policy`.
 - PR event types must include `opened`, `synchronize`, and `reopened`, in any order. The `edited` event is optional.
@@ -180,7 +186,7 @@ The first job captures the checker, member, and current record commits. All late
 
 The first job verifies the release version and generates matrices once on x86_64. This metadata job does not add x86_64 to the member's required architectures or publish a release.
 
-Compliance runs structural, pin, caller, and shell checks. Members own formatting and lint enforcement. Project tests first run `host-checks` to require nonempty host checks with `--no-update-lock-file`, then run full committed-lock root checks. Compatibility runs both shared revisions.
+Compliance runs the input rules and shell checks. Members own formatting and lint enforcement. Project tests first run `host-checks` to require nonempty host checks with `--no-update-lock-file`, then run full committed-lock root checks. Compatibility runs both shared revisions.
 
 Each category runs independently on every required architecture with `fail-fast: false`. They and the VM job depend only on the first job. A failure does not suppress other categories. The `VM tests` job always runs on x86_64 Linux and reports `not-applicable` without `vmTests`; `ci` does not list it among the required statuses.
 
@@ -188,4 +194,4 @@ Standard PR checkout tests GitHub's candidate merge commit. Each run captures it
 
 Workflows use read-only permissions and do not persist checkout credentials. Automation that creates member PRs requires a separately reviewed write identity. Normal policy checks require no such credential.
 
-The workflow invokes `check --shell` with the same requirements before and after enrollment. It reports checks and enrollment separately. Successful CI does not enroll members or approve pins.
+The workflow invokes `check --shell` with the same requirements before and after enrollment. Successful CI does not enroll members or approve pins.

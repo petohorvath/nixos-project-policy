@@ -6,6 +6,7 @@
 - Remove record digests, checker and source digests, and replay data from reports. `compatibility` no longer accepts `--output` or writes evidence directories.
 - Bundle the pins and the listed repos with the checker in `data/pins.json` and `data/repos.json`, and remove `--policy-root`. Every command reads the bundled data; `validate` checks both files. The reusable workflow no longer checks out `main` for records. `policy/pins.json` and `policy/members.json` stay unchanged for v0.4.0 callers.
 - Discover VM tests from `legacyPackages.<system>.vmTests` instead of declaring them. `vm PATH` builds every entry on the host system, continues after a failure, reports failing names, and returns `not-applicable` without VM tests; it no longer takes `--project` or reads the caller workflow. Remove the `vm_targets` and `vm_architecture` caller inputs; `ci` no longer reports `vmTargets` or `vmJob`, and the workflow's `VM tests` job always runs on x86_64 Linux.
+- Replace the `check` rules with the input rules: root `nixpkgs` is a locked `NixOS/nixpkgs` commit on any branch; extra nixpkgs inputs are reported; sibling inputs reference a release tag (a commit is reported as temporary), appear at one revision, and follow root `nixpkgs`; the policy repository is never an input. Reports name each rule by a stable id in `rules`, `issues`, and `notices`. `check` no longer takes `--project`, reads the caller workflow, checks shared pins or nixpkgs input names, reads example lock files, scans Markdown, or requires files.
 
 ## 0.4.0
 

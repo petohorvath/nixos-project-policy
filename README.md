@@ -24,16 +24,16 @@ Use `nix develop --no-update-lock-file` to enter the shell without direnv. `nix 
 
 Use the [policy caller template](templates/policy-caller.yml) to select a published immutable policy release and declare the member name and required architectures. Optional settings select VM targets, their Linux architecture, and additional required checks. Keep the policy repository outside member flake inputs, shells, and builds. Follow the [enrollment procedure](docs/maintenance.md#enrollment) to add a member to the central roster; a passing check does not enroll it.
 
-Members choose their root `nixpkgs` revision independently. Policy CI runs separate compliance, committed-lock project tests, and stable/unstable compatibility jobs on every required architecture. Compatibility jobs override the root input with the approved shared pins and run full root checks. Other nixpkgs lock scopes remain subject to shared-pin requirements. Declared VM tests run separately.
+Members choose their root `nixpkgs` revision independently. Policy CI runs separate compliance, committed-lock project tests, and stable/unstable compatibility jobs on every required architecture. Compatibility jobs override the root input with the approved shared pins and run full root checks. Declared VM tests run separately.
 
 For local checks, run the member's selected checker release. It reads the pins and repo list bundled with it, so no other checkout is needed:
 
 ```bash
 nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
-  check ../PROJECT --project PROJECT --shell
+  check ../PROJECT --shell
 ```
 
-Replace the tag with the member's selected release and `PROJECT` with its name. `check` inspects structure, locks, and the policy caller. `--shell` also smoke-tests the default development shell and evaluates the formatter. Compatibility execution requires separate `compatibility` commands for `stable` and `unstable`.
+Replace the tag with the member's selected release and `PROJECT` with the repo's path. `check` applies the input rules to the root `flake.lock`. `--shell` also smoke-tests the default development shell and evaluates the formatter. Compatibility execution requires separate `compatibility` commands for `stable` and `unstable`.
 
 The checker also plans CI gates and builds the VM tests it discovers under `legacyPackages.<system>.vmTests`. See the [checker reference](docs/checker.md#commands) for commands, JSON results, and validation limits.
 

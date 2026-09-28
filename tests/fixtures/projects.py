@@ -69,7 +69,7 @@ class ProjectFixture:
         self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
 
     def inspect(self):
-        return self.run_policy("check", str(self.root), "--project", "example")[1]
+        return self.run_policy("check", str(self.root))[1]
 
     def write_data(self, directory=None):
         """Write the fixture's pins and repo list in the bundled data layout."""

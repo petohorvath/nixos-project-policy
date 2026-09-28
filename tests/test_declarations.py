@@ -36,7 +36,6 @@ class DeclarationTests(ProjectTestCase):
             self.declare(policy_version=version)
             for command, options in [
                 ("ci", []),
-                ("check", ["--shell"]),
                 ("compatibility", ["--channel", "stable"]),
             ]:
                 with self.subTest(version=version, command=command):
@@ -55,10 +54,6 @@ class DeclarationTests(ProjectTestCase):
         ]:
             with self.subTest(systems=systems):
                 self.declare(required_architectures=json.dumps(systems))
-                code, report = self.run_policy(
-                    "check", str(self.root), "--project", "example"
-                )
-                self.assertEqual(code, 0, report)
                 code, report = self.run_policy("ci", "--project", "example")
                 self.assertEqual(code, 0, report)
                 self.assertEqual(
@@ -89,7 +84,7 @@ class DeclarationTests(ProjectTestCase):
 
     def test_pre_enrollment_checks_and_planning_do_not_change_data(self):
         self.repos.clear()
-        for command in ["ci", "check"]:
+        for command in ["ci"]:
             with self.subTest(command=command):
                 code, report = self.run_policy(
                     command, str(self.root), "--project", "example"
@@ -127,7 +122,7 @@ class DeclarationTests(ProjectTestCase):
         self.assertEqual(code, 2, report)
         self.assertIn("disagree", report["error"])
 
-    def test_invalid_declarations_cannot_plan_check_or_execute(self):
+    def test_invalid_declarations_cannot_plan_or_execute(self):
         original = copy.deepcopy(self.workflow)
         cases = [
             ("required_architectures", value)
@@ -174,7 +169,7 @@ class DeclarationTests(ProjectTestCase):
         for field, value in cases:
             self.workflow = copy.deepcopy(original)
             self.declare(**{field: value})
-            for command in ["ci", "check", "compatibility"]:
+            for command in ["ci", "compatibility"]:
                 with self.subTest(field=field, value=value, command=command):
                     options = (
                         ["--channel", "stable"] if command == "compatibility" else []
@@ -209,19 +204,6 @@ class DeclarationTests(ProjectTestCase):
             self.assertEqual(code, 2, report)
         caller.write_text(original)
         self.write(".github/workflows/second.yaml", original)
-        code, report = self.run_policy("check", str(self.root), "--project", "example")
+        code, report = self.run_policy("ci", "--project", "example")
         self.assertEqual(code, 2, report)
         self.assertIn("found 2", report["error"])
-
-    def test_matching_link_does_not_hide_a_contradictory_policy_link(self):
-        for document in ["AGENTS.md", "CONTRIBUTING.md"]:
-            with self.subTest(document=document):
-                self.write(
-                    document,
-                    f"[Rules](https://github.com/{POLICY_REPO}/blob/{RELEASE}/POLICY.md)\n[Other](https://github.com/{POLICY_REPO}/blob/v0.3.0/POLICY.md)\n",
-                )
-                code, report = self.run_policy(
-                    "check", str(self.root), "--project", "example"
-                )
-                self.assertEqual(code, 1, report)
-                self.assertTrue(any(document in issue for issue in report["issues"]))

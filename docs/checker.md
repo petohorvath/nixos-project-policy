@@ -22,6 +22,7 @@ nix run --no-update-lock-file .# -- COMMAND
 | `test PATH --nixpkgs locked` | Run `nix flake check` with the committed lock. Require nonempty `checks.<host-system>`.           |
 | `test PATH --nixpkgs stable` | Verify the stable pin override, then run `nix flake check` with it. Use `unstable` for the other. |
 | `vm PATH`                    | Build every `legacyPackages.<host-system>.vmTests` entry. Return `not-applicable` if none exist.  |
+| `survey WORKSPACE`           | Run `check` on every Git repo directly under `WORKSPACE`. Print a rule table on standard error.   |
 
 The `shell` rule first evaluates `devShells.<host-system>.default.drvPath`, then enters the development shell with the inherited environment cleared and executes `bash -c ':'`. A default package or non-default shell cannot satisfy it. The `formatter` rule evaluates the root formatter without asserting compliance. The shell rule checks startup and command execution, not a fixed tool list or project-specific development tasks.
 
@@ -45,6 +46,8 @@ Record and member commands print JSON. Reports include `checkerVersion`. Member 
 | 2    | The request, records, or inspection could not be processed.                         |
 
 `check` reads no caller workflow. Its report maps each rule id to `pass`, `fail`, `notice`, or `not-run` in `rules`. `issues` lists failures and `notices` lists findings that pass but need review; each names its `rule` and `message`, and the `input` or public `output` it concerns (`null` for the shell and formatter rules). `siblings` lists every sibling input with its repository, revision, and reference kind (`tag`, `commit`, or `branch`). `release` holds the last release `tag` and the changelog `version`, either of which can be `null`. No result changes enrollment or approves pins.
+
+`survey` skips hidden directories and directories without `.git`. It marks a repo `listed` when its GitHub `origin` identity is in `data/repos.json`, or, without a GitHub `origin`, when its directory name equals a listed repository name. Its report holds `status`, `workspace`, `rules` (the rule ids in column order), `repos`, and `table`. Each `repos` entry has `name`, `path`, `repository` (`null` without a GitHub `origin`), `listed`, and `status`: the `check` status with its report in `check`, `not-a-flake` without `flake.nix`, or `error` with the message in `error`. The survey continues after any repo. It exits 1 when a repo fails or errors and 2 only when `WORKSPACE` cannot be read; `not-a-flake` does not fail it. `table` holds the same table that standard error shows, one row per repo and one column per rule.
 
 `ci` returns `planned`, `matrix`, `compatibilityMatrix`, and the complete `requiredChecks`. Omit `PATH` only when the current directory is the member. Hosted `--inputs-json JSON` must normalize to the checked-out caller's inputs; it cannot replace member settings.
 

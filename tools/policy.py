@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 if __package__:
-    from . import ci, inputs, locks, outputs, records, tests_runner, vm
+    from . import ci, inputs, locks, outputs, records, survey, tests_runner, vm
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import ci
@@ -18,6 +18,7 @@ else:
     import locks
     import outputs
     import records
+    import survey
     import tests_runner
     import vm
 
@@ -27,6 +28,8 @@ repository_identity = locks.repository_identity
 
 REVISION = records.REVISION
 POLICY_REPOSITORY = "petohorvath/nixos-project-policy"
+# Every rule id in a `check` report, in report order; one survey column each.
+CHECK_RULES = (*inputs.RULES, *outputs.RULES, "shell", "formatter")
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_DIRS = {
     ".git",
@@ -66,6 +69,11 @@ def main(argv=None):
         "vm", help="Build every legacyPackages.<system>.vmTests entry on this host"
     )
     vm_command.add_argument("project_dir", type=Path)
+    survey_command = commands.add_parser(
+        "survey",
+        help="Run check on every Git repo directly under a workspace directory",
+    )
+    survey_command.add_argument("workspace", type=Path)
     args = parser.parse_args(argv)
     try:
         data = records.load()
@@ -79,9 +87,19 @@ def main(argv=None):
             )
         elif args.command == "vm":
             result = vm.run(args.project_dir)
+        elif args.command == "survey":
+            result = survey.run(
+                args.workspace.resolve(),
+                data.repos,
+                CHECK_RULES,
+                lambda root: check_repo(root, data, POLICY_REPOSITORY),
+            )
         else:
             result = check_repo(args.project_dir, data, POLICY_REPOSITORY)
         result["checkerVersion"] = f"v{version}"
+        if args.command == "survey":
+            # Standard output carries only JSON; the table is for people.
+            print(result["table"], file=sys.stderr)
         print(json.dumps(result, indent=2, sort_keys=True))
         return {"fail": 1, "error": 2}.get(result.get("status"), 0)
     except (

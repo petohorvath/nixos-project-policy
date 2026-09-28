@@ -5,6 +5,16 @@ import json
 from tests.fixtures.cases import ProjectTestCase
 from tests.fixtures.data import NEW_STABLE, SOURCE, lockfile, nixpkgs
 
+INPUT_RULES = {
+    "extra-nixpkgs",
+    "lock",
+    "no-policy-input",
+    "root-nixpkgs",
+    "sibling-follows-nixpkgs",
+    "sibling-one-revision",
+    "sibling-tag",
+}
+
 
 def sibling(repository, *, ref=None, rev=SOURCE, follows=True):
     owner, repo = repository.split("/")
@@ -33,8 +43,14 @@ class InputRuleTests(ProjectTestCase):
         self.lock["nodes"][name] = node
 
     def check(self):
+        """Run `check` and keep only the notices of the input rules."""
         self.write("flake.lock", json.dumps(self.lock))
-        return self.run_policy("check", str(self.root))
+        code, report = self.run_policy("check", str(self.root))
+        if "notices" in report:
+            report["notices"] = [
+                notice for notice in report["notices"] if notice["rule"] in INPUT_RULES
+            ]
+        return code, report
 
     def failures(self, report):
         return {(issue["rule"], issue["input"]) for issue in report["issues"]}
@@ -276,15 +292,25 @@ class InputRuleTests(ProjectTestCase):
             list(report["rules"]),
             [
                 "extra-nixpkgs",
+                "formatter",
                 "lock",
                 "no-policy-input",
+                "outputs-empty",
+                "outputs-evaluate",
+                "outputs-removal",
                 "root-nixpkgs",
+                "shell",
                 "sibling-follows-nixpkgs",
                 "sibling-one-revision",
                 "sibling-tag",
             ],
         )
-        self.assertTrue(all(status == "pass" for status in report["rules"].values()))
+        # The fixture repo has no release tag, so the removal comparison skips.
+        self.assertEqual(
+            {rule for rule, status in report["rules"].items() if status != "pass"},
+            {"outputs-removal"},
+        )
+        self.assertEqual(report["rules"]["outputs-removal"], "not-run")
 
     def test_check_needs_no_caller_workflow(self):
         (self.root / ".github/workflows/policy.yml").unlink()

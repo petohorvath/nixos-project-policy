@@ -30,6 +30,10 @@ def run(command, **kwargs):
                 -1
             ].rsplit("/", 1)[1]
         output = json.dumps({"locks": graph})
+    elif command[1] == "eval" and "NIXOS_PROJECT_POLICY_OUTPUTS_FLAKE" in command[-1]:
+        # The packaged fixture publishes no public outputs.
+        mode = kwargs["env"]["NIXOS_PROJECT_POLICY_OUTPUTS_MODE"]
+        output = "[]" if mode == "list" else "{}"
     elif command[1] == "eval" and "vmTests" in command[-1]:
         output = json.dumps({"system": CONFIG["system"], "names": ["boot"]})
     elif command[1] == "eval":

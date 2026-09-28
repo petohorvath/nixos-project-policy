@@ -10,12 +10,13 @@ import subprocess
 import sys
 
 if __package__:
-    from . import ci, inputs, locks, records, tests_runner, vm
+    from . import ci, inputs, locks, outputs, records, tests_runner, vm
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import ci
     import inputs
     import locks
+    import outputs
     import records
     import tests_runner
     import vm
@@ -51,11 +52,11 @@ def main(argv=None):
         "--systems",
         help="JSON list of Nix systems (default: x86_64-linux and aarch64-linux)",
     )
-    check = commands.add_parser("check", help="Check a repo's inputs")
-    check.add_argument("project_dir", type=Path)
-    check.add_argument(
-        "--shell", action="store_true", help="Execute the project's Nix shell"
+    check = commands.add_parser(
+        "check",
+        help="Check a repo's inputs, public outputs, development shell, and formatter",
     )
+    check.add_argument("project_dir", type=Path)
     test = commands.add_parser(
         "test", help="Run nix flake check with the locked, stable, or unstable nixpkgs"
     )
@@ -86,9 +87,7 @@ def main(argv=None):
         elif args.command == "vm":
             result = vm.run(args.project_dir)
         else:
-            result = check_repo(
-                args.project_dir, data, POLICY_REPOSITORY, shell=args.shell
-            )
+            result = check_repo(args.project_dir, data, POLICY_REPOSITORY)
         result["checkerVersion"] = f"v{version}"
         print(json.dumps(result, indent=2, sort_keys=True))
         return {"fail": 1, "error": 2}.get(result.get("status"), 0)
@@ -106,18 +105,22 @@ def main(argv=None):
         return 2
 
 
-def check_repo(root, data, policy_repository, *, shell):
+def check_repo(root, data, policy_repository):
     """Apply the check rules to one repo and report each rule by its id."""
     root = root.resolve()
     findings, siblings = inputs.check(root, data.repos, policy_repository)
     rules = inputs.summarize(findings)
-    # Public-output rules add their findings and rule ids here.
-    if shell:
-        problems = check_shell(root)
-        findings.extend(
-            inputs.finding("shell", None, "fail", problem) for problem in problems
-        )
-        rules["shell"] = "fail" if problems else "pass"
+    system = host_system()
+    output_findings, output_rules, release = outputs.check(root, system)
+    findings.extend(output_findings)
+    rules.update(output_rules)
+    for rule, problem in [
+        ("shell", shell_problem(root, system)),
+        ("formatter", formatter_problem(root, system)),
+    ]:
+        if problem is not None:
+            findings.append(inputs.finding(rule, None, "fail", problem))
+        rules[rule] = "fail" if problem else "pass"
     return {
         "status": "fail" if "fail" in rules.values() else "pass",
         "revision": git_revision(root),
@@ -125,6 +128,7 @@ def check_repo(root, data, policy_repository, *, shell):
         "issues": report_findings(findings, "fail"),
         "notices": report_findings(findings, "notice"),
         "siblings": siblings,
+        "release": release,
     }
 
 
@@ -136,58 +140,83 @@ def report_findings(findings, level):
     ]
 
 
+def host_system():
+    return subprocess.run(
+        ["nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem"],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+        timeout=30,
+    ).stdout.strip()
+
+
 def check_shell(root):
-    # Smoke-test shell startup without inheriting the caller's environment.
-    try:
-        system = subprocess.check_output(
-            ["nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem"],
-            text=True,
-            timeout=30,
-        ).strip()
-        # Unnamed nix develop can fall back to the default package.
-        subprocess.run(
+    """Probe the default development shell and the formatter on this host."""
+    root = root.resolve()
+    system = host_system()
+    return [
+        problem
+        for problem in [
+            shell_problem(root, system),
+            formatter_problem(root, system),
+        ]
+        if problem is not None
+    ]
+
+
+def shell_problem(root, system):
+    """Start devShells.<system>.default with a cleared environment."""
+    # Unnamed nix develop can fall back to the default package, so evaluate
+    # the shell by name first.
+    return probe(
+        "default development shell does not start",
+        [
             [
                 "nix",
                 "eval",
                 "--no-update-lock-file",
                 "--raw",
-                f"path:{root.resolve()}#devShells.{system}.default.drvPath",
+                f"path:{root}#devShells.{system}.default.drvPath",
             ],
-            check=True,
-            timeout=120,
-            stdout=sys.stderr,
-        )
-        subprocess.run(
             [
                 "nix",
                 "develop",
                 "--no-update-lock-file",
                 "--ignore-environment",
-                f"path:{root.resolve()}",
+                f"path:{root}",
                 "--command",
                 "bash",
                 "-c",
                 ":",
             ],
-            check=True,
-            timeout=900,
-            stdout=sys.stderr,
-        )
-        subprocess.run(
+        ],
+    )
+
+
+def formatter_problem(root, system):
+    return probe(
+        "formatter does not evaluate",
+        [
             [
                 "nix",
                 "eval",
                 "--no-update-lock-file",
                 "--raw",
-                f"path:{root.resolve()}#formatter.{system}.drvPath",
-            ],
-            check=True,
-            timeout=120,
-            stdout=sys.stderr,
-        )
-        return []
-    except (subprocess.SubprocessError, OSError) as error:
-        return [f"development: shell or formatter probe failed: {error}"]
+                f"path:{root}#formatter.{system}.drvPath",
+            ]
+        ],
+    )
+
+
+def probe(problem, commands):
+    """Run COMMANDS in order; return PROBLEM with the failure, or None."""
+    for command in commands:
+        try:
+            # Nix output goes to standard error to keep the JSON report intact.
+            subprocess.run(command, check=True, timeout=900, stdout=sys.stderr)
+        except (subprocess.SubprocessError, OSError) as error:
+            return f"{problem}: {error}"
+    return None
 
 
 def fingerprints(root):

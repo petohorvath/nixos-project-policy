@@ -40,7 +40,7 @@ These tests run outside Nix build sandboxes because they invoke Nix themselves. 
 nix develop --no-update-lock-file --command python -m unittest tests.nix_compatibility tests.nix_vm tests.packaged_policy -v
 ```
 
-`tests.nix_compatibility` runs `test` against real fixture flakes in every nixpkgs mode. It checks that the overrides replace root `nixpkgs`, lock preservation, rejection of required lock updates, nonempty host checks, and the explicit default development-shell requirement.
+`tests.nix_compatibility` runs `test` against real fixture flakes in every nixpkgs mode. It checks that the overrides replace root `nixpkgs`, lock preservation, rejection of required lock updates, nonempty host checks, and the explicit default development-shell requirement. It also runs `check` on a real fixture flake with a release tag to prove public-output evaluation, empty-namespace notices, and the removal comparison.
 
 `tests.nix_vm` checks that `vm` discovers and builds `legacyPackages.<system>.vmTests`, reports failing entries by name, returns `not-applicable` without VM tests, and that `nix flake check` does not build them.
 
@@ -62,7 +62,7 @@ When the member selects the version in this checkout's `VERSION`, run the local 
 nix run --no-update-lock-file .# -- check ../PROJECT
 ```
 
-For another selected release, use that release's checker, as shown in the [checker reference](checker.md#commands). Add `--shell` to smoke-test the member's development environment and evaluate its formatter. The default check reads the root `flake.lock`; tests run with the separate `test` command. Checks do not update member sources or lockfiles, though shell and `test` commands execute member code. See the [checker reference](checker.md) for results and limits.
+For another selected release, use that release's checker, as shown in the [checker reference](checker.md#commands). The check reads the root `flake.lock`, evaluates public outputs, starts the default development shell, and evaluates the formatter; tests run with the separate `test` command. Checks do not update member sources or lockfiles, though `check` and `test` execute member code. See the [checker reference](checker.md) for results and limits.
 
 ## Nix conventions
 

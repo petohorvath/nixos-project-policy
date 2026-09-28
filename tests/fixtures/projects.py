@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
+from tests.fixtures.check_nix import CheckNix
 from tests.fixtures.cli import invoke
 from tests.fixtures.data import (
     PAIR,
@@ -13,7 +14,7 @@ from tests.fixtures.data import (
     RELEASE,
     lockfile,
 )
-from tools import records
+from tools import policy, records
 
 
 class ProjectFixture:
@@ -49,6 +50,12 @@ class ProjectFixture:
         }
         self.write(".github/workflows/policy.yml", json.dumps(self.workflow))
         self.write("flake.lock", json.dumps(lockfile()))
+        # `check` always evaluates outputs and probes the shell; answer those
+        # Nix calls unless a scenario installs its own process fake.
+        self.check_nix = CheckNix()
+        self.resources.enter_context(
+            patch.object(policy.subprocess, "run", side_effect=self.check_nix)
+        )
 
     def write(self, relative, text):
         path = self.root / relative

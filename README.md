@@ -30,10 +30,10 @@ For local checks, run the member's selected checker release. It reads the pins a
 
 ```bash
 nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
-  check ../PROJECT --shell
+  check ../PROJECT
 ```
 
-Replace the tag with the member's selected release and `PROJECT` with the repo's path. `check` applies the input rules to the root `flake.lock`. `--shell` also smoke-tests the default development shell and evaluates the formatter. Run the tests with `test ../PROJECT --nixpkgs locked`, `stable`, or `unstable`.
+Replace the tag with the member's selected release and `PROJECT` with the repo's path. `check` applies the input rules to the root `flake.lock`, evaluates the public outputs and compares their names with the last release tag, starts the default development shell, and evaluates the formatter. Run the tests with `test ../PROJECT --nixpkgs locked`, `stable`, or `unstable`.
 
 The checker also plans CI gates and builds the VM tests it discovers under `legacyPackages.<system>.vmTests`. See the [checker reference](docs/checker.md#commands) for commands, JSON results, and validation limits.
 

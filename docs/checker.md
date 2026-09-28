@@ -18,8 +18,7 @@ nix run --no-update-lock-file .# -- COMMAND
 | ---------------------------- | ------------------------------------------------------------------------------------------------- |
 | `validate`                   | Check the bundled pins and repo list and print them.                                              |
 | `ci PATH --project NAME`     | Report CI matrices and required status names. Do not execute checks.                              |
-| `check PATH`                 | Apply the input rules to the root `flake.lock`.                                                   |
-| `check PATH --shell`         | Also smoke-test the member shell and evaluate its root formatter.                                 |
+| `check PATH`                 | Apply the input and public-output rules, start the default shell, and evaluate the formatter.     |
 | `test PATH --nixpkgs locked` | Run `nix flake check` with the committed lock. Require nonempty `checks.<host-system>`.           |
 | `test PATH --nixpkgs stable` | Verify the stable pin override, then run `nix flake check` with it. Use `unstable` for the other. |
 | `vm PATH`                    | Build every `legacyPackages.<host-system>.vmTests` entry. Return `not-applicable` if none exist.  |
@@ -30,7 +29,7 @@ Run a selected release directly:
 
 ```bash
 nix run github:petohorvath/nixos-project-policy/v0.4.0 -- \
-  check ../member --shell
+  check ../member
 ```
 
 `ci` requires one member caller selecting the executing checker release. The caller's `policy_version` must match its immutable workflow reference. Enrollment does not change this requirement.
@@ -45,13 +44,13 @@ Record and member commands print JSON. Reports include `checkerVersion`. Member 
 | 1    | Enforced checks failed.                                                             |
 | 2    | The request, records, or inspection could not be processed.                         |
 
-`check` reads no caller workflow. Its report maps each rule id to `pass`, `fail`, `notice`, or `not-run` in `rules`. `issues` lists failures and `notices` lists findings that pass but need review; each names its `rule`, `input`, and `message`. `siblings` lists every sibling input with its repository, revision, and reference kind (`tag`, `commit`, or `branch`). No result changes enrollment or approves pins.
+`check` reads no caller workflow. Its report maps each rule id to `pass`, `fail`, `notice`, or `not-run` in `rules`. `issues` lists failures and `notices` lists findings that pass but need review; each names its `rule` and `message`, and the `input` or public `output` it concerns (`null` for the shell and formatter rules). `siblings` lists every sibling input with its repository, revision, and reference kind (`tag`, `commit`, or `branch`). `release` holds the last release `tag` and the changelog `version`, either of which can be `null`. No result changes enrollment or approves pins.
 
 `ci` returns `planned`, `matrix`, `compatibilityMatrix`, and the complete `requiredChecks`. Omit `PATH` only when the current directory is the member. Hosted `--inputs-json JSON` must normalize to the checked-out caller's inputs; it cannot replace member settings.
 
 ### Lock handling
 
-Default checks and shell probes use `--no-update-lock-file` alone to reject required lock updates. Do not add `--no-write-lock-file`. In Nix 2.34.6, disabling writes also bypasses update rejection and permits an in-memory replacement lock. See the [locking implementation](https://github.com/NixOS/nix/blob/2.34.6/src/libflake/flake.cc#L749-L825).
+Shell and formatter probes use `--no-update-lock-file` alone to reject required lock updates. Do not add `--no-write-lock-file`. In Nix 2.34.6, disabling writes also bypasses update rejection and permits an in-memory replacement lock. See the [locking implementation](https://github.com/NixOS/nix/blob/2.34.6/src/libflake/flake.cc#L749-L825).
 
 `test --nixpkgs stable|unstable` deliberately uses an overridden graph. `--override-input` implies `--no-write-lock-file`. Adding `--no-update-lock-file` does not make an override check test the committed selection.
 
@@ -131,7 +130,17 @@ Compatibility execution tests both revisions through root input overrides.
 | `sibling-follows-nixpkgs` | A reachable sibling's `nixpkgs` input does not resolve to the root `nixpkgs` node.                              |
 | `no-policy-input`         | The policy repository appears anywhere in the reachable lock graph.                                             |
 
-`check --shell` adds the `shell` rule.
+Public outputs are every top-level output except `checks`, `devShells`, and `formatter`. Their names are `<output>.<name>`, or `<output>.<system>.<name>` when every key of the output is a system name such as `x86_64-linux`; a value that is not a namespace is named by its own path. [tools/outputs.nix](../tools/outputs.nix) evaluates each public output in its own `nix eval --impure` call through `builtins.getFlake` on the `path:` flake. Only the host system's values are evaluated: derivations to their `drvPath`, apps to their `program`, NixOS-style configurations to `config.system.build.toplevel.drvPath`, and other values to weak head normal form. `legacyPackages` is named but not evaluated.
+
+The last release tag is the highest `vMAJOR.MINOR.PATCH` tag reachable from `HEAD`. The checker exports the tag's tree with `git archive` into a temporary directory and lists its public output names from that `path:` flake, so the repo itself is never fetched; the tag's own inputs come from the Nix store or their sources. The new version is the first `CHANGELOG.md` heading that starts with a SemVer version (`0.5.0`, `v0.5.0`, or `[0.5.0] - date`); other headings such as `Unreleased` are skipped.
+
+| Rule               | Fails when                                                                                                                                                                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `outputs-evaluate` | The flake's outputs cannot be listed, or a public output value throws. An error that `builtins.tryEval` cannot catch fails the whole output.                                                                                                                 |
+| `outputs-empty`    | Never. An empty namespace, such as `nixosModules = { }` or an empty `packages.<system>`, is reported as a notice.                                                                                                                                            |
+| `outputs-removal`  | A name present at the last release tag is missing and the changelog version does not raise the tag's major or minor component. Without a release tag it reports `not-run` with a notice recommending a first tag. Outputs that fail to evaluate are skipped. |
+| `shell`            | `devShells.<host-system>.default` does not evaluate or `nix develop --ignore-environment` cannot run `bash -c ':'`.                                                                                                                                          |
+| `formatter`        | `formatter.<host-system>` does not evaluate to a derivation.                                                                                                                                                                                                 |
 
 Caller validation for `ci` requires:
 
@@ -184,4 +193,4 @@ Standard PR checkout tests GitHub's candidate merge commit. Each run captures it
 
 Workflows use read-only permissions and do not persist checkout credentials. Automation that creates member PRs requires a separately reviewed write identity. Normal policy checks require no such credential.
 
-The workflow invokes `check --shell` with the same requirements before and after enrollment. Successful CI does not enroll members or approve pins.
+The workflow invokes `check` with the same requirements before and after enrollment. Successful CI does not enroll members or approve pins.

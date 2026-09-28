@@ -18,4 +18,4 @@ An integration project requires its exact locked member revisions to select its 
 
 Support starts at v0.4.0 now that all supported members use that contract. Current tooling and records have one member declaration contract; compatibility records and adapters for pre-v0.4.0 checkers are removed.
 
-[ADR 0008](0008-validate-pin-updates-before-approval.md) defines pin approval independently of member policy selection. The v0.4.0 contract implements this decision. See [enrollment](../maintenance.md#enrollment) for new members.
+[ADR 0008](0008-validate-pin-updates-before-approval.md) defines pin approval independently of member policy selection. The v0.4.0 contract implements this decision. See [enrollment](https://github.com/petohorvath/nixos-project-policy/blob/v0.4.0/docs/maintenance.md#enrollment) for new members.

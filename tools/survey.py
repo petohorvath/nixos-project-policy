@@ -1,4 +1,4 @@
-"""Run `check` on every repo directory in a workspace; see docs/checker.md."""
+"""Run `check` on every repo directory in a workspace."""
 
 import subprocess
 

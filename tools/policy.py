@@ -1,4 +1,4 @@
-"""External project policy checks; see docs/checker.md for the command contract."""
+"""External project policy checks; see README.md for the commands and exit codes."""
 
 import argparse
 import fnmatch

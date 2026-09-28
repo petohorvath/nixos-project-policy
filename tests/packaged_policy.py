@@ -133,7 +133,11 @@ class PackagedPolicyTests(unittest.TestCase):
 
     def test_packaged_checker_uses_bundled_data_without_a_data_checkout(self):
         fixture = self.fixture
-        self.assertIn("0.4.0", self.command([self.program, "--version"]))
+        version = (policy.SOURCE_ROOT / "VERSION").read_text().strip()
+        self.assertEqual(
+            self.command([self.program, "--version"]).strip(),
+            f"nixos-project-policy {version}",
+        )
         self.command([self.program, "--help"])
         report = self.call("validate")
         self.assertEqual(report["pins"], fixture.pins)

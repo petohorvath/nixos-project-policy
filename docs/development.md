@@ -48,10 +48,10 @@ nix develop --no-update-lock-file --command python -m unittest tests.nix_compati
 
 Test adapters supply Nix process results. Git operations, record processing, checker code, and packaged commands execute normally. Use the real-Nix test to verify native override behavior.
 
-CI also smoke-tests the default development shell and evaluates the formatter:
+CI also runs the checker against this repository, which starts its default development shell and evaluates its formatter:
 
 ```bash
-nix run --no-update-lock-file .# -- shell .
+nix run --no-update-lock-file .# -- check .
 ```
 
 ## Member checks
@@ -68,4 +68,4 @@ For another selected release, use that release's checker, as shown in the [check
 
 Follow the [shared Nix rules](../POLICY.md#nix-code-and-tests). Root `flake.nix` declares `systems`, inputs, and public outputs. Expressions in `nix/` supply the package and formatter through `pkgs.callPackage`. The check constructor takes named arguments; its callers appear above its implementation.
 
-The shell probe uses `nix eval --impure --expr builtins.currentSystem` to identify the host before checking its default development shell and formatter. Dependency and build evaluation use the locked flake. Review command usage, module dependencies, and names as well as lint results.
+The `shell` and `formatter` rules use `nix eval --impure --expr builtins.currentSystem` to identify the host before checking its default development shell and formatter. Dependency and build evaluation use the locked flake. Review command usage, module dependencies, and names as well as lint results.

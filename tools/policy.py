@@ -62,10 +62,6 @@ def main(argv=None):
     )
     test.add_argument("project_dir", type=Path)
     test.add_argument("--nixpkgs", required=True, choices=tests_runner.MODES)
-    shell = commands.add_parser(
-        "shell", help="Smoke-test the default development shell and root formatter"
-    )
-    shell.add_argument("project_dir", type=Path)
     vm_command = commands.add_parser(
         "vm", help="Build every legacyPackages.<system>.vmTests entry on this host"
     )
@@ -77,9 +73,6 @@ def main(argv=None):
             result = {"status": "valid", "pins": data.pins, "repos": data.repos}
         elif args.command == "ci":
             result = ci.plan(args.project_dir, ci.parse_systems(args.systems))
-        elif args.command == "shell":
-            issues = check_shell(args.project_dir)
-            result = {"status": "fail" if issues else "pass", "issues": issues}
         elif args.command == "test":
             result = tests_runner.run(
                 args.project_dir, args.nixpkgs, data.pins, fingerprints=fingerprints
@@ -148,20 +141,6 @@ def host_system():
         text=True,
         timeout=30,
     ).stdout.strip()
-
-
-def check_shell(root):
-    """Probe the default development shell and the formatter on this host."""
-    root = root.resolve()
-    system = host_system()
-    return [
-        problem
-        for problem in [
-            shell_problem(root, system),
-            formatter_problem(root, system),
-        ]
-        if problem is not None
-    ]
 
 
 def shell_problem(root, system):

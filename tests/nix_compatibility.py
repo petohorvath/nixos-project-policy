@@ -147,9 +147,9 @@ class NixCompatibilityTests(unittest.TestCase):
                             "SHELL_HOOK", hook
                         )
                     )
-                    issues = policy.check_shell(root)
+                    problem = policy.shell_problem(root, policy.host_system())
                     if passes:
-                        self.assertEqual(issues, [])
+                        self.assertIsNone(problem)
                         self.run_command(
                             [
                                 "nix",
@@ -164,8 +164,8 @@ class NixCompatibilityTests(unittest.TestCase):
                             ]
                         )
                     else:
-                        self.assertTrue(
-                            issues,
+                        self.assertIsNotNone(
+                            problem,
                             "Missing or broken default shells must fail the probe",
                         )
                     self.assertEqual((root / "flake.lock").read_bytes(), lock_before)

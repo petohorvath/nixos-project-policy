@@ -39,7 +39,7 @@ The checker also plans CI gates and builds the VM tests it discovers under `lega
 
 ## Development
 
-Run the formatter and flake checks listed under [tools and checks](docs/development.md#tools-and-checks) before submitting changes. CI also runs real-Nix and packaged-checker host tests on both supported Linux architectures and smoke-tests the development shell. See [development](docs/development.md) for tools, focused tests, and host test commands.
+Run the formatter and flake checks listed under [tools and checks](docs/development.md#tools-and-checks) before submitting changes. CI also runs real-Nix and packaged-checker host tests on both supported Linux architectures and runs `check` against this repository. See [development](docs/development.md) for tools, focused tests, and host test commands.
 
 ## Contributing
 

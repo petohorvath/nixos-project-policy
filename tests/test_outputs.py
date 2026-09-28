@@ -203,6 +203,10 @@ class ShellAndFormatterTests(ProjectTestCase):
         with self.assertRaises(SystemExit):
             self.run_policy("check", str(self.root), "--shell")
 
+    def test_the_shell_command_is_removed(self):
+        with self.assertRaises(SystemExit):
+            self.run_policy("shell", str(self.root))
+
     def test_a_host_without_nix_is_an_error(self):
         self.check_nix.failing = [["nix", "eval", "--raw", "--impure"]]
         code, report = self.run_policy("check", str(self.root))

@@ -23,7 +23,7 @@ nix run --no-update-lock-file .# -- COMMAND
 | `test PATH --nixpkgs stable` | Verify the stable pin override, then run `nix flake check` with it. Use `unstable` for the other. |
 | `vm PATH`                    | Build every `legacyPackages.<host-system>.vmTests` entry. Return `not-applicable` if none exist.  |
 
-For a shell-only probe, run `nix run --no-update-lock-file .# -- shell PATH`. This first evaluates `devShells.<host-system>.default.drvPath`, enters the development shell with the inherited environment cleared, and executes `bash -c ':'`. It also evaluates the root formatter without asserting compliance. A default package or non-default shell cannot satisfy the development-shell requirement. Policy CI uses it as a host smoke test. The probe checks startup and command execution, not a fixed tool list or project-specific development tasks.
+The `shell` rule first evaluates `devShells.<host-system>.default.drvPath`, then enters the development shell with the inherited environment cleared and executes `bash -c ':'`. A default package or non-default shell cannot satisfy it. The `formatter` rule evaluates the root formatter without asserting compliance. The shell rule checks startup and command execution, not a fixed tool list or project-specific development tasks.
 
 Run a selected release directly:
 

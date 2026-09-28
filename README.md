@@ -4,7 +4,7 @@ Shared rules for the Nix flake repos in devnix-labs. [POLICY.md](POLICY.md) stat
 
 ## Caller workflow
 
-Copy [templates/policy-caller.yml](templates/policy-caller.yml) into the repo's `.github/workflows/`. Its job calls `check.yml@v0.5` with one optional input, `systems`: a JSON list in a string that defaults to `'["x86_64-linux", "aarch64-linux"]'`.
+Copy [templates/policy-caller.yml](templates/policy-caller.yml) into the repo's `.github/workflows/`. Its job calls the reusable `check.yml` workflow with one optional input, `systems`: a JSON list in a string that defaults to `'["x86_64-linux", "aarch64-linux"]'`.
 
 ```yaml
 jobs:

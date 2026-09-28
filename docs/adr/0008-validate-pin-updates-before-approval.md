@@ -1,8 +1,10 @@
 ---
-status: accepted
+status: superseded by ADR-0009
 ---
 
 # Review pin updates without member bookkeeping
+
+Superseded by [ADR 0009](0009-inputs-public-outputs-and-tests.md), which reduces the policy to inputs, public outputs, and tests.
 
 Store one approved stable/unstable pair and its stable update branch in central pin records. Recording member revisions and rollout states requires synchronization commits whenever member work changes. Keep test subjects and results in PRs and CI artifacts instead.
 

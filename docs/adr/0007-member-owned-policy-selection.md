@@ -1,8 +1,10 @@
 ---
-status: accepted
+status: superseded by ADR-0009
 ---
 
 # Let members own policy release selection
+
+Superseded by [ADR 0009](0009-inputs-public-outputs-and-tests.md), which reduces the policy to inputs, public outputs, and tests.
 
 Central records that repeat each member's selection require changes in two repositories for one upgrade. Let a reviewed member PR select a published immutable release. Members can upgrade independently while other members retain supported releases.
 

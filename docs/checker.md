@@ -14,16 +14,15 @@ Use this prefix with the commands below:
 nix run --no-update-lock-file .# -- COMMAND
 ```
 
-| Command                                       | Behavior                                                                                          |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `validate`                                    | Check the bundled pins and repo list and print them.                                              |
-| `ci PATH --project NAME`                      | Report CI matrices and required status names. Do not execute checks.                              |
-| `check PATH`                                  | Apply the input rules to the root `flake.lock`.                                                   |
-| `check PATH --shell`                          | Also smoke-test the member shell and evaluate its root formatter.                                 |
-| `test PATH --nixpkgs locked`                  | Run `nix flake check` with the committed lock. Require nonempty `checks.<host-system>`.           |
-| `test PATH --nixpkgs stable`                  | Verify the stable pin override, then run `nix flake check` with it. Use `unstable` for the other. |
-| `vm PATH`                                     | Build every `legacyPackages.<host-system>.vmTests` entry. Return `not-applicable` if none exist.  |
-| `candidate --stable COMMIT --unstable COMMIT` | Emit an unapproved pair. Do not write locks or approve pins.                                      |
+| Command                      | Behavior                                                                                          |
+| ---------------------------- | ------------------------------------------------------------------------------------------------- |
+| `validate`                   | Check the bundled pins and repo list and print them.                                              |
+| `ci PATH --project NAME`     | Report CI matrices and required status names. Do not execute checks.                              |
+| `check PATH`                 | Apply the input rules to the root `flake.lock`.                                                   |
+| `check PATH --shell`         | Also smoke-test the member shell and evaluate its root formatter.                                 |
+| `test PATH --nixpkgs locked` | Run `nix flake check` with the committed lock. Require nonempty `checks.<host-system>`.           |
+| `test PATH --nixpkgs stable` | Verify the stable pin override, then run `nix flake check` with it. Use `unstable` for the other. |
+| `vm PATH`                    | Build every `legacyPackages.<host-system>.vmTests` entry. Return `not-applicable` if none exist.  |
 
 For a shell-only probe, run `nix run --no-update-lock-file .# -- shell PATH`. This first evaluates `devShells.<host-system>.default.drvPath`, enters the development shell with the inherited environment cleared, and executes `bash -c ':'`. It also evaluates the root formatter without asserting compliance. A default package or non-default shell cannot satisfy the development-shell requirement. Policy CI uses it as a host smoke test. The probe checks startup and command execution, not a fixed tool list or project-specific development tasks.
 

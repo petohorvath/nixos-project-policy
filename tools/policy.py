@@ -69,11 +69,6 @@ def main(argv=None):
         "vm", help="Build every legacyPackages.<system>.vmTests entry on this host"
     )
     vm_command.add_argument("project_dir", type=Path)
-    candidate = commands.add_parser(
-        "candidate", help="Print an unapproved pin proposal"
-    )
-    candidate.add_argument("--stable", required=True)
-    candidate.add_argument("--unstable", required=True)
     args = parser.parse_args(argv)
     try:
         data = records.load()
@@ -81,10 +76,6 @@ def main(argv=None):
             result = {"status": "valid", "pins": data.pins, "repos": data.repos}
         elif args.command == "ci":
             result = ci.plan(args.project_dir, ci.parse_systems(args.systems))
-        elif args.command == "candidate":
-            pair = {"stable": args.stable, "unstable": args.unstable}
-            records.validate_pair(pair)
-            result = {"schemaVersion": 1, "status": "proposal", "pins": pair}
         elif args.command == "shell":
             issues = check_shell(args.project_dir)
             result = {"status": "fail" if issues else "pass", "issues": issues}

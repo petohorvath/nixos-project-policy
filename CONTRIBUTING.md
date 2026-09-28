@@ -12,4 +12,4 @@ For a new requirement, document its scope, exceptions, automatic checks, and rev
 
 Keep usage and design in the docs. Keep implementation history and validation evidence in commits, PRs, and CI results. Record release changes in [CHANGELOG.md](CHANGELOG.md).
 
-For a release, follow the [release procedure](docs/maintenance.md#releases). Pin updates and enrollment changes do not require a policy version change.
+For a release, follow the [release procedure](docs/maintenance.md#releases). Pin bumps are automated patch releases; see [pin bumps](docs/maintenance.md#pin-bumps). Enrollment changes do not require a policy version change.

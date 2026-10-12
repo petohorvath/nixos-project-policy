@@ -28,13 +28,6 @@ TWO_SYSTEMS = [
     "Policy / Tests (unstable, aarch64-linux)",
 ]
 RUNNERS = {"x86_64-linux": "ubuntu-24.04", "aarch64-linux": "ubuntu-24.04-arm"}
-SYSTEMS = [*RUNNERS, "riscv64-linux"]
-
-
-def repo_checks(vm_tests):
-    """The entries of a fixture repo's `checks` output on one system."""
-    vm = {"vm-boot": ["kvm", "nixos-test"]} if vm_tests else {}
-    return {"behavior": [], **vm}
 
 
 def load(path):
@@ -63,7 +56,10 @@ class CiTests(RepoTestCase):
             self.evaluated.append(command[3].removeprefix(prefix))
         elif command[:3] != ["nix", "derivation", "show"]:
             raise AssertionError(command)
-        systems = {system: repo_checks(system in self.vm_systems) for system in SYSTEMS}
+        systems = {
+            system: derivations.repo_checks(system in self.vm_systems)
+            for system in derivations.SYSTEMS
+        }
         output = derivations.answer(command, systems)
         return subprocess.CompletedProcess(command, 0, output)
 
@@ -285,9 +281,9 @@ class WorkflowTests(unittest.TestCase):
                 f"    os.execv(sys.executable, [sys.executable, {str(policy.SOURCE_ROOT / 'tools/policy.py')!r}, *sys.argv[sys.argv.index('--') + 1:]])\n"
                 f"sys.path.insert(0, {str(policy.SOURCE_ROOT)!r})\n"
                 "from tests.fixtures import derivations\n"
-                "from tests.test_ci import SYSTEMS, repo_checks\n"
                 "vm = json.loads(os.environ['VM_SYSTEMS'])\n"
-                "systems = {system: repo_checks(system in vm) for system in SYSTEMS}\n"
+                "systems = {system: derivations.repo_checks(system in vm)"
+                " for system in derivations.SYSTEMS}\n"
                 "print(derivations.answer(['nix', *sys.argv[1:]], systems))\n"
             )
             stub.chmod(0o755)

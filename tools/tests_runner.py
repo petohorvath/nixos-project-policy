@@ -150,16 +150,16 @@ def run(root, mode, pins, *, vm=False, fingerprints):
     return result
 
 
-def entry_features(run, flake, attribute, flags):
+def entry_features(nix_output, flake, attribute, flags):
     """Map each entry of the `checks` set at flake#attribute to its features.
 
-    run(command) returns the standard output of a Nix command. The features
-    come from the instantiated derivations: lazy derivations, such as NixOS
-    tests, have no `requiredSystemFeatures` attribute.
+    nix_output(command) returns the standard output of a Nix command. The
+    features come from the instantiated derivations: lazy derivations, such as
+    NixOS tests, have no `requiredSystemFeatures` attribute.
     """
     try:
         paths = json.loads(
-            run(
+            nix_output(
                 [
                     "nix",
                     "eval",
@@ -174,22 +174,28 @@ def entry_features(run, flake, attribute, flags):
     except (subprocess.SubprocessError, OSError) as error:
         raise ValueError(f"{attribute} does not evaluate: {error}") from error
     if not isinstance(paths, dict) or not paths:
-        raise ValueError(f"{attribute} must contain at least one check")
+        raise ValueError(f"{attribute} must contain at least one entry")
     if not all(
         isinstance(path, str) and path.endswith(".drv") for path in paths.values()
     ):
         raise ValueError(f"The entries of {attribute} must be derivations")
-    # Format version 4 keys derivations by store path name.
-    shown = json.loads(run(["nix", "derivation", "show", *paths.values()]))
-    derivations = shown["derivations"]
+    shown = json.loads(nix_output(["nix", "derivation", "show", *paths.values()]))
+    # Format version 4, which Nix 2.34 reports, keys derivations by store path
+    # name.
+    if not isinstance(shown, dict) or shown.get("version") != 4:
+        raise ValueError("nix derivation show must report format version 4")
     features = {}
     for name, path in paths.items():
-        derivation = derivations[path.rsplit("/", 1)[1]]
-        structured = derivation.get("structuredAttrs")
-        if structured is not None:
-            features[name] = list(structured.get("requiredSystemFeatures", []))
+        derivation = shown["derivations"][path.rsplit("/", 1)[1]]
+        if "structuredAttrs" in derivation:
+            found = derivation["structuredAttrs"].get("requiredSystemFeatures", [])
         else:
-            features[name] = derivation["env"].get("requiredSystemFeatures", "").split()
+            found = derivation["env"].get("requiredSystemFeatures", "").split()
+        if not isinstance(found, list) or not all(
+            isinstance(feature, str) for feature in found
+        ):
+            raise ValueError(f"requiredSystemFeatures of {name} must be strings")
+        features[name] = found
     return features
 
 

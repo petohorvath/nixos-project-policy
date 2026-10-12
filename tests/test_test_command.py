@@ -125,6 +125,19 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
             show[3:], [derivations.drv_path(name) for name in self.checks]
         )
 
+    def test_an_unknown_derivation_format_or_malformed_features_fail(self):
+        self.show_version = 3
+        code, report = self.run_test("locked")
+        self.assertEqual(code, 1, report)
+        self.assertIn("format version 4", " ".join(report["issues"]))
+        self.show_version = 4
+        self.checks = {"vm-boot": ["kvm", 1]}
+        self.structured = {"vm-boot"}
+        code, report = self.run_test("locked", "--vm")
+        self.assertEqual(code, 1, report)
+        self.assertIn("vm-boot", " ".join(report["issues"]))
+        self.assertEqual(self.nix(["nix", "build"]), [])
+
     def test_vm_tests_without_kvm_pass_as_skipped_without_a_build(self):
         self.checks = {"behavior": [], "vm-boot": ["kvm", "nixos-test"]}
         code, report = self.run_test("stable", "--vm")
@@ -223,11 +236,11 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
 
     def test_empty_or_missing_checks_fail_before_building(self):
         for checks, problem in [
-            ([], "at least one check"),
-            ({}, "at least one check"),
-            (None, "at least one check"),
-            (["behavior"], "at least one check"),
-            ("behavior", "at least one check"),
+            ([], "at least one entry"),
+            ({}, "at least one entry"),
+            (None, "at least one entry"),
+            (["behavior"], "at least one entry"),
+            ("behavior", "at least one entry"),
             ({"behavior": "kvm"}, "derivations"),
             ({"behavior": None}, "derivations"),
         ]:

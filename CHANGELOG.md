@@ -3,6 +3,7 @@
 ## 0.6.1
 
 - Read the required system features of the entries of the `checks` output from their instantiated derivations with `nix derivation show`, in `test` and `ci`. NixOS tests from `pkgs.testers.nixosTest` and `runNixOSTest` are lazy derivations without a `requiredSystemFeatures` attribute, so v0.6.0 built them as ordinary entries in the `Tests` jobs, planned no VM jobs for them, and failed without KVM instead of skipping them.
+- `ci` fails when a system's `checks` output does not evaluate or is empty, instead of planning no VM jobs for it; the `Tests` jobs on that system fail for the same reason.
 
 ## 0.6.0
 

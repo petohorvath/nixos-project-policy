@@ -35,7 +35,7 @@ class NixCompatibilityTests(unittest.TestCase):
             ).replace("SYSTEM", system)
             for output, outcome in [
                 ("", "does not evaluate"),
-                (f'checks."{system}" = {{}};', "at least one check"),
+                (f'checks."{system}" = {{}};', "at least one entry"),
                 (
                     'checks."another-system" = { behavior = null; };',
                     "does not evaluate",

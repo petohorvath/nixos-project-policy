@@ -81,7 +81,7 @@ def plan(root, systems):
 def vm_test_systems(root, systems):
     """Return the systems whose `checks` output has a VM test, with the locked nixpkgs."""
 
-    def run(command):
+    def nix_output(command):
         return subprocess.run(
             command, check=True, stdout=subprocess.PIPE, text=True
         ).stdout
@@ -92,7 +92,10 @@ def vm_test_systems(root, systems):
         if any(
             tests_runner.VM_FEATURE in features
             for features in tests_runner.entry_features(
-                run, f"path:{root}", f"checks.{system}", ["--no-update-lock-file"]
+                nix_output,
+                f"path:{root}",
+                f"checks.{system}",
+                ["--no-update-lock-file"],
             ).values()
         )
     }

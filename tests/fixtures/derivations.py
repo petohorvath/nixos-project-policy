@@ -7,6 +7,14 @@ format version 4, which keys derivations by store path name.
 
 import json
 
+SYSTEMS = ["x86_64-linux", "aarch64-linux", "riscv64-linux"]
+
+
+def repo_checks(vm_tests):
+    """The entries of a fixture repo's `checks` output on one system."""
+    vm = {"vm-boot": ["kvm", "nixos-test"]} if vm_tests else {}
+    return {"behavior": [], **vm}
+
 
 def drv_path(name):
     return f"/nix/store/{'0' * 32}-{name}.drv"
@@ -30,15 +38,15 @@ def answer(command, systems):
     if command[:2] == ["nix", "eval"]:
         system = command[3].rsplit("#checks.", 1)[1]
         return json.dumps(drv_paths(systems[system]))
-    every = {
+    entries = {
         name: features
         for checks in systems.values()
         for name, features in checks.items()
     }
-    return show(command, every)
+    return show(command, entries)
 
 
-def show(command, checks, structured=()):
+def show(command, checks, structured=(), version=4):
     """Answer `nix derivation show PATH...` for entries of checks.
 
     Entries named in structured keep their features in `structuredAttrs`, as
@@ -54,4 +62,4 @@ def show(command, checks, structured=()):
         elif checks[name]:
             derivation["env"]["requiredSystemFeatures"] = " ".join(checks[name])
         derivations[path.removeprefix("/nix/store/")] = derivation
-    return json.dumps({"derivations": derivations, "version": 4})
+    return json.dumps({"derivations": derivations, "version": version})

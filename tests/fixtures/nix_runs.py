@@ -27,6 +27,7 @@ class NixRunFixture(RepoFixture):
         self.metadata = None
         self.checks = {"behavior": []}
         self.structured = set()
+        self.show_version = 4
         self.features = "benchmark big-parallel nixos-test uid-range"
         self.commands = []
         self.fail_stage = None
@@ -51,7 +52,9 @@ class NixRunFixture(RepoFixture):
             output = json.dumps(derivations.drv_paths(self.checks))
             return subprocess.CompletedProcess(command, 0, output)
         if command[:3] == ["nix", "derivation", "show"]:
-            output = derivations.show(command, self.checks, self.structured)
+            output = derivations.show(
+                command, self.checks, self.structured, self.show_version
+            )
             return subprocess.CompletedProcess(command, 0, output)
         if command[:3] == ["nix", "config", "show"]:
             return subprocess.CompletedProcess(command, 0, f"{self.features}\n")

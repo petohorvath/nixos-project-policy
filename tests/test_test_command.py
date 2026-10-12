@@ -42,7 +42,7 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
             self.assertNotIn(OVERRIDE, command)
         self.assertEqual(len(self.nix(["nix", "flake", "check"])), 1)
 
-    def test_checks_needing_missing_system_features_are_skipped_by_name(self):
+    def test_entries_needing_missing_system_features_are_skipped_by_name(self):
         self.checks = {
             "behavior": [],
             "vm-boot": ["kvm", "nixos-test"],
@@ -69,7 +69,7 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
         )
         self.assertIn("--no-update-lock-file", build)
 
-    def test_checks_are_not_built_when_every_check_is_skipped(self):
+    def test_nothing_is_built_when_every_entry_is_skipped(self):
         self.checks = {"vm-boot": ["kvm"]}
         code, report = self.run_test("stable")
         self.assertEqual(code, 0, report)
@@ -137,14 +137,14 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
             self.assertEqual(error.exception.code, 2)
 
     def test_empty_or_missing_checks_fail_before_building(self):
-        for checks in [
-            [],
-            {},
-            None,
-            ["behavior"],
-            "behavior",
-            {"behavior": "kvm"},
-            {"behavior": [1]},
+        for checks, problem in [
+            ([], "at least one check"),
+            ({}, "at least one check"),
+            (None, "at least one check"),
+            (["behavior"], "at least one check"),
+            ("behavior", "at least one check"),
+            ({"behavior": "kvm"}, "requiredSystemFeatures"),
+            ({"behavior": [1]}, "requiredSystemFeatures"),
         ]:
             for mode in ["locked", "unstable"]:
                 with self.subTest(checks=checks, nixpkgs=mode):
@@ -152,7 +152,9 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
                     self.checks = checks
                     code, report = self.run_test(mode)
                     self.assertEqual(code, 1, report)
-                    self.assertIn("checks.x86_64-linux", " ".join(report["issues"]))
+                    issues = " ".join(report["issues"])
+                    self.assertIn("checks.x86_64-linux", issues)
+                    self.assertIn(problem, issues)
                     self.assertEqual(self.nix(["nix", "flake", "check"]), [])
         self.checks = {"behavior": []}
         self.fail_stage = ["nix", "eval", "--json"]

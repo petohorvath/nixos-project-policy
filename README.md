@@ -30,7 +30,7 @@ nix run github:petohorvath/nixos-project-policy/v0.6 -- check .
 
 `check` applies the input and public-output rules, starts the default development shell, and evaluates the formatter. CI also runs `test . --nixpkgs locked`, `stable`, and `unstable` on each system; `--help` lists every command. Each command prints a JSON report and exits 0 on success, 1 when a rule or test fails, and 2 when the request cannot be processed.
 
-`test` evaluates every output, builds the checks whose `requiredSystemFeatures` the host provides, and lists the others under `skipped`. Plain `nix flake check` fails instead on a host without KVM when the repo has VM tests. Build other checks there with `nix build .#checks.<system>.<name>`, or use a remote builder with the `kvm` feature.
+`test` evaluates every output, builds each entry of the `checks` output whose `requiredSystemFeatures` the host's `system-features` provide, and lists the others under `skipped`. On a host without KVM, plain `nix flake check` fails instead when the repo has VM tests. Build a subset there with `nix build .#checks.<system>.<name>`, or give `nix flake check` a remote builder with the `kvm` feature; `test` reads only the local `system-features` and still skips the VM tests.
 
 Nix caches the `v0.6` reference for up to an hour. Add `--refresh` after `nix run` to use a patch release published within that time.
 

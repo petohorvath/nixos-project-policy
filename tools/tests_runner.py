@@ -92,16 +92,16 @@ def run(root, mode, pins, *, fingerprints):
             )
         except (subprocess.SubprocessError, OSError) as error:
             raise ValueError(f"{attribute} does not evaluate: {error}") from error
-        if (
-            not isinstance(checks, dict)
-            or not checks
-            or not all(
-                isinstance(features, list)
-                and all(isinstance(feature, str) for feature in features)
-                for features in checks.values()
-            )
-        ):
+        if not isinstance(checks, dict) or not checks:
             raise ValueError(f"{attribute} must contain at least one check")
+        if not all(
+            isinstance(features, list)
+            and all(isinstance(feature, str) for feature in features)
+            for features in checks.values()
+        ):
+            raise ValueError(
+                f"requiredSystemFeatures in {attribute} must be lists of strings"
+            )
         result["checks"] = sorted(checks)
         nix(
             result,

@@ -6,8 +6,8 @@ This release moves VM tests into the `checks` output ([ADR 0010](docs/adr/0010-v
 
 ### Breaking changes
 
-- VM tests are entries of the `checks` output with no system condition, instead of `legacyPackages.<system>.vmTests`. A check that needs a system feature lists it in its own `requiredSystemFeatures`, even when only a dependency needs it.
-- `test` runs `nix flake check --no-build`, then builds the checks whose `requiredSystemFeatures` the host's `system-features` provide. The report adds `skipped`, which maps each other check to its missing features, and `checks` lists every check name.
+- VM tests are entries of the `checks` output with no system condition, instead of `legacyPackages.<system>.vmTests`. An entry that needs a system feature lists it in its own `requiredSystemFeatures`, even when only a dependency needs it.
+- `test` runs `nix flake check --no-build`, then builds each entry of the `checks` output whose `requiredSystemFeatures` the host's `system-features` provide. The report adds `skipped`, which maps each other entry to its missing features, and `checks` lists every entry name.
 - VM tests now run with the locked nixpkgs, the stable pin, and the unstable pin, in the `Tests` jobs. Before, they ran with the locked nixpkgs only, so a new pin could reach a release without them.
 - Remove the `vm` command, the `VM tests` job and its `Policy / VM tests` status, and the VM task of the Pin-bump tests workflow.
 - `ci` takes no repo path, and its report drops `vmTests` and `vmJob`. The `Plan` job no longer checks out the repo.
@@ -19,8 +19,8 @@ This release moves VM tests into the `checks` output ([ADR 0010](docs/adr/0010-v
 
 ### Migration from v0.5
 
-1. Merge `legacyPackages.<system>.vmTests` into the `checks` output, for example as `vm-<name>`, and remove `vmTests`.
-2. Add `requiredSystemFeatures = [ "kvm" "nixos-test" ]` to each check that only reads the result of a NixOS test.
+1. Merge `legacyPackages.<system>.vmTests` into the `checks` output, for example as `vm-<name>`, and remove `vmTests`. When `legacyPackages` held only `vmTests`, removing it removes a public output, so after a release tag the repo needs a minor or major version bump.
+2. Add `requiredSystemFeatures = [ "kvm" "nixos-test" ]` to each entry that only reads the result of a NixOS test.
 3. Change the caller to `@v0.6`, and remove `Policy / VM tests` from the required statuses.
 
 ## 0.5.1

@@ -17,8 +17,8 @@ Each repo in devnix-labs that follows this policy makes three guarantees: about 
 
 ## Tests
 
-- On each system, with the locked nixpkgs, the stable pin, and the unstable pin, every output evaluates and every entry of the `checks` output builds. A runner skips and reports a check whose `requiredSystemFeatures` it lacks. `checks.<system>` is not empty, and test runs leave `flake.lock` unchanged.
-- VM tests are entries of the `checks` output with no system condition ([ADR 0010](docs/adr/0010-vm-tests-in-checks.md)). A check that needs a system feature, such as `kvm`, lists it in its own `requiredSystemFeatures`, even when only a dependency needs it.
+- On each system, with the locked nixpkgs, the stable pin, and the unstable pin, every output evaluates and every entry of the `checks` output builds. A runner skips and reports an entry whose `requiredSystemFeatures` it lacks. `checks.<system>` is not empty, and test runs leave `flake.lock` unchanged.
+- VM tests are entries of the `checks` output with no system condition ([ADR 0010](docs/adr/0010-vm-tests-in-checks.md)). An entry that needs a system feature, such as `kvm`, lists it in its own `requiredSystemFeatures`, even when only a dependency needs it.
 
 ## Caller
 

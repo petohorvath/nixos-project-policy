@@ -182,14 +182,8 @@ class NixCompatibilityTests(unittest.TestCase):
     def test_real_overrides_build_checks_preserve_locks_and_reject_default_updates(
         self,
     ):
-        graph = locks.LockGraph(data.read_json(policy.SOURCE_ROOT / "flake.lock"))
-        pins = {
-            channel: graph.nodes[graph.resolve([name])]["locked"]["rev"]
-            for channel, name in [
-                ("stable", "nixpkgs"),
-                ("unstable", "nixpkgs-unstable"),
-            ]
-        }
+        bundled = data.load_pins(policy.SOURCE_ROOT / "data/pins.json")
+        pins = {channel: bundled[channel] for channel in ["stable", "unstable"]}
         with tempfile.TemporaryDirectory(prefix="policy-nix-fixture-") as temporary:
             workspace = Path(temporary)
             repo = workspace / "repo"

@@ -252,19 +252,6 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
         self.assertEqual(code, 2, report)
         self.assertEqual(self.commands, [])
 
-    def test_compatibility_and_host_checks_are_removed(self):
-        for arguments in [
-            ["compatibility", ".", "--project", "example", "--channel", "stable"],
-            ["host-checks", "."],
-        ]:
-            with (
-                self.subTest(command=arguments[0]),
-                contextlib.redirect_stderr(io.StringIO()),
-                self.assertRaises(SystemExit) as error,
-            ):
-                policy.main(arguments)
-            self.assertEqual(error.exception.code, 2)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,14 +25,6 @@ CHANGELOG = """# Changelog
 """
 
 
-def legacy_pins(pair):
-    return {
-        "schemaVersion": 1,
-        "approved": pair,
-        "stableBranch": "nixos-26.05",
-    }
-
-
 class PinBumpTestCase(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -45,7 +37,6 @@ class PinBumpTestCase(unittest.TestCase):
         self.write("CHANGELOG.md", CHANGELOG)
         self.write("data/pins.json", json.dumps(PINS, indent=2, sort_keys=True) + "\n")
         self.write("data/repos.json", json.dumps({"repos": ["owner/first"]}) + "\n")
-        self.write("policy/pins.json", json.dumps(legacy_pins(PAIR), indent=2) + "\n")
         commit(self.root)
 
     def write(self, name, text):
@@ -91,10 +82,6 @@ class ProposeTests(PinBumpTestCase):
             json.loads(self.read("data/pins.json")),
             {"stableBranch": "nixos-26.05", **NEW_PAIR},
         )
-        self.assertEqual(
-            self.read("policy/pins.json"),
-            json.dumps(legacy_pins(NEW_PAIR), indent=2) + "\n",
-        )
         self.assertEqual(self.read("VERSION"), "0.5.1\n")
 
     def test_changelog_releases_unreleased_entries_with_the_pin_update(self):
@@ -121,12 +108,7 @@ class ProposeTests(PinBumpTestCase):
         self.tag("v0.5.0")
         before = {
             name: self.read(name)
-            for name in [
-                "VERSION",
-                "CHANGELOG.md",
-                "data/pins.json",
-                "policy/pins.json",
-            ]
+            for name in ["VERSION", "CHANGELOG.md", "data/pins.json"]
         }
         code, report = self.propose(PAIR)
         self.assertEqual(code, 0, report)

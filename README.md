@@ -46,8 +46,6 @@ The proposal needs Settings → Actions → General → Workflow permissions →
 
 For a release by hand, merge a PR that sets `VERSION` and moves the `Unreleased` changelog entries under the version heading. Tag the merge commit `vX.Y.Z`, create or move `vX.Y` to it, and publish a GitHub release for `vX.Y.Z` with the version's changelog section as its notes. Pin-bump proposals fail until the tag for `VERSION` exists. Never move or reuse a `vX.Y.Z` tag.
 
-Until nixos-registry and nixos-cross-config call `@v0.5`, keep `policy/pins.json` and `policy/members.json` on `main` for their v0.4.0 callers. Pin bumps update `policy/pins.json` as well.
-
 ## Development
 
 Follow [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/development.md](docs/development.md). Design decisions are in [docs/adr/](docs/adr/), and release changes in [CHANGELOG.md](CHANGELOG.md). Original code uses the [MIT license](LICENSE).

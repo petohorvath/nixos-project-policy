@@ -28,16 +28,16 @@ Run the checker from the repo root:
 nix run github:petohorvath/nixos-project-policy/v0.6 -- check .
 ```
 
-`check` applies the input and public-output rules, starts the default development shell, and evaluates the formatter. CI also runs `test . --nixpkgs locked`, `stable`, and `unstable` on each system; `--help` lists every command. Each command prints a JSON report and exits 0 on success, 1 when a rule or test fails, and 2 when the request cannot be processed.
+`check` applies the input and public-output rules, starts the default development shell, and evaluates the formatter. CI also runs `test . --nixpkgs locked`, `stable`, and `unstable` on each system, and the same with `--vm` on each system that has VM tests; `--help` lists every command. Each command prints a JSON report and exits 0 on success, 1 when a rule or test fails, and 2 when the request cannot be processed.
 
-`test` evaluates every output, builds each entry of the `checks` output whose `requiredSystemFeatures` the host's `system-features` provide, and lists the others under `skipped`. On a host without KVM, plain `nix flake check` fails instead when the repo has VM tests. Build a subset there with `nix build .#checks.<system>.<name>`, or give `nix flake check` a remote builder with the `kvm` feature; `test` reads only the local `system-features` and still skips the VM tests.
+`test` evaluates every output and builds the entries of the `checks` output, except the VM tests: the entries that require `nixos-test`. `test --vm` builds only the VM tests. Both build each entry whose `requiredSystemFeatures` the host's `system-features` provide and list the others under `skipped`. A mode whose nixpkgs revision equals that of an earlier mode, in the order locked, stable, unstable, passes without building and names that mode in `sameAs`. On a host without KVM, plain `nix flake check` fails instead when the repo has VM tests. Build a subset there with `nix build .#checks.<system>.<name>`, or give `nix flake check` a remote builder with the `kvm` feature; `test --vm` reads only the local `system-features` and still skips the VM tests.
 
 Nix caches the `v0.6` reference for up to an hour. Add `--refresh` after `nix run` to use a patch release published within that time.
 
 ## Pin bumps
 
 1. The [Propose pin bump](.github/workflows/pins.yml) workflow runs weekly, or on manual dispatch with both an exact `stable_revision` and `unstable_revision`. When the pins change, it opens the `automation/pin-bump` PR, which updates the pins, sets `VERSION` to the next patch release, and adds a changelog section.
-2. The [Pin-bump tests](.github/workflows/pin-bump-tests.yml) workflow runs `test --nixpkgs stable` and `test --nixpkgs unstable` on each system from the PR against the `main` branch of every repo in [data/repos.json](data/repos.json). Fix a failing repo through a PR in that repo, then re-run the failed jobs.
+2. The [Pin-bump tests](.github/workflows/pin-bump-tests.yml) workflow runs `test` and `test --vm` with `--nixpkgs stable` and `--nixpkgs unstable` on each system from the PR against the `main` branch of every repo in [data/repos.json](data/repos.json). Fix a failing repo through a PR in that repo, then re-run the failed jobs.
 3. After a human merges the PR, the [Tag pin-bump release](.github/workflows/pin-bump-release.yml) workflow tags `vX.Y.Z`, moves `vX.Y` to it, and publishes a GitHub release whose notes are the version's changelog section.
 
 The proposal needs Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to create and approve pull requests". Listed repos must be public. If rulesets are added, let GitHub Actions force-push `automation/pin-bump`, create `vX.Y.Z` tags, and force-update `vX.Y` tags.

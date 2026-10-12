@@ -34,6 +34,9 @@ def run(command, **kwargs):
         # The packaged fixture publishes no public outputs.
         mode = kwargs["env"]["NIXOS_PROJECT_POLICY_OUTPUTS_MODE"]
         output = "[]" if mode == "list" else "{}"
+    elif command[1] == "eval" and "builtins.listToAttrs" in command[-1]:
+        # The packaged fixture has no VM tests.
+        output = "{}"
     elif command[1] == "eval":
         output = (
             os.environ.get("POLICY_PACKAGE_SYSTEM", CONFIG["system"])

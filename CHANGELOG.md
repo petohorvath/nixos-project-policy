@@ -6,11 +6,12 @@ This release moves VM tests into the `checks` output ([ADR 0010](docs/adr/0010-v
 
 ### Breaking changes
 
-- VM tests are entries of the `checks` output with no system condition, instead of `legacyPackages.<system>.vmTests`. An entry that needs a system feature lists it in its own `requiredSystemFeatures`, even when only a dependency needs it.
-- `test` runs `nix flake check --no-build`, then builds each entry of the `checks` output whose `requiredSystemFeatures` the host's `system-features` provide. The report adds `skipped`, which maps each other entry to its missing features, and `checks` lists every entry name.
-- VM tests now run with the locked nixpkgs, the stable pin, and the unstable pin, in the `Tests` jobs. Before, they ran with the locked nixpkgs only, so a new pin could reach a release without them.
-- Remove the `vm` command, the `VM tests` job and its `Policy / VM tests` status, and the VM task of the Pin-bump tests workflow.
-- `ci` takes no repo path, and its report drops `vmTests` and `vmJob`. The `Plan` job no longer checks out the repo.
+- VM tests are the entries of the `checks` output that require the `nixos-test` system feature, with no system condition, instead of `legacyPackages.<system>.vmTests`. An entry that needs a system feature lists it in its own `requiredSystemFeatures`, even when only a dependency needs it.
+- `test` runs `nix flake check --no-build`, then builds the entries of the `checks` output that are not VM tests; `test --vm` builds the VM tests instead. Both build each entry whose `requiredSystemFeatures` the host's `system-features` provide. The report adds `vm`, `skipped`, which maps each other entry to its missing features, and `sameAs`, and `checks` lists the entries in scope.
+- A `stable` or `unstable` run whose revision equals that of an earlier mode, in the order locked, stable, unstable, passes without Nix and names that mode in `sameAs`.
+- VM tests run with the locked nixpkgs, the stable pin, and the unstable pin, in `VM tests (locked|stable|unstable, <system>)` jobs. Before, they ran with the locked nixpkgs only. The Pin-bump tests workflow now runs them with the proposed pins for the listed repos; other repos run them with a new pin after its release.
+- Replace the `VM tests` job and its `Policy / VM tests` status with `Policy / VM tests (locked|stable|unstable, <system>)` on each system whose `checks` output has VM tests. Remove the `vm` command.
+- The `ci` report replaces `vmTests` and `vmJob` with `vmTestMatrix`.
 
 ### Changed
 
@@ -21,7 +22,7 @@ This release moves VM tests into the `checks` output ([ADR 0010](docs/adr/0010-v
 
 1. Merge `legacyPackages.<system>.vmTests` into the `checks` output, for example as `vm-<name>`, and remove `vmTests`. When `legacyPackages` held only `vmTests`, removing it removes a public output, so after a release tag the repo needs a minor or major version bump.
 2. Add `requiredSystemFeatures = [ "kvm" "nixos-test" ]` to each entry that only reads the result of a NixOS test.
-3. Change the caller to `@v0.6`, and remove `Policy / VM tests` from the required statuses.
+3. Change the caller to `@v0.6`. Replace `Policy / VM tests` in the required statuses with the `Policy / VM tests (<nixpkgs>, <system>)` statuses in the `Plan` job's step summary.
 
 ## 0.5.1
 

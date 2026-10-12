@@ -41,8 +41,9 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("validate", help="Validate the bundled pins and repo list")
     plan = commands.add_parser(
-        "ci", help="Print the CI job matrices and required status names"
+        "ci", help="Print a repo's CI job matrices and required status names"
     )
+    plan.add_argument("repo", type=Path)
     plan.add_argument(
         "--systems",
         help="JSON list of Nix systems (default: x86_64-linux and aarch64-linux)",
@@ -58,6 +59,11 @@ def main(argv=None):
     )
     test.add_argument("repo", type=Path)
     test.add_argument("--nixpkgs", required=True, choices=tests_runner.MODES)
+    test.add_argument(
+        "--vm",
+        action="store_true",
+        help="Build the VM tests, the entries that require nixos-test, instead",
+    )
     survey_command = commands.add_parser(
         "survey",
         help="Run check on every Git repo directly under a workspace directory",
@@ -69,10 +75,14 @@ def main(argv=None):
         if args.command == "validate":
             result = {"status": "valid", "pins": bundled.pins, "repos": bundled.repos}
         elif args.command == "ci":
-            result = ci.plan(ci.parse_systems(args.systems))
+            result = ci.plan(args.repo, ci.parse_systems(args.systems))
         elif args.command == "test":
             result = tests_runner.run(
-                args.repo, args.nixpkgs, bundled.pins, fingerprints=fingerprints
+                args.repo,
+                args.nixpkgs,
+                bundled.pins,
+                vm=args.vm,
+                fingerprints=fingerprints,
             )
         elif args.command == "survey":
             result = survey.run(

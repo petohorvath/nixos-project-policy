@@ -2,13 +2,14 @@
 
 import contextlib
 import io
+import itertools
 import json
 from pathlib import Path
 from unittest.mock import patch
 import unittest
 
 from tests.fixtures.cases import RepoTestCase
-from tests.fixtures.data import NEW_PAIR, STABLE, lockfile
+from tests.fixtures.data import NEW_PAIR, NEW_STABLE, NEW_UNSTABLE, STABLE, lockfile
 from tests.fixtures.nix_runs import NixRunFixture
 from tools import policy
 
@@ -45,16 +46,18 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
     def test_entries_needing_missing_system_features_are_skipped_by_name(self):
         self.checks = {
             "behavior": [],
-            "vm-boot": ["kvm", "nixos-test"],
-            "with.dot": ["nixos-test"],
+            "needs-kvm": ["kvm"],
+            "with.dot": ["big-parallel"],
             "large": ["big-parallel", "gpu", "kvm"],
         }
         code, report = self.run_test("locked")
         self.assertEqual(code, 0, report)
         self.assertEqual(report["status"], "pass")
-        self.assertEqual(report["checks"], ["behavior", "large", "vm-boot", "with.dot"])
         self.assertEqual(
-            report["skipped"], {"large": ["gpu", "kvm"], "vm-boot": ["kvm"]}
+            report["checks"], ["behavior", "large", "needs-kvm", "with.dot"]
+        )
+        self.assertEqual(
+            report["skipped"], {"large": ["gpu", "kvm"], "needs-kvm": ["kvm"]}
         )
         (check,) = self.nix(["nix", "flake", "check"])
         self.assertIn("--no-build", check)
@@ -69,26 +72,58 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
         )
         self.assertIn("--no-update-lock-file", build)
 
-    def test_nothing_is_built_when_every_entry_is_skipped(self):
-        self.checks = {"vm-boot": ["kvm"]}
-        code, report = self.run_test("stable")
+    def test_vm_tests_build_only_with_vm_and_other_entries_only_without(self):
+        self.checks = {
+            "behavior": [],
+            "vm-boot": ["kvm", "nixos-test"],
+            "vm-reads-boot": ["nixos-test"],
+        }
+        self.features = "kvm nixos-test"
+        root = self.root.resolve()
+        for options, entries in [
+            ((), ["behavior"]),
+            (("--vm",), ["vm-boot", "vm-reads-boot"]),
+        ]:
+            with self.subTest(options=options):
+                self.commands.clear()
+                code, report = self.run_test("locked", *options)
+                self.assertEqual(code, 0, report)
+                self.assertEqual(report["checks"], entries)
+                (build,) = self.nix(["nix", "build"])
+                self.assertEqual(
+                    [argument for argument in build if argument.startswith(str(root))],
+                    [f'{root}#checks.x86_64-linux."{name}"' for name in entries],
+                )
+        self.checks = {"behavior": []}
+        self.commands.clear()
+        code, report = self.run_test("locked", "--vm")
         self.assertEqual(code, 0, report)
+        self.assertEqual(report["checks"], [])
+        self.assertEqual(self.nix(["nix", "build"]), [])
+
+    def test_vm_tests_without_kvm_pass_as_skipped_without_a_build(self):
+        self.checks = {"behavior": [], "vm-boot": ["kvm", "nixos-test"]}
+        code, report = self.run_test("stable", "--vm")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["status"], "pass")
         self.assertEqual(report["skipped"], {"vm-boot": ["kvm"]})
         self.assertEqual(self.nix(["nix", "build"]), [])
-        self.features = "kvm"
-        code, report = self.run_test("stable")
+        self.features = "kvm nixos-test"
+        code, report = self.run_test("stable", "--vm")
         self.assertEqual(code, 0, report)
         self.assertEqual(report["skipped"], {})
         self.assertEqual(len(self.nix(["nix", "build"])), 1)
 
     def test_pinned_modes_override_root_nixpkgs_with_the_bundled_pin(self):
-        # VM tests are checks, so they also run against each pin.
+        # VM tests run against each pin like the other entries.
         self.checks = {"behavior": [], "vm-boot": ["kvm", "nixos-test"]}
         self.features = "kvm nixos-test"
-        for mode, revision in NEW_PAIR.items():
-            with self.subTest(nixpkgs=mode):
+        for (mode, revision), options in itertools.product(
+            NEW_PAIR.items(), [(), ("--vm",)]
+        ):
+            with self.subTest(nixpkgs=mode, options=options):
                 self.commands.clear()
-                code, report = self.run_test(mode)
+                code, report = self.run_test(mode, *options)
                 self.assertEqual(code, 0, report)
                 self.assertEqual(report["nixpkgs"], mode)
                 self.assertEqual(report["expectedRevision"], revision)
@@ -104,6 +139,32 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
                     (command,) = self.nix(prefix)
                     self.assertEqual(command[-3:], override)
                     self.assertNotIn("--no-update-lock-file", command)
+
+    def test_a_mode_with_the_revision_of_an_earlier_mode_passes_without_nix(self):
+        # The fixture lock holds STABLE as root nixpkgs.
+        for pins, mode, same in [
+            ({"stable": STABLE, "unstable": NEW_UNSTABLE}, "stable", "locked"),
+            ({"stable": NEW_STABLE, "unstable": STABLE}, "unstable", "locked"),
+            ({"stable": NEW_STABLE, "unstable": NEW_STABLE}, "unstable", "stable"),
+        ]:
+            for options in [(), ("--vm",)]:
+                with self.subTest(pins=pins, nixpkgs=mode, options=options):
+                    self.pins.update(pins)
+                    self.commands.clear()
+                    code, report = self.run_test(mode, *options)
+                    self.assertEqual(code, 0, report)
+                    self.assertEqual(report["status"], "pass")
+                    self.assertEqual(report["sameAs"], same)
+                    self.assertEqual(report["expectedRevision"], pins[mode])
+                    self.assertEqual(self.commands, [])
+        self.pins.update(stable=STABLE)
+        for mode in ["locked", "unstable"]:
+            with self.subTest(nixpkgs=mode):
+                self.commands.clear()
+                code, report = self.run_test(mode)
+                self.assertEqual(code, 0, report)
+                self.assertIsNone(report["sameAs"])
+                self.assertEqual(len(self.nix(["nix", "build"])), 1)
 
     def test_follows_and_renamed_nodes_resolve_root_nixpkgs(self):
         graph = lockfile()

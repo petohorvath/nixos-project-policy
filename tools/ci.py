@@ -2,6 +2,7 @@
 
 import json
 import re
+import subprocess
 
 if __package__:
     from . import tests_runner
@@ -13,6 +14,7 @@ else:
 CALLER_JOB_NAME = "Policy"
 CHECK_JOB_NAME = "Check ({system})"
 TESTS_JOB_NAME = "Tests ({nixpkgs}, {system})"
+VM_TESTS_JOB_NAME = "VM tests ({nixpkgs}, {system})"
 DEFAULT_SYSTEMS = ("x86_64-linux", "aarch64-linux")
 RUNNERS = {
     "x86_64-linux": "ubuntu-24.04",
@@ -53,20 +55,53 @@ def status(job_name):
     return f"{CALLER_JOB_NAME} / {job_name}"
 
 
-def plan(systems):
-    """Return the job matrices and the required status names for the systems."""
+def plan(root, systems):
+    """Return the job matrices and the required status names for one repo."""
     check_jobs = [{"system": system, "runner": runner(system)} for system in systems]
     test_jobs = [
         {"nixpkgs": mode, "system": system, "runner": runner(system)}
         for mode in tests_runner.MODES
         for system in systems
     ]
+    with_vm_tests = vm_test_systems(root.resolve(), systems)
+    vm_test_jobs = [job for job in test_jobs if job["system"] in with_vm_tests]
     required = [status(CHECK_JOB_NAME.format(**job)) for job in check_jobs]
     required += [status(TESTS_JOB_NAME.format(**job)) for job in test_jobs]
+    required += [status(VM_TESTS_JOB_NAME.format(**job)) for job in vm_test_jobs]
     return {
         "status": "planned",
         "systems": systems,
         "checkMatrix": {"include": check_jobs},
         "testMatrix": {"include": test_jobs},
+        "vmTestMatrix": {"include": vm_test_jobs},
         "requiredChecks": required,
     }
+
+
+def vm_test_systems(root, systems):
+    """Return the systems whose `checks` output has a VM test, with the locked nixpkgs."""
+    # parse_systems admits only quote-free names, so they are safe in Nix strings.
+    names = " ".join(f'"{system}"' for system in systems)
+    detect = (
+        "checks: builtins.listToAttrs (map (system: { name = system; value = "
+        "builtins.any (entry: builtins.elem "
+        f'"{tests_runner.VM_FEATURE}" (entry.requiredSystemFeatures or [ ])) '
+        f"(builtins.attrValues (checks.${{system}} or {{ }})); }}) [ {names} ])"
+    )
+    found = json.loads(
+        subprocess.run(
+            [
+                "nix",
+                "eval",
+                "--json",
+                "--no-update-lock-file",
+                f"path:{root}#checks",
+                "--apply",
+                detect,
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        ).stdout
+    )
+    return {system for system in systems if found.get(system) is True}

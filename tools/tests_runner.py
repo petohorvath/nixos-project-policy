@@ -1,8 +1,11 @@
 """Test a repo's `checks` output with the locked, stable, or unstable nixpkgs.
 
-`nix flake check --no-build` evaluates every output; the run then builds the
-checks whose `requiredSystemFeatures` the host's `system-features` provide
-and reports the others as skipped.
+A mode whose nixpkgs revision equals that of an earlier mode in MODES passes
+without Nix; the earlier mode's run covers it. Otherwise
+`nix flake check --no-build` evaluates every output. The run then builds
+either the VM tests, the entries that require the `nixos-test` system feature,
+or the other entries. It builds each one whose `requiredSystemFeatures` the
+host's `system-features` provide and reports the others as skipped.
 """
 
 import json
@@ -18,9 +21,10 @@ else:
 
 MODES = ("locked", "stable", "unstable")
 SYSTEM = re.compile(r"[a-z0-9_]+-[a-z0-9_]+")
+VM_FEATURE = "nixos-test"
 
 
-def run(root, mode, pins, *, fingerprints):
+def run(root, mode, pins, *, vm=False, fingerprints):
     """Return the `test` report for the repo at root.
 
     fingerprints(root) maps source paths to digests; the run fails when the
@@ -30,9 +34,11 @@ def run(root, mode, pins, *, fingerprints):
     result = {
         "status": "fail",
         "nixpkgs": mode,
+        "vm": vm,
         "system": None,
         "expectedRevision": None,
         "resolvedRevision": None,
+        "sameAs": None,
         "checks": [],
         "skipped": {},
         "commands": [],
@@ -47,15 +53,27 @@ def run(root, mode, pins, *, fingerprints):
             raise ValueError("The repo has no flake.lock")
         lock_before = lock_path.read_bytes()
         locked = root_nixpkgs(locks.LockGraph(json.loads(lock_before)))
+        revisions = {"locked": locked, **{other: pins[other] for other in MODES[1:]}}
+        result["expectedRevision"] = revisions[mode]
+        # An earlier mode with the same revision builds the same entries.
+        result["sameAs"] = next(
+            (
+                earlier
+                for earlier in MODES[: MODES.index(mode)]
+                if revisions[earlier] == revisions[mode]
+            ),
+            None,
+        )
+        if result["sameAs"]:
+            result["status"] = "pass"
+            return result
         if mode == "locked":
-            result["expectedRevision"] = locked
             flags = ["--no-update-lock-file"]
         else:
-            result["expectedRevision"] = pins[mode]
             flags = [
                 "--override-input",
                 "nixpkgs",
-                f"github:NixOS/nixpkgs/{pins[mode]}",
+                f"github:NixOS/nixpkgs/{revisions[mode]}",
             ]
         system = nix(
             result,
@@ -102,14 +120,19 @@ def run(root, mode, pins, *, fingerprints):
             raise ValueError(
                 f"requiredSystemFeatures in {attribute} must be lists of strings"
             )
-        result["checks"] = sorted(checks)
+        entries = {
+            name: features
+            for name, features in checks.items()
+            if (VM_FEATURE in features) == vm
+        }
+        result["checks"] = sorted(entries)
         nix(
             result,
             ["nix", "flake", "check", str(root), "--no-build", *flags],
             capture=False,
         )
         host = set(nix(result, ["nix", "config", "show", "system-features"]).split())
-        for name, features in checks.items():
+        for name, features in entries.items():
             if missing := sorted(set(features) - host):
                 result["skipped"][name] = missing
         # Quote each name so dots and other characters stay in one attribute.

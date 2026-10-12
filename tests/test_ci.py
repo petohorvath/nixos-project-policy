@@ -1,4 +1,4 @@
-"""`ci` plans the reusable workflow's jobs and required statuses."""
+"""`ci PATH` plans the reusable workflow's jobs and required statuses."""
 
 import json
 import os
@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import yaml
 
@@ -33,8 +34,31 @@ def load(path):
 
 
 class CiTests(RepoTestCase):
+    def setUp(self):
+        super().setUp()
+        self.vm_systems = set()
+        self.evaluation_status = 0
+        self.evaluated = []
+        self.enterContext(
+            patch.object(policy.subprocess, "run", side_effect=self.run_command)
+        )
+
+    def run_command(self, command, **kwargs):
+        # Answers the VM test detection: each requested system maps to
+        # whether its checks output has a VM test.
+        if command[:2] != ["nix", "eval"]:
+            raise AssertionError(command)
+        self.assertIn(f"path:{self.root.resolve()}#checks", command)
+        self.assertIn("--no-update-lock-file", command)
+        if self.evaluation_status:
+            raise subprocess.CalledProcessError(self.evaluation_status, command)
+        systems = re.findall(r'"([^"]+)"', command[-1].rsplit("[", 1)[1])
+        self.evaluated.append(systems)
+        output = {system: system in self.vm_systems for system in systems}
+        return subprocess.CompletedProcess(command, 0, json.dumps(output))
+
     def ci(self, *options):
-        return self.run_policy("ci", *options)
+        return self.run_policy("ci", str(self.root), *options)
 
     def test_default_systems_require_exactly_eight_statuses(self):
         code, report = self.ci()
@@ -42,6 +66,8 @@ class CiTests(RepoTestCase):
         self.assertEqual(report["status"], "planned")
         self.assertEqual(report["systems"], ["x86_64-linux", "aarch64-linux"])
         self.assertEqual(report["requiredChecks"], TWO_SYSTEMS)
+        self.assertEqual(report["vmTestMatrix"], {"include": []})
+        self.assertEqual(self.evaluated, [list(RUNNERS)])
         self.assertEqual(
             report["checkMatrix"]["include"],
             [{"system": system, "runner": RUNNERS[system]} for system in RUNNERS],
@@ -101,6 +127,41 @@ class CiTests(RepoTestCase):
                 self.assertEqual(report["status"], "error")
                 self.assertIn("systems", report["error"])
                 self.assertNotIn("requiredChecks", report)
+        self.assertEqual(self.evaluated, [])
+
+    def test_vm_tests_add_vm_jobs_for_each_mode_on_their_systems(self):
+        self.vm_systems = {"x86_64-linux"}
+        code, report = self.ci()
+        self.assertEqual(code, 0, report)
+        self.assertEqual(
+            report["vmTestMatrix"]["include"],
+            [
+                {"nixpkgs": mode, "system": "x86_64-linux", "runner": "ubuntu-24.04"}
+                for mode in ["locked", "stable", "unstable"]
+            ],
+        )
+        self.assertEqual(
+            report["requiredChecks"],
+            [
+                *TWO_SYSTEMS,
+                "Policy / VM tests (locked, x86_64-linux)",
+                "Policy / VM tests (stable, x86_64-linux)",
+                "Policy / VM tests (unstable, x86_64-linux)",
+            ],
+        )
+        self.vm_systems = {"x86_64-linux", "aarch64-linux"}
+        code, report = self.ci("--systems", '["aarch64-linux"]')
+        self.assertEqual(code, 0, report)
+        self.assertEqual(
+            [job["system"] for job in report["vmTestMatrix"]["include"]],
+            ["aarch64-linux"] * 3,
+        )
+
+    def test_a_failed_vm_test_detection_is_an_error(self):
+        self.evaluation_status = 1
+        code, report = self.ci()
+        self.assertEqual(code, 2, report)
+        self.assertNotIn("requiredChecks", report)
 
 
 class WorkflowTests(unittest.TestCase):
@@ -118,7 +179,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(inputs["systems"]["type"], "string")
 
     def test_jobs_run_the_checker_from_the_called_workflow_commit(self):
-        self.assertEqual(set(self.jobs), {"plan", "check", "tests"})
+        self.assertEqual(set(self.jobs), {"plan", "check", "tests", "vm-tests"})
         for name, job in self.jobs.items():
             with self.subTest(job=name):
                 checkouts = {
@@ -126,18 +187,13 @@ class WorkflowTests(unittest.TestCase):
                     for step in job["steps"]
                     if step.get("uses", "").startswith("actions/checkout@")
                 }
-                # The plan depends only on the systems, not on the repo.
-                self.assertEqual(
-                    set(checkouts),
-                    {"policy"} if name == "plan" else {"policy", "repo"},
-                )
+                self.assertEqual(set(checkouts), {"policy", "repo"})
                 self.assertEqual(
                     checkouts["policy"]["repository"], "${{ job.workflow_repository }}"
                 )
                 self.assertEqual(checkouts["policy"]["ref"], "${{ job.workflow_sha }}")
-                if "repo" in checkouts:
-                    self.assertNotIn("repository", checkouts["repo"])
-                    self.assertNotIn("ref", checkouts["repo"])
+                self.assertNotIn("repository", checkouts["repo"])
+                self.assertNotIn("ref", checkouts["repo"])
                 runs = [step["run"] for step in job["steps"] if "run" in step]
                 self.assertTrue(runs)
                 for run in runs:
@@ -166,7 +222,11 @@ class WorkflowTests(unittest.TestCase):
 
     def test_job_matrices_come_from_the_plan_job(self):
         outputs = self.jobs["plan"]["outputs"]
-        for name, output in [("check", "check_matrix"), ("tests", "test_matrix")]:
+        for name, output in [
+            ("check", "check_matrix"),
+            ("tests", "test_matrix"),
+            ("vm-tests", "vm_test_matrix"),
+        ]:
             with self.subTest(job=name):
                 job = self.jobs[name]
                 self.assertEqual(job["needs"], "plan")
@@ -179,17 +239,24 @@ class WorkflowTests(unittest.TestCase):
                     outputs[output], f"${{{{ steps.ci.outputs.{output} }}}}"
                 )
                 self.assertEqual(job["runs-on"], "${{ matrix.runner }}")
-                self.assertNotIn("if", job)
-        self.assertEqual(set(outputs), {"check_matrix", "test_matrix"})
+        self.assertEqual(
+            set(outputs), {"check_matrix", "test_matrix", "vm_test_matrix"}
+        )
+        self.assertNotIn("if", self.jobs["check"])
+        self.assertNotIn("if", self.jobs["tests"])
 
-    def test_tests_job_keeps_kvm_enabled_for_vm_tests(self):
+    def test_vm_tests_job_runs_test_with_vm_and_keeps_kvm_enabled(self):
+        steps = self.jobs["vm-tests"]["steps"]
         install = next(
-            step
-            for step in self.jobs["tests"]["steps"]
-            if "install-nix-action" in step.get("uses", "")
+            step for step in steps if "install-nix-action" in step.get("uses", "")
         )
         # The action enables KVM by default where the runner has it.
         self.assertEqual(install["with"].get("enable_kvm", "true"), "true")
+        run = next(step["run"] for step in steps if "run" in step)
+        self.assertEqual(
+            run,
+            'nix run --no-update-lock-file ./policy -- test ./repo --nixpkgs "$NIXPKGS" --vm',
+        )
 
     def test_plan_step_outputs_match_ci_and_name_the_required_statuses(self):
         step = next(
@@ -200,24 +267,30 @@ class WorkflowTests(unittest.TestCase):
         default = self.workflow["on"]["workflow_call"]["inputs"]["systems"]["default"]
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
+            (workspace / "repo").mkdir()
             stub = workspace / "nix"
             stub.write_text(
-                f"#!{sys.executable}\nimport os, sys\n"
+                f"#!{sys.executable}\nimport json, os, re, sys\n"
                 "if sys.argv[1] == 'run':\n"
                 f"    os.execv(sys.executable, [sys.executable, {str(policy.SOURCE_ROOT / 'tools/policy.py')!r}, *sys.argv[sys.argv.index('--') + 1:]])\n"
+                "if sys.argv[1] == 'eval':\n"
+                "    systems = re.findall(r'\"([^\"]+)\"', sys.argv[-1].rsplit('[', 1)[1])\n"
+                "    vm = json.loads(os.environ['VM_SYSTEMS'])\n"
+                "    print(json.dumps({system: system in vm for system in systems}))\n"
+                "    sys.exit(0)\n"
                 "sys.exit(1)\n"
             )
             stub.chmod(0o755)
             output = workspace / "output"
             summary = workspace / "summary"
-            for systems, succeeds in [
-                (default, True),
-                ('["x86_64-linux"]', True),
-                ('["riscv64-linux", "aarch64-linux"]', True),
-                ("[]", False),
-                ('"x86_64-linux"', False),
+            for systems, vm_systems, succeeds in [
+                (default, [], True),
+                ('["x86_64-linux"]', ["x86_64-linux"], True),
+                ('["riscv64-linux", "aarch64-linux"]', [], True),
+                ("[]", [], False),
+                ('"x86_64-linux"', [], False),
             ]:
-                with self.subTest(systems=systems):
+                with self.subTest(systems=systems, vm_systems=vm_systems):
                     output.write_text("")
                     summary.write_text("")
                     process = subprocess.run(
@@ -227,6 +300,7 @@ class WorkflowTests(unittest.TestCase):
                             **os.environ,
                             "PATH": f"{workspace}:{os.environ['PATH']}",
                             "SYSTEMS": systems,
+                            "VM_SYSTEMS": json.dumps(vm_systems),
                             "GITHUB_OUTPUT": str(output),
                             "GITHUB_STEP_SUMMARY": str(summary),
                         },
@@ -243,7 +317,12 @@ class WorkflowTests(unittest.TestCase):
                     outputs = dict(
                         line.split("=", 1) for line in output.read_text().splitlines()
                     )
-                    self.assertEqual(set(outputs), {"check_matrix", "test_matrix"})
+                    self.assertEqual(
+                        set(outputs), {"check_matrix", "test_matrix", "vm_test_matrix"}
+                    )
+                    self.assertEqual(
+                        json.loads(outputs["vm_test_matrix"]), report["vmTestMatrix"]
+                    )
                     self.assertEqual(
                         json.loads(outputs["check_matrix"]), report["checkMatrix"]
                     )
@@ -267,9 +346,17 @@ class WorkflowTests(unittest.TestCase):
                 r"\$\{\{ matrix\.(\w+) \}\}", lambda match: values[match[1]], name
             )
 
+        # The job's condition compares with the plan's exact empty matrix.
+        vm_jobs = self.jobs["vm-tests"]["if"] != (
+            f"needs.plan.outputs.vm_test_matrix != '{outputs['vm_test_matrix']}'"
+        )
         names = [
             expand(self.jobs[job]["name"], values)
-            for job, output in [("check", "check_matrix"), ("tests", "test_matrix")]
+            for job, output in [
+                ("check", "check_matrix"),
+                ("tests", "test_matrix"),
+                *([("vm-tests", "vm_test_matrix")] if vm_jobs else []),
+            ]
             for values in json.loads(outputs[output])["include"]
         ]
         return [f"{caller} / {name}" for name in names]

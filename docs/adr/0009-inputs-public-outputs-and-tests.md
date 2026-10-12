@@ -4,7 +4,7 @@ status: accepted
 
 # Reduce the policy to inputs, public outputs, and tests
 
-Supersedes [ADR 0002](0002-versioned-policy-repository.md), [ADR 0007](0007-member-owned-policy-selection.md), and [ADR 0008](0008-validate-pin-updates-before-approval.md).
+Supersedes [ADR 0002](0002-versioned-policy-repository.md), [ADR 0006](0006-independent-selection-and-compatibility.md), [ADR 0007](0007-member-owned-policy-selection.md), and [ADR 0008](0008-validate-pin-updates-before-approval.md).
 
 Most of the previous policy protected the checker's own trust model: immutable-release verification, record snapshots from `main`, digests, replay evidence, audits of GitHub settings, and integration agreement. It did not cover the real risk: a consumer can lock a combination of repos that the provider never tested, and nothing checks that a repo keeps the public outputs its consumers use. Reduce the policy to three guarantees for each repo: inputs, public outputs, and tests. Remove audits, agreement, GitHub-settings inspection, release-immutability checks, digests and replay, caller-shape validation, Markdown scanning, and style rules.
 

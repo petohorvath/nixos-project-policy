@@ -1,4 +1,10 @@
+---
+status: superseded by ADR-0009
+---
+
 # Separate member dependency selection from compatibility coverage
+
+Superseded by [ADR 0009](0009-inputs-public-outputs-and-tests.md), which reduces the policy to inputs, public outputs, and tests.
 
 Members can choose an immutable root `nixpkgs` revision independently of shared pins. ADR 0003 tied development choices to family compatibility coverage. Separate these choices so members can select a dependency while proving support for both shared revisions.
 

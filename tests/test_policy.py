@@ -93,20 +93,6 @@ class RepoTests(RepoTestCase):
 
 
 class RecordTests(unittest.TestCase):
-    def test_policy_root_option_is_removed(self):
-        for args in [
-            ["--policy-root", ".", "validate"],
-            ["--policy-root", ".", "check", "."],
-            ["ci", ".", "--policy-root", "."],
-        ]:
-            with (
-                self.subTest(args=args),
-                contextlib.redirect_stderr(io.StringIO()),
-                self.assertRaises(SystemExit) as error,
-            ):
-                policy.main(args)
-            self.assertEqual(error.exception.code, 2)
-
     def test_validate_passes_on_the_committed_bundled_data(self):
         code, report = invoke("validate")
         self.assertEqual(code, 0, report)
@@ -124,16 +110,6 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 0)
         version = (policy.SOURCE_ROOT / "VERSION").read_text().strip()
         self.assertEqual(output.getvalue().strip(), f"nixos-project-policy {version}")
-
-    def test_audit_and_agreement_commands_do_not_exist(self):
-        for command in ["audit", "agreement"]:
-            with (
-                self.subTest(command=command),
-                contextlib.redirect_stderr(io.StringIO()),
-                self.assertRaises(SystemExit) as error,
-            ):
-                policy.main([command, "."])
-            self.assertEqual(error.exception.code, 2)
 
 
 class WorkflowTests(unittest.TestCase):

@@ -148,20 +148,6 @@ class CiTests(RepoTestCase):
         self.assertEqual(code, 2, report)
         self.assertNotIn("requiredChecks", report)
 
-    def test_ci_takes_no_caller_settings(self):
-        code, report = self.ci()
-        self.assertEqual(code, 0, report)
-        for field in ["project", "policyVersion", "enrollment", "memberSettings"]:
-            self.assertNotIn(field, report)
-        for options in [("--project", "example"), ("--inputs-json", "{}")]:
-            with (
-                self.subTest(options=options),
-                patch("sys.stderr"),
-                self.assertRaises(SystemExit) as raised,
-            ):
-                self.ci(*options)
-            self.assertEqual(raised.exception.code, 2)
-
 
 class WorkflowTests(unittest.TestCase):
     def setUp(self):

@@ -86,7 +86,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch --create "$BRANCH"
-          git add data/pins.json policy/pins.json VERSION CHANGELOG.md
+          git add data/pins.json VERSION CHANGELOG.md
           git commit --quiet --message "$title"
           gh auth setup-git
           git push --force origin "HEAD:refs/heads/$BRANCH"

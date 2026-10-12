@@ -57,7 +57,7 @@ def main(argv=None):
 
 
 def propose_pins(root, stable, unstable):
-    """Write the pins, the legacy pins file, VERSION, and a changelog entry."""
+    """Write the pins, VERSION, and a changelog entry."""
     pair = {"stable": stable, "unstable": unstable}
     data.validate_pair(pair)
     current = data.load_pins(root / "data/pins.json")
@@ -73,15 +73,6 @@ def propose_pins(root, stable, unstable):
     if pins == current:
         return {"status": "unchanged", **result}
     write_json(root / "data/pins.json", dict(sorted(pins.items())))
-    # Transition: v0.4.0 callers read the old pins file from main.
-    write_json(
-        root / "policy/pins.json",
-        {
-            "schemaVersion": 1,
-            "approved": pair,
-            "stableBranch": pins["stableBranch"],
-        },
-    )
     (root / "VERSION").write_text(f"{release['version']}\n")
     changelog = root / "CHANGELOG.md"
     changelog.write_text(

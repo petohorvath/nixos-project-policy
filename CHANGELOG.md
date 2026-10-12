@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Pin-bump releases publish a GitHub release for `vX.Y.Z`. Its notes are the version's changelog section, with relative links pointing at the tag.
+- Remove the transitional `policy/pins.json` and `policy/members.json` from `main`; pin bumps no longer update `policy/pins.json`. Callers of v0.4.0 or earlier stop receiving pin updates and fail without these files; move them to `@v0.5`.
 
 ## 0.5.1
 

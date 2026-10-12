@@ -37,12 +37,10 @@ nix run --no-update-lock-file .# -- --version
 These tests run outside Nix build sandboxes because they invoke Nix themselves. The CI workflow runs them in one development-shell invocation on each supported architecture:
 
 ```bash
-nix develop --no-update-lock-file --command python -m unittest tests.nix_compatibility tests.nix_vm tests.packaged_policy -v
+nix develop --no-update-lock-file --command python -m unittest tests.nix_compatibility tests.packaged_policy -v
 ```
 
-`tests.nix_compatibility` runs `test` against real fixture flakes in every nixpkgs mode. It checks that the overrides replace root `nixpkgs`, lock preservation, rejection of required lock updates, nonempty host checks, and the explicit default development-shell requirement. It also runs `check` on a real fixture flake with a release tag to prove public-output evaluation, empty-namespace notices, and the removal comparison.
-
-`tests.nix_vm` checks that `vm` discovers and builds `legacyPackages.<system>.vmTests`, reports failing entries by name, returns `not-applicable` without VM tests, and that `nix flake check` does not build them.
+`tests.nix_compatibility` runs `test` against real fixture flakes in every nixpkgs mode. It checks that the overrides replace root `nixpkgs`, that checks needing a missing system feature are skipped, lock preservation, rejection of required lock updates, nonempty host checks, and the explicit default development-shell requirement. It also runs `check` on a real fixture flake with a release tag to prove public-output evaluation, empty-namespace notices, and the removal comparison.
 
 `tests.packaged_policy` builds the checker from a controlled clean repository whose bundled pins differ from the committed ones. It runs the packaged commands without any data checkout and asserts that reports use the bundled pins.
 

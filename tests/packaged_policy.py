@@ -118,11 +118,8 @@ class PackagedPolicyTests(unittest.TestCase):
         return result
 
     def gates(self, root):
-        planned = self.call("ci", root)
+        planned = self.call("ci")
         self.assertEqual(planned["systems"], list(ci.DEFAULT_SYSTEMS))
-        self.assertEqual(planned["requiredChecks"][-1], "Policy / VM tests")
-        report = self.call("vm", root)
-        self.assertEqual(report["vmTests"], ["boot"])
         for system in planned["systems"]:
             self.call("check", root, system=system)
             for mode in ["locked", *PAIR]:

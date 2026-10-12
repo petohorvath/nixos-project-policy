@@ -102,7 +102,6 @@ class PinBumpTestsWorkflowTests(WorkflowTestCase):
         for task, expected in [
             ("stable", ["test", "./repo", "--nixpkgs", "stable"]),
             ("unstable", ["test", "./repo", "--nixpkgs", "unstable"]),
-            ("vm", ["vm", "./repo"]),
         ]:
             with self.subTest(task=task):
                 self.log.write_text("")

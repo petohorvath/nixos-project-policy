@@ -1,9 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
+
+This release moves VM tests into the `checks` output ([ADR 0010](docs/adr/0010-vm-tests-in-checks.md)). It breaks compatibility with v0.5.
+
+### Breaking changes
+
+- VM tests are entries of the `checks` output with no system condition, instead of `legacyPackages.<system>.vmTests`. A check that needs a system feature lists it in its own `requiredSystemFeatures`, even when only a dependency needs it.
+- `test` runs `nix flake check --no-build`, then builds the checks whose `requiredSystemFeatures` the host's `system-features` provide. The report adds `skipped`, which maps each other check to its missing features, and `checks` lists every check name.
+- VM tests now run with the locked nixpkgs, the stable pin, and the unstable pin, in the `Tests` jobs. Before, they ran with the locked nixpkgs only, so a new pin could reach a release without them.
+- Remove the `vm` command, the `VM tests` job and its `Policy / VM tests` status, and the VM task of the Pin-bump tests workflow.
+- `ci` takes no repo path, and its report drops `vmTests` and `vmJob`. The `Plan` job no longer checks out the repo.
+
+### Changed
 
 - Pin-bump releases publish a GitHub release for `vX.Y.Z`. Its notes are the version's changelog section, with relative links pointing at the tag.
-- Remove the transitional `policy/pins.json` and `policy/members.json` from `main`; pin bumps no longer update `policy/pins.json`. Callers of v0.4.0 or earlier stop receiving pin updates and fail without these files; move them to `@v0.5`.
+- Remove the transitional `policy/pins.json` and `policy/members.json` from `main`; pin bumps no longer update `policy/pins.json`. Callers of v0.4.0 or earlier stop receiving pin updates and fail without these files; move them to `@v0.6`.
+
+### Migration from v0.5
+
+1. Merge `legacyPackages.<system>.vmTests` into the `checks` output, for example as `vm-<name>`, and remove `vmTests`.
+2. Add `requiredSystemFeatures = [ "kvm" "nixos-test" ]` to each check that only reads the result of a NixOS test.
+3. Change the caller to `@v0.6`, and remove `Policy / VM tests` from the required statuses.
 
 ## 0.5.1
 

@@ -4,18 +4,15 @@ import json
 import re
 
 if __package__:
-    from . import tests_runner, vm
+    from . import tests_runner
 else:
     import tests_runner
-    import vm
 
 
 # The caller job's `name`; GitHub prefixes every called job's status with it.
 CALLER_JOB_NAME = "Policy"
 CHECK_JOB_NAME = "Check ({system})"
 TESTS_JOB_NAME = "Tests ({nixpkgs}, {system})"
-VM_JOB_NAME = "VM tests"
-VM_SYSTEM = "x86_64-linux"
 DEFAULT_SYSTEMS = ("x86_64-linux", "aarch64-linux")
 RUNNERS = {
     "x86_64-linux": "ubuntu-24.04",
@@ -56,9 +53,8 @@ def status(job_name):
     return f"{CALLER_JOB_NAME} / {job_name}"
 
 
-def plan(root, systems):
-    """Return the job matrices and the required status names for one repo."""
-    _, vm_tests = vm.discover(root.resolve(), VM_SYSTEM)
+def plan(systems):
+    """Return the job matrices and the required status names for the systems."""
     check_jobs = [{"system": system, "runner": runner(system)} for system in systems]
     test_jobs = [
         {"nixpkgs": mode, "system": system, "runner": runner(system)}
@@ -67,14 +63,10 @@ def plan(root, systems):
     ]
     required = [status(CHECK_JOB_NAME.format(**job)) for job in check_jobs]
     required += [status(TESTS_JOB_NAME.format(**job)) for job in test_jobs]
-    if vm_tests:
-        required.append(status(VM_JOB_NAME))
     return {
         "status": "planned",
         "systems": systems,
         "checkMatrix": {"include": check_jobs},
         "testMatrix": {"include": test_jobs},
-        "vmTests": vm_tests,
-        "vmJob": bool(vm_tests),
         "requiredChecks": required,
     }

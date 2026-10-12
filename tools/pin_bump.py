@@ -87,7 +87,7 @@ def propose_pins(root, stable, unstable):
 
 
 def matrix(repos):
-    """One job per listed repo, pin, and system, plus VM tests per repo."""
+    """One job per listed repo, pin, and system."""
     include = []
     for repository in repos:
         for task in ["stable", "unstable"]:
@@ -101,15 +101,6 @@ def matrix(repos):
                         "name": ci.TESTS_JOB_NAME.format(nixpkgs=task, system=system),
                     }
                 )
-        include.append(
-            {
-                "repository": repository,
-                "task": "vm",
-                "system": ci.VM_SYSTEM,
-                "runner": ci.RUNNERS[ci.VM_SYSTEM],
-                "name": ci.VM_JOB_NAME,
-            }
-        )
     return {"include": include}
 
 

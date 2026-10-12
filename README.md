@@ -10,7 +10,7 @@ Copy [templates/policy-caller.yml](templates/policy-caller.yml) into the repo's 
 jobs:
   policy:
     name: Policy
-    uses: petohorvath/nixos-project-policy/.github/workflows/check.yml@v0.5
+    uses: petohorvath/nixos-project-policy/.github/workflows/check.yml@v0.6
     # Optional; defaults to both Linux systems.
     # with:
     #   systems: '["x86_64-linux"]'
@@ -18,24 +18,26 @@ jobs:
 
 [POLICY.md](POLICY.md#caller) lists the statuses to require; the workflow's `Plan` job also writes them to its step summary.
 
-`v0.5` moves to every patch release, so pin bumps and fixes reach the repo without a change to its caller. Breaking rule changes start a new minor series, such as `v0.6`.
+`v0.6` moves to every patch release, so pin bumps and fixes reach the repo without a change to its caller. Breaking rule changes start a new minor series, such as `v0.7`.
 
 ## Local check
 
 Run the checker from the repo root:
 
 ```bash
-nix run github:petohorvath/nixos-project-policy/v0.5 -- check .
+nix run github:petohorvath/nixos-project-policy/v0.6 -- check .
 ```
 
-`check` applies the input and public-output rules, starts the default development shell, and evaluates the formatter. CI also runs `test . --nixpkgs locked`, `stable`, and `unstable` on each system, and `vm .` when the flake has `legacyPackages.<system>.vmTests`; `--help` lists every command. Each command prints a JSON report and exits 0 on success, 1 when a rule or test fails, and 2 when the request cannot be processed.
+`check` applies the input and public-output rules, starts the default development shell, and evaluates the formatter. CI also runs `test . --nixpkgs locked`, `stable`, and `unstable` on each system; `--help` lists every command. Each command prints a JSON report and exits 0 on success, 1 when a rule or test fails, and 2 when the request cannot be processed.
 
-Nix caches the `v0.5` reference for up to an hour. Add `--refresh` after `nix run` to use a patch release published within that time.
+`test` evaluates every output, builds the checks whose `requiredSystemFeatures` the host provides, and lists the others under `skipped`. Plain `nix flake check` fails instead on a host without KVM when the repo has VM tests. Build other checks there with `nix build .#checks.<system>.<name>`, or use a remote builder with the `kvm` feature.
+
+Nix caches the `v0.6` reference for up to an hour. Add `--refresh` after `nix run` to use a patch release published within that time.
 
 ## Pin bumps
 
 1. The [Propose pin bump](.github/workflows/pins.yml) workflow runs weekly, or on manual dispatch with both an exact `stable_revision` and `unstable_revision`. When the pins change, it opens the `automation/pin-bump` PR, which updates the pins, sets `VERSION` to the next patch release, and adds a changelog section.
-2. The [Pin-bump tests](.github/workflows/pin-bump-tests.yml) workflow runs `test --nixpkgs stable` and `test --nixpkgs unstable` on each system, and `vm`, from the PR against the `main` branch of every repo in [data/repos.json](data/repos.json). Fix a failing repo through a PR in that repo, then re-run the failed jobs.
+2. The [Pin-bump tests](.github/workflows/pin-bump-tests.yml) workflow runs `test --nixpkgs stable` and `test --nixpkgs unstable` on each system from the PR against the `main` branch of every repo in [data/repos.json](data/repos.json). Fix a failing repo through a PR in that repo, then re-run the failed jobs.
 3. After a human merges the PR, the [Tag pin-bump release](.github/workflows/pin-bump-release.yml) workflow tags `vX.Y.Z`, moves `vX.Y` to it, and publishes a GitHub release whose notes are the version's changelog section.
 
 The proposal needs Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to create and approve pull requests". Listed repos must be public. If rulesets are added, let GitHub Actions force-push `automation/pin-bump`, create `vX.Y.Z` tags, and force-update `vX.Y` tags.

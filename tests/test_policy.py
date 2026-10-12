@@ -83,7 +83,7 @@ class RepoTests(RepoTestCase):
         self.pins["approved"] = PAIR
         for command in [
             ("validate",),
-            ("ci", str(self.root)),
+            ("ci",),
             ("check", str(self.root)),
         ]:
             with self.subTest(command=command[0]):

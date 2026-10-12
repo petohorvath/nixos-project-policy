@@ -145,7 +145,7 @@ class ProposeTests(PinBumpTestCase):
 
 
 class MatrixTests(PinBumpTestCase):
-    def test_every_listed_repo_runs_both_pins_on_each_system_and_vm_tests(self):
+    def test_every_listed_repo_runs_both_pins_on_each_system(self):
         repos = ["owner/first", "owner/second"]
         self.write("data/repos.json", json.dumps({"repos": repos}))
         code, report = self.run_helper("matrix")
@@ -164,15 +164,6 @@ class MatrixTests(PinBumpTestCase):
                 ("x86_64-linux", "ubuntu-24.04"),
                 ("aarch64-linux", "ubuntu-24.04-arm"),
             ]
-        ] + [
-            {
-                "repository": repository,
-                "task": "vm",
-                "system": "x86_64-linux",
-                "runner": "ubuntu-24.04",
-                "name": "VM tests",
-            }
-            for repository in repos
         ]
         self.assertCountEqual(report["include"], expected)
 

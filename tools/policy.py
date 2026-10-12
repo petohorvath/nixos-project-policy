@@ -10,7 +10,7 @@ import tempfile
 import sys
 
 if __package__:
-    from . import ci, data, inputs, outputs, survey, tests_runner, vm
+    from . import ci, data, inputs, outputs, survey, tests_runner
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import ci
@@ -19,7 +19,6 @@ else:
     import outputs
     import survey
     import tests_runner
-    import vm
 
 
 POLICY_REPOSITORY = "petohorvath/nixos-project-policy"
@@ -42,9 +41,8 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("validate", help="Validate the bundled pins and repo list")
     plan = commands.add_parser(
-        "ci", help="Print a repo's CI job matrices and required status names"
+        "ci", help="Print the CI job matrices and required status names"
     )
-    plan.add_argument("repo", type=Path)
     plan.add_argument(
         "--systems",
         help="JSON list of Nix systems (default: x86_64-linux and aarch64-linux)",
@@ -55,14 +53,11 @@ def main(argv=None):
     )
     check.add_argument("repo", type=Path)
     test = commands.add_parser(
-        "test", help="Run nix flake check with the locked, stable, or unstable nixpkgs"
+        "test",
+        help="Build a repo's checks with the locked, stable, or unstable nixpkgs",
     )
     test.add_argument("repo", type=Path)
     test.add_argument("--nixpkgs", required=True, choices=tests_runner.MODES)
-    vm_command = commands.add_parser(
-        "vm", help="Build every legacyPackages.<system>.vmTests entry on this host"
-    )
-    vm_command.add_argument("repo", type=Path)
     survey_command = commands.add_parser(
         "survey",
         help="Run check on every Git repo directly under a workspace directory",
@@ -74,13 +69,11 @@ def main(argv=None):
         if args.command == "validate":
             result = {"status": "valid", "pins": bundled.pins, "repos": bundled.repos}
         elif args.command == "ci":
-            result = ci.plan(args.repo, ci.parse_systems(args.systems))
+            result = ci.plan(ci.parse_systems(args.systems))
         elif args.command == "test":
             result = tests_runner.run(
                 args.repo, args.nixpkgs, bundled.pins, fingerprints=fingerprints
             )
-        elif args.command == "vm":
-            result = vm.run(args.repo)
         elif args.command == "survey":
             result = survey.run(
                 args.workspace.resolve(),

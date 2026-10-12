@@ -1,4 +1,9 @@
-"""Run a repo's `nix flake check` with the locked, stable, or unstable nixpkgs."""
+"""Test a repo's `checks` output with the locked, stable, or unstable nixpkgs.
+
+`nix flake check --no-build` evaluates every output; the run then builds the
+checks whose `requiredSystemFeatures` the host's `system-features` provide
+and reports the others as skipped.
+"""
 
 import json
 import re
@@ -29,6 +34,7 @@ def run(root, mode, pins, *, fingerprints):
         "expectedRevision": None,
         "resolvedRevision": None,
         "checks": [],
+        "skipped": {},
         "commands": [],
         "issues": [],
     }
@@ -79,7 +85,7 @@ def run(root, mode, pins, *, fingerprints):
                         "--json",
                         f"{root}#{attribute}",
                         "--apply",
-                        "builtins.attrNames",
+                        "builtins.mapAttrs (_: check: check.requiredSystemFeatures or [ ])",
                         *flags,
                     ],
                 )
@@ -87,17 +93,37 @@ def run(root, mode, pins, *, fingerprints):
         except (subprocess.SubprocessError, OSError) as error:
             raise ValueError(f"{attribute} does not evaluate: {error}") from error
         if (
-            not isinstance(checks, list)
+            not isinstance(checks, dict)
             or not checks
-            or not all(isinstance(check, str) for check in checks)
+            or not all(
+                isinstance(features, list)
+                and all(isinstance(feature, str) for feature in features)
+                for features in checks.values()
+            )
         ):
             raise ValueError(f"{attribute} must contain at least one check")
-        result["checks"] = checks
+        result["checks"] = sorted(checks)
         nix(
             result,
-            ["nix", "flake", "check", str(root), "--print-build-logs", *flags],
+            ["nix", "flake", "check", str(root), "--no-build", *flags],
             capture=False,
         )
+        host = set(nix(result, ["nix", "config", "show", "system-features"]).split())
+        for name, features in checks.items():
+            if missing := sorted(set(features) - host):
+                result["skipped"][name] = missing
+        # Quote each name so dots and other characters stay in one attribute.
+        buildable = [
+            f'{root}#{attribute}."{name}"'
+            for name in result["checks"]
+            if name not in result["skipped"]
+        ]
+        if buildable:
+            nix(
+                result,
+                ["nix", "build", "--no-link", "--print-build-logs", *buildable, *flags],
+                capture=False,
+            )
         result["status"] = "pass"
     except (
         ValueError,

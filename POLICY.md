@@ -17,12 +17,12 @@ Each repo in devnix-labs that follows this policy makes three guarantees: about 
 
 ## Tests
 
-- `nix flake check` passes on each system with the locked nixpkgs, the stable pin, and the unstable pin. `checks.<system>` is not empty, and test runs leave `flake.lock` unchanged.
-- VM tests live in `legacyPackages.<system>.vmTests`, outside `checks`, and pass on x86_64-linux with KVM and the locked nixpkgs.
+- On each system, with the locked nixpkgs, the stable pin, and the unstable pin, every output evaluates and every entry of the `checks` output builds. A runner skips and reports a check whose `requiredSystemFeatures` it lacks. `checks.<system>` is not empty, and test runs leave `flake.lock` unchanged.
+- VM tests are entries of the `checks` output with no system condition ([ADR 0010](docs/adr/0010-vm-tests-in-checks.md)). A check that needs a system feature, such as `kvm`, lists it in its own `requiredSystemFeatures`, even when only a dependency needs it.
 
 ## Caller
 
-A job named `Policy` calls `petohorvath/nixos-project-policy/.github/workflows/check.yml@v0.5`, as [templates/policy-caller.yml](templates/policy-caller.yml) does. Require `Policy / Check (<system>)`, which also starts the default development shell and evaluates the formatter, and `Policy / Tests (locked|stable|unstable, <system>)` on each system, and `Policy / VM tests` when the repo provides `vmTests`. Without `vmTests`, `Policy / VM tests` appears as a skipped job that is not required; GitHub cannot omit a job of a reusable workflow. Patch releases carry pin bumps and fixes and move `v0.5`; breaking rule changes start a new minor series.
+A job named `Policy` calls `petohorvath/nixos-project-policy/.github/workflows/check.yml@v0.6`, as [templates/policy-caller.yml](templates/policy-caller.yml) does. Require `Policy / Check (<system>)`, which also starts the default development shell and evaluates the formatter, and `Policy / Tests (locked|stable|unstable, <system>)` on each system. Patch releases carry pin bumps and fixes and move `v0.6`; breaking rule changes start a new minor series.
 
 ## Conventions
 

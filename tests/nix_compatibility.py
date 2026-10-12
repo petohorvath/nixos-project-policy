@@ -28,6 +28,11 @@ class NixCompatibilityTests(unittest.TestCase):
             build = (
                 'nixpkgs.legacyPackages."SYSTEM".runCommand "behavior" {} "touch $out"'
             ).replace("SYSTEM", system)
+            # No host has this feature; building the check would fail.
+            unavailable = (
+                'nixpkgs.legacyPackages."SYSTEM".runCommand "unavailable"'
+                ' { requiredSystemFeatures = [ "policy-unavailable" ]; } "exit 1"'
+            ).replace("SYSTEM", system)
             for output, outcome in [
                 ("", "does not evaluate"),
                 (f'checks."{system}" = {{}};', "at least one check"),
@@ -38,6 +43,11 @@ class NixCompatibilityTests(unittest.TestCase):
                 # The name guard passes; nix flake check still validates values.
                 (f'checks."{system}" = {{ behavior = null; }};', "flake check"),
                 (f'checks."{system}" = {{ behavior = {build}; }};', None),
+                (
+                    f'checks."{system}" = '
+                    f"{{ behavior = {build}; unavailable = {unavailable}; }};",
+                    "skipped",
+                ),
             ]:
                 with self.subTest(output=output):
                     flake.write_text(
@@ -63,19 +73,28 @@ class NixCompatibilityTests(unittest.TestCase):
                     )
                     report = json.loads(process.stdout)
                     self.assertEqual(
-                        process.returncode, 0 if outcome is None else 1, report
+                        process.returncode,
+                        0 if outcome in {None, "skipped"} else 1,
+                        report,
                     )
                     self.assertEqual(report["system"], system)
                     self.assertEqual(report["resolvedRevision"], revision)
                     self.assertEqual(policy.fingerprints(root), before)
                     if outcome is None:
                         self.assertEqual(report["checks"], ["behavior"])
+                        self.assertEqual(report["skipped"], {})
+                    elif outcome == "skipped":
+                        self.assertEqual(report["checks"], ["behavior", "unavailable"])
+                        self.assertEqual(
+                            report["skipped"], {"unavailable": ["policy-unavailable"]}
+                        )
                     elif outcome == "flake check":
                         self.assertEqual(report["checks"], ["behavior"])
                         self.assertEqual(
                             report["commands"][-1]["command"][:3],
                             ["nix", "flake", "check"],
                         )
+                        self.assertIn("--no-build", report["commands"][-1]["command"])
                         self.assertNotEqual(report["commands"][-1]["returncode"], 0)
                     else:
                         self.assertIn(outcome, " ".join(report["issues"]))

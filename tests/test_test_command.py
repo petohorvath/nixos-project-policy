@@ -33,12 +33,58 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
         self.assertEqual(report["resolvedRevision"], STABLE)
         self.assertEqual(report["checks"], ["behavior"])
         self.assertEqual(report["issues"], [])
-        for command in self.nix(["nix", "flake"]) + self.nix(["nix", "eval", "--json"]):
+        for command in (
+            self.nix(["nix", "flake"])
+            + self.nix(["nix", "eval", "--json"])
+            + self.nix(["nix", "build"])
+        ):
             self.assertIn("--no-update-lock-file", command)
             self.assertNotIn(OVERRIDE, command)
         self.assertEqual(len(self.nix(["nix", "flake", "check"])), 1)
 
+    def test_checks_needing_missing_system_features_are_skipped_by_name(self):
+        self.checks = {
+            "behavior": [],
+            "vm-boot": ["kvm", "nixos-test"],
+            "with.dot": ["nixos-test"],
+            "large": ["big-parallel", "gpu", "kvm"],
+        }
+        code, report = self.run_test("locked")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report["checks"], ["behavior", "large", "vm-boot", "with.dot"])
+        self.assertEqual(
+            report["skipped"], {"large": ["gpu", "kvm"], "vm-boot": ["kvm"]}
+        )
+        (check,) = self.nix(["nix", "flake", "check"])
+        self.assertIn("--no-build", check)
+        (build,) = self.nix(["nix", "build"])
+        root = self.root.resolve()
+        self.assertEqual(
+            [argument for argument in build if argument.startswith(str(root))],
+            [
+                f'{root}#checks.x86_64-linux."behavior"',
+                f'{root}#checks.x86_64-linux."with.dot"',
+            ],
+        )
+        self.assertIn("--no-update-lock-file", build)
+
+    def test_checks_are_not_built_when_every_check_is_skipped(self):
+        self.checks = {"vm-boot": ["kvm"]}
+        code, report = self.run_test("stable")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["skipped"], {"vm-boot": ["kvm"]})
+        self.assertEqual(self.nix(["nix", "build"]), [])
+        self.features = "kvm"
+        code, report = self.run_test("stable")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["skipped"], {})
+        self.assertEqual(len(self.nix(["nix", "build"])), 1)
+
     def test_pinned_modes_override_root_nixpkgs_with_the_bundled_pin(self):
+        # VM tests are checks, so they also run against each pin.
+        self.checks = {"behavior": [], "vm-boot": ["kvm", "nixos-test"]}
+        self.features = "kvm nixos-test"
         for mode, revision in NEW_PAIR.items():
             with self.subTest(nixpkgs=mode):
                 self.commands.clear()
@@ -47,11 +93,13 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
                 self.assertEqual(report["nixpkgs"], mode)
                 self.assertEqual(report["expectedRevision"], revision)
                 self.assertEqual(report["resolvedRevision"], revision)
+                self.assertEqual(report["skipped"], {})
                 override = [OVERRIDE, "nixpkgs", f"github:NixOS/nixpkgs/{revision}"]
                 for prefix in [
                     ["nix", "flake", "metadata"],
                     ["nix", "eval", "--json"],
                     ["nix", "flake", "check"],
+                    ["nix", "build"],
                 ]:
                     (command,) = self.nix(prefix)
                     self.assertEqual(command[-3:], override)
@@ -89,7 +137,15 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
             self.assertEqual(error.exception.code, 2)
 
     def test_empty_or_missing_checks_fail_before_building(self):
-        for checks in [[], {}, None, [1], "behavior"]:
+        for checks in [
+            [],
+            {},
+            None,
+            ["behavior"],
+            "behavior",
+            {"behavior": "kvm"},
+            {"behavior": [1]},
+        ]:
             for mode in ["locked", "unstable"]:
                 with self.subTest(checks=checks, nixpkgs=mode):
                     self.commands.clear()
@@ -98,7 +154,7 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
                     self.assertEqual(code, 1, report)
                     self.assertIn("checks.x86_64-linux", " ".join(report["issues"]))
                     self.assertEqual(self.nix(["nix", "flake", "check"]), [])
-        self.checks = ["behavior"]
+        self.checks = {"behavior": []}
         self.fail_stage = ["nix", "eval", "--json"]
         code, report = self.run_test("locked")
         self.assertEqual(code, 1, report)
@@ -220,12 +276,15 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
             ["nix", "eval", "--raw"],
             ["nix", "flake", "metadata"],
             ["nix", "flake", "check"],
+            ["nix", "config", "show"],
+            ["nix", "build"],
         ]:
             with self.subTest(stage=stage):
                 self.fail_stage = stage
                 code, report = self.run_test("unstable")
                 self.assertEqual(code, 1, report)
-                self.assertEqual(report["commands"][-1]["command"][:3], stage)
+                command = report["commands"][-1]["command"]
+                self.assertEqual(command[: len(stage)], stage)
                 self.assertEqual(report["commands"][-1]["returncode"], 1)
         self.fail_stage = None
         self.command_error = FileNotFoundError("nix unavailable")

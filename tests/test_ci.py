@@ -323,6 +323,15 @@ class WorkflowTests(unittest.TestCase):
                     self.assertEqual(
                         json.loads(outputs["vm_test_matrix"]), report["vmTestMatrix"]
                     )
+                    # GitHub rejects an empty matrix, so the job's condition
+                    # must match the plan's empty output exactly.
+                    skipped = (
+                        "needs.plan.outputs.vm_test_matrix != "
+                        f"'{outputs['vm_test_matrix']}'"
+                    )
+                    self.assertEqual(
+                        self.jobs["vm-tests"]["if"] == skipped, not vm_systems
+                    )
                     self.assertEqual(
                         json.loads(outputs["check_matrix"]), report["checkMatrix"]
                     )
@@ -346,16 +355,12 @@ class WorkflowTests(unittest.TestCase):
                 r"\$\{\{ matrix\.(\w+) \}\}", lambda match: values[match[1]], name
             )
 
-        # The job's condition compares with the plan's exact empty matrix.
-        vm_jobs = self.jobs["vm-tests"]["if"] != (
-            f"needs.plan.outputs.vm_test_matrix != '{outputs['vm_test_matrix']}'"
-        )
         names = [
             expand(self.jobs[job]["name"], values)
             for job, output in [
                 ("check", "check_matrix"),
                 ("tests", "test_matrix"),
-                *([("vm-tests", "vm_test_matrix")] if vm_jobs else []),
+                ("vm-tests", "vm_test_matrix"),
             ]
             for values in json.loads(outputs[output])["include"]
         ]

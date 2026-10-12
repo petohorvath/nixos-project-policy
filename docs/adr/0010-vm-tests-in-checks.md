@@ -12,7 +12,7 @@ VM tests used to live in `legacyPackages.<system>.vmTests`, built by a separate 
 
 - VM CI time grows up to threefold, one run per nixpkgs mode. A mode whose revision equals that of an earlier mode passes without building.
 - A runner without KVM passes its VM jobs with every VM test under `skipped`.
-- Plain `nix flake check` fails on a host without KVM. Build a subset with `nix build .#checks.<system>.<name>`, or give it a remote builder with the `kvm` feature. `test` reads only the local `system-features`, so it skips the VM tests there.
+- Plain `nix flake check` fails on a host without KVM. Build a subset with `nix build .#checks.<system>.<name>`, or give it a remote builder with the `kvm` feature. `test --vm` reads only the local `system-features`, so it skips the VM tests there.
 - An entry that needs a feature only through a dependency, and does not declare it, fails on a runner without the feature instead of being skipped.
 
 ## Considered options

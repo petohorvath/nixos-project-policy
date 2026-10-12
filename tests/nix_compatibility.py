@@ -141,7 +141,7 @@ class NixCompatibilityTests(unittest.TestCase):
                         )
                     )
                     self.assertEqual(len(planned["vmTestMatrix"]["include"]), vm_jobs)
-                    for options, checks, skipped in [
+                    for options, entries, skipped in [
                         ((), ["behavior"], {}),
                         (
                             ("--vm",),
@@ -162,7 +162,7 @@ class NixCompatibilityTests(unittest.TestCase):
                             )
                         )
                         self.assertEqual(report["status"], "pass", report)
-                        self.assertEqual(report["checks"], checks)
+                        self.assertEqual(report["checks"], entries)
                         self.assertEqual(report["skipped"], skipped)
 
     @staticmethod

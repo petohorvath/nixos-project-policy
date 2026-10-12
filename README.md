@@ -1,6 +1,6 @@
 # nixos-project-policy
 
-Shared rules for the Nix flake repos in devnix-labs. [POLICY.md](POLICY.md) states what each repo guarantees about its inputs, public outputs, and tests, and [CONTEXT.md](CONTEXT.md) defines the terms. This repository holds the checker that enforces the rules, the reusable workflow that runs it, and the stable and unstable pins that each release bundles in [data/pins.json](data/pins.json).
+Shared rules for the Nix flake repos in devnix-labs. [POLICY.md](POLICY.md) states what each repo guarantees about its inputs, public outputs, and tests, and [GLOSSARY.md](GLOSSARY.md) defines the terms. This repository holds the checker that enforces the rules, the reusable workflow that runs it, and the stable and unstable pins that each release bundles in [data/pins.json](data/pins.json).
 
 ## Caller workflow
 

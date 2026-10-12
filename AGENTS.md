@@ -18,4 +18,4 @@ Use the five default triage roles. Before assigning triage labels, read [the lab
 
 ### Domain docs
 
-Use the single-context layout with root `CONTEXT.md` and `docs/adr/`. Before exploring the codebase, read [domain documentation rules](docs/agents/domain.md).
+Use the single-context layout with root `GLOSSARY.md` and `docs/adr/`. Before exploring the codebase, read [domain documentation rules](docs/agents/domain.md).

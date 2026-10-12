@@ -34,14 +34,17 @@ def run(command, **kwargs):
         # The packaged fixture publishes no public outputs.
         mode = kwargs["env"]["NIXOS_PROJECT_POLICY_OUTPUTS_MODE"]
         output = "[]" if mode == "list" else "{}"
-    elif command[1] == "eval" and "vmTests" in command[-1]:
-        output = json.dumps({"system": CONFIG["system"], "names": ["boot"]})
+    elif command[1] == "eval" and command[-3].endswith("#checks"):
+        # The packaged fixture has no VM tests.
+        output = "{}"
     elif command[1] == "eval":
         output = (
             os.environ.get("POLICY_PACKAGE_SYSTEM", CONFIG["system"])
             if "--impure" in command
-            else '["behavior"]'
+            else '{"behavior": []}'
         )
+    elif command[1:3] == ["config", "show"]:
+        output = "nixos-test\n"
     elif command[1] not in {"develop", "fmt", "build"} and command[1:3] != [
         "flake",
         "check",

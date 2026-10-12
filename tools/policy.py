@@ -10,7 +10,7 @@ import tempfile
 import sys
 
 if __package__:
-    from . import ci, data, inputs, outputs, survey, tests_runner, vm
+    from . import ci, data, inputs, outputs, survey, tests_runner
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import ci
@@ -19,7 +19,6 @@ else:
     import outputs
     import survey
     import tests_runner
-    import vm
 
 
 POLICY_REPOSITORY = "petohorvath/nixos-project-policy"
@@ -55,14 +54,16 @@ def main(argv=None):
     )
     check.add_argument("repo", type=Path)
     test = commands.add_parser(
-        "test", help="Run nix flake check with the locked, stable, or unstable nixpkgs"
+        "test",
+        help="Build a repo's checks with the locked, stable, or unstable nixpkgs",
     )
     test.add_argument("repo", type=Path)
     test.add_argument("--nixpkgs", required=True, choices=tests_runner.MODES)
-    vm_command = commands.add_parser(
-        "vm", help="Build every legacyPackages.<system>.vmTests entry on this host"
+    test.add_argument(
+        "--vm",
+        action="store_true",
+        help="Build the VM tests, the entries that require nixos-test, instead",
     )
-    vm_command.add_argument("repo", type=Path)
     survey_command = commands.add_parser(
         "survey",
         help="Run check on every Git repo directly under a workspace directory",
@@ -77,10 +78,12 @@ def main(argv=None):
             result = ci.plan(args.repo, ci.parse_systems(args.systems))
         elif args.command == "test":
             result = tests_runner.run(
-                args.repo, args.nixpkgs, bundled.pins, fingerprints=fingerprints
+                args.repo,
+                args.nixpkgs,
+                bundled.pins,
+                vm=args.vm,
+                fingerprints=fingerprints,
             )
-        elif args.command == "vm":
-            result = vm.run(args.repo)
         elif args.command == "survey":
             result = survey.run(
                 args.workspace.resolve(),

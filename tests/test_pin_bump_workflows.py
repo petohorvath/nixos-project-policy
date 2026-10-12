@@ -99,18 +99,18 @@ class PinBumpTestsWorkflowTests(WorkflowTestCase):
             "test",
             "Run the listed repo's tests with the proposed pins",
         )
-        for task, expected in [
-            ("stable", ["test", "./repo", "--nixpkgs", "stable"]),
-            ("unstable", ["test", "./repo", "--nixpkgs", "unstable"]),
-            ("vm", ["vm", "./repo"]),
-        ]:
+        for task in ["stable", "unstable"]:
             with self.subTest(task=task):
                 self.log.write_text("")
                 process = self.run_step(script["run"], self.workspace, TASK=task)
                 self.assertEqual(process.returncode, 0, process.stderr)
+                test = ["run", "--no-update-lock-file", "./policy", "--", "test"]
                 self.assertEqual(
                     self.commands(),
-                    [["run", "--no-update-lock-file", "./policy", "--", *expected]],
+                    [
+                        [*test, "./repo", "--nixpkgs", task],
+                        [*test, "./repo", "--nixpkgs", task, "--vm"],
+                    ],
                 )
 
 

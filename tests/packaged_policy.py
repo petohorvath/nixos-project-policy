@@ -120,9 +120,7 @@ class PackagedPolicyTests(unittest.TestCase):
     def gates(self, root):
         planned = self.call("ci", root)
         self.assertEqual(planned["systems"], list(ci.DEFAULT_SYSTEMS))
-        self.assertEqual(planned["requiredChecks"][-1], "Policy / VM tests")
-        report = self.call("vm", root)
-        self.assertEqual(report["vmTests"], ["boot"])
+        self.assertEqual(planned["vmTestMatrix"], {"include": []})
         for system in planned["systems"]:
             self.call("check", root, system=system)
             for mode in ["locked", *PAIR]:
@@ -130,8 +128,11 @@ class PackagedPolicyTests(unittest.TestCase):
                 # The fixture lock holds the stable pin as its root nixpkgs.
                 expected = PAIR.get(mode, PAIR["stable"])
                 self.assertEqual(report["nixpkgs"], mode)
-                self.assertEqual(report["system"], system)
                 self.assertEqual(report["expectedRevision"], expected)
+                if mode == "stable":
+                    self.assertEqual(report["sameAs"], "locked")
+                    continue
+                self.assertEqual(report["system"], system)
                 self.assertEqual(report["resolvedRevision"], expected)
             # The separate real-Nix fixture establishes actual host builds.
             self.command(

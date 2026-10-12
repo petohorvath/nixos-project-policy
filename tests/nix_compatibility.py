@@ -28,6 +28,11 @@ class NixCompatibilityTests(unittest.TestCase):
             build = (
                 'nixpkgs.legacyPackages."SYSTEM".runCommand "behavior" {} "touch $out"'
             ).replace("SYSTEM", system)
+            # No host has this feature; building the check would fail.
+            unavailable = (
+                'nixpkgs.legacyPackages."SYSTEM".runCommand "unavailable"'
+                ' { requiredSystemFeatures = [ "policy-unavailable" ]; } "exit 1"'
+            ).replace("SYSTEM", system)
             for output, outcome in [
                 ("", "does not evaluate"),
                 (f'checks."{system}" = {{}};', "at least one check"),
@@ -38,6 +43,11 @@ class NixCompatibilityTests(unittest.TestCase):
                 # The name guard passes; nix flake check still validates values.
                 (f'checks."{system}" = {{ behavior = null; }};', "flake check"),
                 (f'checks."{system}" = {{ behavior = {build}; }};', None),
+                (
+                    f'checks."{system}" = '
+                    f"{{ behavior = {build}; unavailable = {unavailable}; }};",
+                    "skipped",
+                ),
             ]:
                 with self.subTest(output=output):
                     flake.write_text(
@@ -63,22 +73,97 @@ class NixCompatibilityTests(unittest.TestCase):
                     )
                     report = json.loads(process.stdout)
                     self.assertEqual(
-                        process.returncode, 0 if outcome is None else 1, report
+                        process.returncode,
+                        0 if outcome in {None, "skipped"} else 1,
+                        report,
                     )
                     self.assertEqual(report["system"], system)
                     self.assertEqual(report["resolvedRevision"], revision)
                     self.assertEqual(policy.fingerprints(root), before)
                     if outcome is None:
                         self.assertEqual(report["checks"], ["behavior"])
+                        self.assertEqual(report["skipped"], {})
+                    elif outcome == "skipped":
+                        self.assertEqual(report["checks"], ["behavior", "unavailable"])
+                        self.assertEqual(
+                            report["skipped"], {"unavailable": ["policy-unavailable"]}
+                        )
                     elif outcome == "flake check":
                         self.assertEqual(report["checks"], ["behavior"])
                         self.assertEqual(
                             report["commands"][-1]["command"][:3],
                             ["nix", "flake", "check"],
                         )
+                        self.assertIn("--no-build", report["commands"][-1]["command"])
                         self.assertNotEqual(report["commands"][-1]["returncode"], 0)
                     else:
                         self.assertIn(outcome, " ".join(report["issues"]))
+
+    def test_ci_plans_vm_jobs_and_test_vm_builds_only_vm_tests(self):
+        system = self.run_command(
+            ["nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem"]
+        ).strip()
+        graph = locks.LockGraph(data.read_json(policy.SOURCE_ROOT / "flake.lock"))
+        revision = graph.nodes[graph.resolve(["nixpkgs"])]["locked"]["rev"]
+        with tempfile.TemporaryDirectory(prefix="policy-vm-fixture-") as temporary:
+            workspace = Path(temporary)
+            data_root = self.write_data(
+                workspace, {"stable": revision, "unstable": revision}
+            )
+            root = workspace / "repo"
+            root.mkdir()
+            flake = root / "flake.nix"
+            # No host has policy-unavailable, so the VM test is skipped.
+            source = """{
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/REVISION";
+  outputs = { nixpkgs, ... }: let
+    pkgs = nixpkgs.legacyPackages."SYSTEM";
+  in {
+    checks."SYSTEM" = {
+      behavior = pkgs.runCommand "behavior" {} "touch $out";
+      VM
+    };
+  };
+}
+""".replace("REVISION", revision).replace("SYSTEM", system)
+            vm = (
+                'vm-boot = pkgs.runCommand "vm-boot" { requiredSystemFeatures = '
+                '[ "nixos-test" "policy-unavailable" ]; } "exit 1";'
+            )
+            for entry, vm_jobs in [("", 0), (vm, 3)]:
+                with self.subTest(vm_tests=bool(entry)):
+                    flake.write_text(source.replace("VM", entry))
+                    self.run_command(["nix", "flake", "lock", str(root)])
+                    checker = checker_command(data_root)
+                    planned = json.loads(
+                        self.run_command(
+                            [*checker, "ci", str(root), "--systems", f'["{system}"]']
+                        )
+                    )
+                    self.assertEqual(len(planned["vmTestMatrix"]["include"]), vm_jobs)
+                    for options, entries, skipped in [
+                        ((), ["behavior"], {}),
+                        (
+                            ("--vm",),
+                            ["vm-boot"] if entry else [],
+                            {"vm-boot": ["policy-unavailable"]} if entry else {},
+                        ),
+                    ]:
+                        report = json.loads(
+                            self.run_command(
+                                [
+                                    *checker,
+                                    "test",
+                                    str(root),
+                                    "--nixpkgs",
+                                    "locked",
+                                    *options,
+                                ]
+                            )
+                        )
+                        self.assertEqual(report["status"], "pass", report)
+                        self.assertEqual(report["checks"], entries)
+                        self.assertEqual(report["skipped"], skipped)
 
     @staticmethod
     def write_data(workspace, pins):
@@ -249,6 +334,11 @@ class NixCompatibilityTests(unittest.TestCase):
                     )
                     self.assertEqual(report["status"], "pass", report)
                     self.assertEqual(report["expectedRevision"], revision)
+                    if mode == "stable":
+                        # The locked mode already builds the stable pin.
+                        self.assertEqual(report["sameAs"], "locked")
+                        self.assertEqual(report["commands"], [])
+                        continue
                     self.assertEqual(report["resolvedRevision"], revision)
                     self.assertEqual(report["checks"], ["selectedInput"])
                     self.assertEqual(report["commands"][-1]["returncode"], 0)

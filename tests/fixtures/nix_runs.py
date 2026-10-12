@@ -14,14 +14,17 @@ class NixRunFixture(RepoFixture):
     """A repo whose Nix commands are answered by knobs instead of Nix.
 
     `metadata` is None to echo the repo's lock with any nixpkgs override
-    applied, or a fixed `locks` graph to simulate what Nix resolved.
+    applied, or a fixed `locks` graph to simulate what Nix resolved. `checks`
+    maps each check name to its required system features, and `features` is
+    the host's `system-features`.
     """
 
     def prepare(self):
         super().prepare()
         self.host = "x86_64-linux"
         self.metadata = None
-        self.checks = ["behavior"]
+        self.checks = {"behavior": []}
+        self.features = "benchmark big-parallel nixos-test uid-range"
         self.commands = []
         self.fail_stage = None
         self.command_error = None
@@ -42,7 +45,9 @@ class NixRunFixture(RepoFixture):
         if command[:2] == ["nix", "eval"]:
             output = self.host if "--impure" in command else json.dumps(self.checks)
             return subprocess.CompletedProcess(command, 0, output)
-        if command[:3] == ["nix", "flake", "check"]:
+        if command[:3] == ["nix", "config", "show"]:
+            return subprocess.CompletedProcess(command, 0, f"{self.features}\n")
+        if command[:3] == ["nix", "flake", "check"] or command[:2] == ["nix", "build"]:
             return subprocess.CompletedProcess(command, 0)
         raise AssertionError(command)
 

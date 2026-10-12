@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.5.2
+
+- Update the stable pin (`nixos-26.05`) to `6fcc160353f63555b560f25588925133c8f61f2a` and the unstable pin to `6510408d147d8c5e6d76043e899e9251756f6a75`.
 - Pin-bump releases publish a GitHub release for `vX.Y.Z`. Its notes are the version's changelog section, with relative links pointing at the tag.
 
 ## 0.5.1

@@ -45,12 +45,13 @@ jobs:
         if: steps.source.outputs.release == 'true'
         with:
           install_url: https://releases.nixos.org/nix/nix-2.34.6/install
-      - name: Tag the next patch release and move the series tag
+      - name: Tag the next patch release, move the series tag, and publish it
         if: steps.source.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          plan=$(nix develop --no-update-lock-file --command python tools/pin_bump.py release)
+          plan=$(nix develop --no-update-lock-file --command python tools/pin_bump.py release --repository "$GH_REPO")
           jq . <<< "$plan"
           tag=$(jq -r .tag <<< "$plan")
           series=$(jq -r .seriesTag <<< "$plan")
@@ -62,3 +63,9 @@ jobs:
           fi
           git tag --force "$series" "$tag"
           git push --force origin "refs/tags/$series"
+          # A re-run after a failed publish creates the missing GitHub release.
+          if gh release view "$tag" > /dev/null; then
+            echo "The GitHub release $tag exists."
+          else
+            jq -r .notes <<< "$plan" | gh release create "$tag" --title "$tag" --verify-tag --notes-file -
+          fi

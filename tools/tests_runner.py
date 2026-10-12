@@ -94,33 +94,9 @@ def run(root, mode, pins, *, vm=False, fingerprints):
                 "Resolved root nixpkgs does not match the expected revision"
             )
         attribute = f"checks.{system}"
-        try:
-            checks = json.loads(
-                nix(
-                    result,
-                    [
-                        "nix",
-                        "eval",
-                        "--json",
-                        f"{root}#{attribute}",
-                        "--apply",
-                        "builtins.mapAttrs (_: check: check.requiredSystemFeatures or [ ])",
-                        *flags,
-                    ],
-                )
-            )
-        except (subprocess.SubprocessError, OSError) as error:
-            raise ValueError(f"{attribute} does not evaluate: {error}") from error
-        if not isinstance(checks, dict) or not checks:
-            raise ValueError(f"{attribute} must contain at least one check")
-        if not all(
-            isinstance(features, list)
-            and all(isinstance(feature, str) for feature in features)
-            for features in checks.values()
-        ):
-            raise ValueError(
-                f"requiredSystemFeatures in {attribute} must be lists of strings"
-            )
+        checks = entry_features(
+            lambda command: nix(result, command), str(root), attribute, flags
+        )
         entries = {
             name: features
             for name, features in checks.items()
@@ -172,6 +148,49 @@ def run(root, mode, pins, *, vm=False, fingerprints):
         if result["issues"]:
             result["status"] = "fail"
     return result
+
+
+def entry_features(run, flake, attribute, flags):
+    """Map each entry of the `checks` set at flake#attribute to its features.
+
+    run(command) returns the standard output of a Nix command. The features
+    come from the instantiated derivations: lazy derivations, such as NixOS
+    tests, have no `requiredSystemFeatures` attribute.
+    """
+    try:
+        paths = json.loads(
+            run(
+                [
+                    "nix",
+                    "eval",
+                    "--json",
+                    f"{flake}#{attribute}",
+                    "--apply",
+                    "builtins.mapAttrs (_: entry: entry.drvPath)",
+                    *flags,
+                ]
+            )
+        )
+    except (subprocess.SubprocessError, OSError) as error:
+        raise ValueError(f"{attribute} does not evaluate: {error}") from error
+    if not isinstance(paths, dict) or not paths:
+        raise ValueError(f"{attribute} must contain at least one check")
+    if not all(
+        isinstance(path, str) and path.endswith(".drv") for path in paths.values()
+    ):
+        raise ValueError(f"The entries of {attribute} must be derivations")
+    # Format version 4 keys derivations by store path name.
+    shown = json.loads(run(["nix", "derivation", "show", *paths.values()]))
+    derivations = shown["derivations"]
+    features = {}
+    for name, path in paths.items():
+        derivation = derivations[path.rsplit("/", 1)[1]]
+        structured = derivation.get("structuredAttrs")
+        if structured is not None:
+            features[name] = list(structured.get("requiredSystemFeatures", []))
+        else:
+            features[name] = derivation["env"].get("requiredSystemFeatures", "").split()
+    return features
 
 
 def root_nixpkgs(lock):

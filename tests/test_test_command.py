@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 import unittest
 
+from tests.fixtures import derivations
 from tests.fixtures.cases import RepoTestCase
 from tests.fixtures.data import NEW_PAIR, NEW_STABLE, NEW_UNSTABLE, STABLE, lockfile
 from tests.fixtures.nix_runs import NixRunFixture
@@ -102,6 +103,27 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
         self.assertEqual(code, 0, report)
         self.assertEqual(report["checks"], [])
         self.assertEqual(self.nix(["nix", "build"]), [])
+
+    def test_features_come_from_the_derivation_in_either_attribute_format(self):
+        # NixOS tests are lazy derivations without a requiredSystemFeatures
+        # attribute, so only the instantiated derivation shows the features.
+        self.checks = {
+            "behavior": [],
+            "vm-env": ["kvm", "nixos-test"],
+            "vm-structured": ["kvm", "nixos-test"],
+        }
+        self.structured = {"vm-structured"}
+        self.features = "nixos-test"
+        code, report = self.run_test("locked", "--vm")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["checks"], ["vm-env", "vm-structured"])
+        self.assertEqual(
+            report["skipped"], {"vm-env": ["kvm"], "vm-structured": ["kvm"]}
+        )
+        (show,) = self.nix(["nix", "derivation", "show"])
+        self.assertCountEqual(
+            show[3:], [derivations.drv_path(name) for name in self.checks]
+        )
 
     def test_vm_tests_without_kvm_pass_as_skipped_without_a_build(self):
         self.checks = {"behavior": [], "vm-boot": ["kvm", "nixos-test"]}
@@ -206,8 +228,8 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
             (None, "at least one check"),
             (["behavior"], "at least one check"),
             ("behavior", "at least one check"),
-            ({"behavior": "kvm"}, "requiredSystemFeatures"),
-            ({"behavior": [1]}, "requiredSystemFeatures"),
+            ({"behavior": "kvm"}, "derivations"),
+            ({"behavior": None}, "derivations"),
         ]:
             for mode in ["locked", "unstable"]:
                 with self.subTest(checks=checks, nixpkgs=mode):

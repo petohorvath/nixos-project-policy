@@ -80,28 +80,19 @@ def plan(root, systems):
 
 def vm_test_systems(root, systems):
     """Return the systems whose `checks` output has a VM test, with the locked nixpkgs."""
-    # parse_systems admits only quote-free names, so they are safe in Nix strings.
-    names = " ".join(f'"{system}"' for system in systems)
-    detect = (
-        "checks: builtins.listToAttrs (map (system: { name = system; value = "
-        "builtins.any (entry: builtins.elem "
-        f'"{tests_runner.VM_FEATURE}" (entry.requiredSystemFeatures or [ ])) '
-        f"(builtins.attrValues (checks.${{system}} or {{ }})); }}) [ {names} ])"
-    )
-    found = json.loads(
-        subprocess.run(
-            [
-                "nix",
-                "eval",
-                "--json",
-                "--no-update-lock-file",
-                f"path:{root}#checks",
-                "--apply",
-                detect,
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
+
+    def run(command):
+        return subprocess.run(
+            command, check=True, stdout=subprocess.PIPE, text=True
         ).stdout
-    )
-    return {system for system in systems if found.get(system) is True}
+
+    return {
+        system
+        for system in systems
+        if any(
+            tests_runner.VM_FEATURE in features
+            for features in tests_runner.entry_features(
+                run, f"path:{root}", f"checks.{system}", ["--no-update-lock-file"]
+            ).values()
+        )
+    }

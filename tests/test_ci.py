@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import yaml
 
+from tests.fixtures import derivations
 from tests.fixtures.cases import RepoTestCase
 from tools import pin_bump, policy
 
@@ -27,6 +28,13 @@ TWO_SYSTEMS = [
     "Policy / Tests (unstable, aarch64-linux)",
 ]
 RUNNERS = {"x86_64-linux": "ubuntu-24.04", "aarch64-linux": "ubuntu-24.04-arm"}
+SYSTEMS = [*RUNNERS, "riscv64-linux"]
+
+
+def repo_checks(vm_tests):
+    """The entries of a fixture repo's `checks` output on one system."""
+    vm = {"vm-boot": ["kvm", "nixos-test"]} if vm_tests else {}
+    return {"behavior": [], **vm}
 
 
 def load(path):
@@ -44,18 +52,20 @@ class CiTests(RepoTestCase):
         )
 
     def run_command(self, command, **kwargs):
-        # Answers the VM test detection: each requested system maps to
-        # whether its checks output has a VM test.
-        if command[:2] != ["nix", "eval"]:
-            raise AssertionError(command)
-        self.assertIn(f"path:{self.root.resolve()}#checks", command)
-        self.assertIn("--no-update-lock-file", command)
+        # Answers the VM test detection: each system has a plain entry, and
+        # the systems in vm_systems also a VM test.
         if self.evaluation_status:
             raise subprocess.CalledProcessError(self.evaluation_status, command)
-        systems = re.findall(r'"([^"]+)"', command[-1].rsplit("[", 1)[1])
-        self.evaluated.append(systems)
-        output = {system: system in self.vm_systems for system in systems}
-        return subprocess.CompletedProcess(command, 0, json.dumps(output))
+        if command[:2] == ["nix", "eval"]:
+            prefix = f"path:{self.root.resolve()}#checks."
+            self.assertTrue(command[3].startswith(prefix), command)
+            self.assertIn("--no-update-lock-file", command)
+            self.evaluated.append(command[3].removeprefix(prefix))
+        elif command[:3] != ["nix", "derivation", "show"]:
+            raise AssertionError(command)
+        systems = {system: repo_checks(system in self.vm_systems) for system in SYSTEMS}
+        output = derivations.answer(command, systems)
+        return subprocess.CompletedProcess(command, 0, output)
 
     def ci(self, *options):
         return self.run_policy("ci", str(self.root), *options)
@@ -67,7 +77,7 @@ class CiTests(RepoTestCase):
         self.assertEqual(report["systems"], ["x86_64-linux", "aarch64-linux"])
         self.assertEqual(report["requiredChecks"], TWO_SYSTEMS)
         self.assertEqual(report["vmTestMatrix"], {"include": []})
-        self.assertEqual(self.evaluated, [list(RUNNERS)])
+        self.assertEqual(self.evaluated, list(RUNNERS))
         self.assertEqual(
             report["checkMatrix"]["include"],
             [{"system": system, "runner": RUNNERS[system]} for system in RUNNERS],
@@ -270,15 +280,15 @@ class WorkflowTests(unittest.TestCase):
             (workspace / "repo").mkdir()
             stub = workspace / "nix"
             stub.write_text(
-                f"#!{sys.executable}\nimport json, os, re, sys\n"
+                f"#!{sys.executable}\nimport json, os, sys\n"
                 "if sys.argv[1] == 'run':\n"
                 f"    os.execv(sys.executable, [sys.executable, {str(policy.SOURCE_ROOT / 'tools/policy.py')!r}, *sys.argv[sys.argv.index('--') + 1:]])\n"
-                "if sys.argv[1] == 'eval':\n"
-                "    systems = re.findall(r'\"([^\"]+)\"', sys.argv[-1].rsplit('[', 1)[1])\n"
-                "    vm = json.loads(os.environ['VM_SYSTEMS'])\n"
-                "    print(json.dumps({system: system in vm for system in systems}))\n"
-                "    sys.exit(0)\n"
-                "sys.exit(1)\n"
+                f"sys.path.insert(0, {str(policy.SOURCE_ROOT)!r})\n"
+                "from tests.fixtures import derivations\n"
+                "from tests.test_ci import SYSTEMS, repo_checks\n"
+                "vm = json.loads(os.environ['VM_SYSTEMS'])\n"
+                "systems = {system: repo_checks(system in vm) for system in SYSTEMS}\n"
+                "print(derivations.answer(['nix', *sys.argv[1:]], systems))\n"
             )
             stub.chmod(0o755)
             output = workspace / "output"

@@ -1,11 +1,12 @@
 """Test a repo's `checks` output with the locked, stable, or unstable nixpkgs.
 
 A mode whose nixpkgs revision equals that of an earlier mode in MODES passes
-without Nix; the earlier mode's run covers it. Otherwise
-`nix flake check --no-build` evaluates every output. The run then builds
-either the VM tests, the entries that require the `nixos-test` system feature,
-or the other entries. It builds each one whose `requiredSystemFeatures` the
-host's `system-features` provide and reports the others as skipped.
+without Nix; the earlier mode's run covers it. Otherwise a run builds either
+the VM tests, the entries that require the `nixos-test` system feature, or
+the other entries. Only the run for the other entries first evaluates every
+output with `nix flake check --no-build`. A run builds each entry whose
+`requiredSystemFeatures` the host's `system-features` provide and reports the
+others as skipped.
 """
 
 import json
@@ -126,11 +127,13 @@ def run(root, mode, pins, *, vm=False, fingerprints):
             if (VM_FEATURE in features) == vm
         }
         result["checks"] = sorted(entries)
-        nix(
-            result,
-            ["nix", "flake", "check", str(root), "--no-build", *flags],
-            capture=False,
-        )
+        # The run without --vm evaluates every output, so VM runs only build.
+        if not vm:
+            nix(
+                result,
+                ["nix", "flake", "check", str(root), "--no-build", *flags],
+                capture=False,
+            )
         host = set(nix(result, ["nix", "config", "show", "system-features"]).split())
         for name, features in entries.items():
             if missing := sorted(set(features) - host):

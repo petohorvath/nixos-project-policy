@@ -7,7 +7,7 @@ This release moves VM tests into the `checks` output ([ADR 0010](docs/adr/0010-v
 ### Breaking changes
 
 - VM tests are the entries of the `checks` output that require the `nixos-test` system feature, with no system condition, instead of `legacyPackages.<system>.vmTests`. An entry that needs a system feature lists it in its own `requiredSystemFeatures`, even when only a dependency needs it.
-- `test` runs `nix flake check --no-build`, then builds the entries of the `checks` output that are not VM tests; `test --vm` builds the VM tests instead. Both build each entry whose `requiredSystemFeatures` the host's `system-features` provide.
+- `test` runs `nix flake check --no-build`, then builds the entries of the `checks` output that are not VM tests; `test --vm` builds only the VM tests and leaves the evaluation of every output to the run without `--vm`. Both build each entry whose `requiredSystemFeatures` the host's `system-features` provide.
 - The `test` report adds `vm`, `skipped`, and `sameAs`. `skipped` maps each entry that was not built to its missing features. `checks` lists the entries in scope.
 - VM tests run with the locked nixpkgs, the stable pin, and the unstable pin, in `VM tests (locked|stable|unstable, <system>)` jobs. Before, they ran with the locked nixpkgs only. The Pin-bump tests workflow now runs them with the proposed pins for the listed repos; other repos run them with a new pin after its release.
 - Replace the `VM tests` job and its `Policy / VM tests` status with `Policy / VM tests (locked|stable|unstable, <system>)` on each system whose `checks` output has VM tests. Remove the `vm` command.

@@ -80,15 +80,17 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
         }
         self.features = "kvm nixos-test"
         root = self.root.resolve()
-        for options, entries in [
-            ((), ["behavior"]),
-            (("--vm",), ["vm-boot", "vm-reads-boot"]),
+        # The Tests job evaluates every output; the VM job builds only.
+        for options, entries, evaluations in [
+            ((), ["behavior"], 1),
+            (("--vm",), ["vm-boot", "vm-reads-boot"], 0),
         ]:
             with self.subTest(options=options):
                 self.commands.clear()
                 code, report = self.run_test("locked", *options)
                 self.assertEqual(code, 0, report)
                 self.assertEqual(report["checks"], entries)
+                self.assertEqual(len(self.nix(["nix", "flake", "check"])), evaluations)
                 (build,) = self.nix(["nix", "build"])
                 self.assertEqual(
                     [argument for argument in build if argument.startswith(str(root))],
@@ -133,7 +135,7 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
                 for prefix in [
                     ["nix", "flake", "metadata"],
                     ["nix", "eval", "--json"],
-                    ["nix", "flake", "check"],
+                    *([] if options else [["nix", "flake", "check"]]),
                     ["nix", "build"],
                 ]:
                     (command,) = self.nix(prefix)

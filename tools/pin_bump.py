@@ -7,6 +7,7 @@ Every command prints JSON and exits 0, or prints an error and exits 2.
 import argparse
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -20,6 +21,9 @@ else:
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
+# A Markdown link target that is relative to the repository: no scheme, anchor,
+# or leading slash.
+RELATIVE_LINK = re.compile(r"\]\((?![A-Za-z][A-Za-z0-9+.-]*:|[#/])(?:\./)?")
 
 
 def main(argv=None):
@@ -31,9 +35,10 @@ def main(argv=None):
     propose.add_argument("--stable", required=True)
     propose.add_argument("--unstable", required=True)
     commands.add_parser("matrix", help="Print the pin-bump test matrix")
-    commands.add_parser(
-        "release", help="Plan the patch release tag for the current commit"
+    release = commands.add_parser(
+        "release", help="Plan the patch release tag and notes for the current commit"
     )
+    release.add_argument("--repository", required=True, help="OWNER/REPO for links")
     for command in commands.choices.values():
         command.add_argument("--root", type=Path, default=SOURCE_ROOT)
     args = parser.parse_args(argv)
@@ -43,7 +48,7 @@ def main(argv=None):
         elif args.command == "matrix":
             result = matrix(data.load_repos(args.root / "data/repos.json"))
         else:
-            result = plan_release(args.root)
+            result = plan_release(args.root, args.repository)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         print(json.dumps({"status": "error", "error": str(error)}), file=sys.stderr)
         return 2
@@ -117,13 +122,18 @@ def matrix(repos):
     return {"include": include}
 
 
-def plan_release(root):
+def plan_release(root, repository):
     """Plan the tag for a merged pin bump: VERSION must be the next patch."""
     version = read_version(root)
     tag = f"v{version}"
     revision = releases.git(root, "rev-parse", "HEAD").strip()
     tags = release_tags(root)
-    release = {**series(version), "revision": revision}
+    notes = release_notes(
+        (root / "CHANGELOG.md").read_text(),
+        version,
+        f"https://github.com/{repository}/blob/{tag}/",
+    )
+    release = {**series(version), "revision": revision, "notes": notes}
     if tag in tags:
         tagged = releases.git(root, "rev-list", "-n", "1", f"refs/tags/{tag}").strip()
         if tagged != revision:
@@ -192,6 +202,23 @@ def release_changelog(text, version, entry):
         start += 2
     lines[start:start] = [f"## {version}", "", entry, *moved, ""]
     return "\n".join(lines) + "\n"
+
+
+def release_notes(text, version, base):
+    """The changelog section for VERSION, with relative links under BASE."""
+    lines = text.splitlines()
+    heading = f"## {version}"
+    if heading not in lines:
+        raise ValueError(f"CHANGELOG.md has no {heading!r} heading")
+    start = lines.index(heading) + 1
+    end = next(
+        (index for index in range(start, len(lines)) if lines[index].startswith("## ")),
+        len(lines),
+    )
+    notes = "\n".join(lines[start:end]).strip("\n")
+    if not notes:
+        raise ValueError(f"CHANGELOG.md has no entries under {heading!r}")
+    return RELATIVE_LINK.sub(f"]({base}", notes)
 
 
 def write_json(path, value):

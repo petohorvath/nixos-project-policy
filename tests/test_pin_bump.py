@@ -209,12 +209,21 @@ class MatrixTests(PinBumpTestCase):
 class ReleaseTests(PinBumpTestCase):
     def merge_bump(self, version):
         self.write("VERSION", f"{version}\n")
+        changelog = self.read("CHANGELOG.md")
+        if f"## {version}" not in changelog.splitlines():
+            self.write(
+                "CHANGELOG.md",
+                pin_bump.release_changelog(changelog, version, "- Update the pins."),
+            )
         return commit(self.root)
+
+    def release(self):
+        return self.run_helper("release", "--repository", "owner/policy")
 
     def test_merged_bump_is_the_next_patch_release(self):
         self.tag("v0.5.0", "v0.5")
         revision = self.merge_bump("0.5.1")
-        code, report = self.run_helper("release")
+        code, report = self.release()
         self.assertEqual(code, 0, report)
         self.assertEqual(
             report,
@@ -224,14 +233,53 @@ class ReleaseTests(PinBumpTestCase):
                 "tag": "v0.5.1",
                 "seriesTag": "v0.5",
                 "revision": revision,
+                "notes": "- Update the pins.\n- Fix a checker bug.",
             },
         )
+
+    def test_notes_are_the_version_section_with_links_at_the_tag(self):
+        self.tag("v0.5.0")
+        self.write(
+            "CHANGELOG.md",
+            "# Changelog\n\n## Unreleased\n\n## 0.5.1\n\n"
+            "Read [ADR 1](docs/adr/0001.md) and [the caller](./templates/caller.yml).\n\n"
+            "### Added\n\n"
+            "- Keep [a site](https://example.com/a), [a section](#added), "
+            "and [a root path](/owner/policy).\n\n"
+            "## 0.5.0\n\n- Initial series.\n",
+        )
+        self.merge_bump("0.5.1")
+        code, report = self.release()
+        self.assertEqual(code, 0, report)
+        base = "https://github.com/owner/policy/blob/v0.5.1"
+        self.assertEqual(
+            report["notes"],
+            f"Read [ADR 1]({base}/docs/adr/0001.md) and "
+            f"[the caller]({base}/templates/caller.yml).\n\n"
+            "### Added\n\n"
+            "- Keep [a site](https://example.com/a), [a section](#added), "
+            "and [a root path](/owner/policy).",
+        )
+
+    def test_missing_or_empty_changelog_section_is_an_error(self):
+        self.tag("v0.5.0")
+        for name, changelog in {
+            "no heading": CHANGELOG,
+            "no entries": "# Changelog\n\n## 0.5.1\n\n## 0.5.0\n\n- Initial series.\n",
+        }.items():
+            with self.subTest(name):
+                self.write("CHANGELOG.md", changelog)
+                self.write("VERSION", "0.5.1\n")
+                commit(self.root)
+                code, report = self.release()
+                self.assertEqual(code, 2, report)
+                self.assertIn("## 0.5.1", report["error"])
 
     def test_existing_tag_on_the_merged_commit_is_reported_as_released(self):
         self.tag("v0.5.0")
         self.merge_bump("0.5.1")
         self.tag("v0.5.1")
-        code, report = self.run_helper("release")
+        code, report = self.release()
         self.assertEqual(code, 0, report)
         self.assertEqual(report["status"], "released")
         self.assertEqual(report["tag"], "v0.5.1")
@@ -240,7 +288,7 @@ class ReleaseTests(PinBumpTestCase):
         self.tag("v0.5.0")
         self.merge_bump("0.5.1")
         self.tag("v0.5.1", "v0.5.2")
-        code, report = self.run_helper("release")
+        code, report = self.release()
         self.assertEqual(code, 2, report)
         self.assertEqual(report["status"], "error")
 
@@ -257,7 +305,7 @@ class ReleaseTests(PinBumpTestCase):
                 self.clear_tags()
                 self.tag(*tags)
                 self.merge_bump(version)
-                code, report = self.run_helper("release")
+                code, report = self.release()
                 self.assertEqual(code, 2, report)
                 self.assertEqual(report["status"], "error")
 

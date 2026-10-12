@@ -36,7 +36,7 @@ Nix caches the `v0.5` reference for up to an hour. Add `--refresh` after `nix ru
 
 1. The [Propose pin bump](.github/workflows/pins.yml) workflow runs weekly, or on manual dispatch with both an exact `stable_revision` and `unstable_revision`. When the pins change, it opens the `automation/pin-bump` PR, which updates the pins, sets `VERSION` to the next patch release, and adds a changelog section.
 2. The [Pin-bump tests](.github/workflows/pin-bump-tests.yml) workflow runs `test --nixpkgs stable` and `test --nixpkgs unstable` on each system, and `vm`, from the PR against the `main` branch of every repo in [data/repos.json](data/repos.json). Fix a failing repo through a PR in that repo, then re-run the failed jobs.
-3. After a human merges the PR, the [Tag pin-bump release](.github/workflows/pin-bump-release.yml) workflow tags `vX.Y.Z` and moves `vX.Y` to it.
+3. After a human merges the PR, the [Tag pin-bump release](.github/workflows/pin-bump-release.yml) workflow tags `vX.Y.Z`, moves `vX.Y` to it, and publishes a GitHub release whose notes are the version's changelog section.
 
 The proposal needs Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to create and approve pull requests". Listed repos must be public. If rulesets are added, let GitHub Actions force-push `automation/pin-bump`, create `vX.Y.Z` tags, and force-update `vX.Y` tags.
 
@@ -44,7 +44,7 @@ The proposal needs Settings → Actions → General → Workflow permissions →
 
 `VERSION` holds the current version; its release tag adds a `v` prefix. Patch releases carry pin bumps and fixes. A breaking change bumps `VERSION` to the next minor version in the PR that makes it, so every patch release from `main` stays compatible with its series.
 
-For a release by hand, merge a PR that sets `VERSION` and moves the `Unreleased` changelog entries under the version heading. Tag the merge commit `vX.Y.Z` and create or move `vX.Y` to it. Pin-bump proposals fail until the tag for `VERSION` exists. Never move or reuse a `vX.Y.Z` tag.
+For a release by hand, merge a PR that sets `VERSION` and moves the `Unreleased` changelog entries under the version heading. Tag the merge commit `vX.Y.Z`, create or move `vX.Y` to it, and publish a GitHub release for `vX.Y.Z` with the version's changelog section as its notes. Pin-bump proposals fail until the tag for `VERSION` exists. Never move or reuse a `vX.Y.Z` tag.
 
 Until nixos-registry and nixos-cross-config call `@v0.5`, keep `policy/pins.json` and `policy/members.json` on `main` for their v0.4.0 callers. Pin bumps update `policy/pins.json` as well.
 

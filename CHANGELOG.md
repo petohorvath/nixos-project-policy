@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- Update the stable pin (`nixos-26.05`) to `0d9e9b832d03ac387417e16ce1febf73b2e631e1` and the unstable pin to `a7868a727837f3c09cee2ce0ca671c76b1589fed`.
+
 ## 0.5.0
 
 This release reduces the policy to three guarantees for each repo: its inputs, its public outputs, and its tests ([ADR 0009](docs/adr/0009-inputs-public-outputs-and-tests.md)). It breaks compatibility with v0.4.0.

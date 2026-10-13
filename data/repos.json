@@ -1,3 +1,7 @@
 {
-  "repos": ["petohorvath/nixos-cross-config", "petohorvath/nixos-registry"]
+  "repos": [
+    "petohorvath/nix-libnet",
+    "petohorvath/nixos-cross-config",
+    "petohorvath/nixos-registry"
+  ]
 }

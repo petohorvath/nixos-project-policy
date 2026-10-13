@@ -99,7 +99,11 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(report["status"], "valid")
         self.assertEqual(
             report["repos"],
-            ["petohorvath/nixos-cross-config", "petohorvath/nixos-registry"],
+            [
+                "petohorvath/nix-libnet",
+                "petohorvath/nixos-cross-config",
+                "petohorvath/nixos-registry",
+            ],
         )
         self.assertEqual(set(report["pins"]), {"stable", "unstable", "stableBranch"})
 

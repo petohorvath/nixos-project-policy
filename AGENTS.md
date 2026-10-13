@@ -2,7 +2,7 @@
 
 Before changing code, documentation, bundled data, or workflows, read [POLICY.md](POLICY.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
-For the caller workflow, pin bumps, or releases, read [README.md](README.md).
+For the caller workflow, read [README.md](README.md); for pin bumps or releases, read [docs/releases.md](docs/releases.md).
 
 Complete changes with the relevant behavioral tests and by running the formatter and flake checks exactly as [docs/development.md](docs/development.md#tools-and-checks) writes them; their flags keep the committed `flake.lock` unchanged. Report validation limits explicitly. Migrating another repo to the policy requires a separate user decision; work in this repository does not authorize it.
 

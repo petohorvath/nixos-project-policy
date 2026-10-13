@@ -1,10 +1,26 @@
 # nixos-project-policy
 
-Shared rules for the Nix flake repos in devnix-labs. [POLICY.md](POLICY.md) states what each repo guarantees about its inputs, public outputs, and tests, and [GLOSSARY.md](GLOSSARY.md) defines the terms. This repository holds the checker that enforces the rules, the reusable workflow that runs it, and the stable and unstable pins that each release bundles in [data/pins.json](data/pins.json).
+nixos-project-policy is the shared policy for the Nix flake repos in devnix-labs, with the checker that enforces it and a reusable GitHub Actions workflow that runs the checker. A repo that calls the workflow gets the same checks of its inputs, public outputs, and tests as every other repo, against the same nixpkgs pins, without keeping the rules in its own CI.
 
-## Caller workflow
+## Overview
 
-Copy [templates/policy-caller.yml](templates/policy-caller.yml) into the repo's `.github/workflows/`. Its job calls the reusable `check.yml` workflow with one optional input, `systems`: a JSON list in a string that defaults to `'["x86_64-linux", "aarch64-linux"]'`.
+[POLICY.md](POLICY.md) states the three guarantees each repo makes:
+
+- **Inputs:** root `nixpkgs` is a locked revision, and inputs from other repos reference release tags and follow root `nixpkgs`.
+- **Public outputs:** every public output evaluates, and removing one after the first release tag needs a minor or major version bump.
+- **Tests:** every entry of the `checks` output builds with the locked nixpkgs, the stable pin, and the unstable pin.
+
+Each policy release bundles the checker with its stable and unstable pins in [data/pins.json](data/pins.json): exact revisions of the stable NixOS branch, currently `nixos-26.05`, and of `nixos-unstable`. [GLOSSARY.md](GLOSSARY.md) defines the terms, and [docs/adr/](docs/adr/) records the design decisions.
+
+## Requirements
+
+- Nix with the `nix-command` and `flakes` features enabled. The checker runs its own Nix 2.34 client from its pinned nixpkgs; CI installs Nix 2.34.6.
+- A flake that provides `devShells.<system>.default`, `formatter.<system>`, and a nonempty `checks.<system>` on each checked system.
+- GitHub Actions, for the reusable workflow.
+
+## Add the policy to a repo
+
+Copy [templates/policy-caller.yml](templates/policy-caller.yml) into the repo's `.github/workflows/`. Its `Policy` job calls the reusable `check.yml` workflow from the `v0.6` series:
 
 ```yaml
 jobs:
@@ -16,40 +32,91 @@ jobs:
     #   systems: '["x86_64-linux"]'
 ```
 
-[POLICY.md](POLICY.md#caller) lists the statuses to require; the workflow's `Plan` job also writes them to its step summary.
+The optional `systems` input is a JSON list of Nix systems in a string and defaults to `'["x86_64-linux", "aarch64-linux"]'`. Those two systems run on GitHub-hosted runners; any other system needs a self-hosted runner labelled with the system name.
 
-`v0.6` moves to every patch release, so pin bumps and fixes reach the repo without a change to its caller. Breaking rule changes start a new minor series, such as `v0.7`.
+Then require the policy's statuses on the repo's default branch. [POLICY.md](POLICY.md#caller) lists them, and the workflow's `Plan` job writes the exact names for the repo to its step summary.
 
-## Local check
+## Check a repo locally
 
-Run the checker from the repo root:
+Run the checker from the repo's root:
 
-```bash
-nix run github:petohorvath/nixos-project-policy/v0.6 -- check .
+```console
+$ nix run github:petohorvath/nixos-project-policy/v0.6 -- check .
 ```
 
-`check` applies the input and public-output rules, starts the default development shell, and evaluates the formatter. CI also runs `test . --nixpkgs locked`, `stable`, and `unstable` on each system, and the same with `--vm` on each system that has VM tests; `--help` lists every command. Each command prints a JSON report and exits 0 on success, 1 when a rule or test fails, and 2 when the request cannot be processed.
+The report goes to standard output and Nix's build output to standard error. For this repository at v0.6.1, the report is:
 
-`test` evaluates every output and builds the entries of the `checks` output, except the VM tests: the entries that require `nixos-test`. `test --vm` builds only the VM tests, without evaluating the other outputs. Both build each entry whose `requiredSystemFeatures` the host's `system-features` provide and list the others under `skipped`. A mode whose nixpkgs revision equals that of an earlier mode, in the order locked, stable, unstable, passes without building and names that mode in `sameAs`. On a host without KVM, plain `nix flake check` fails instead when the repo has VM tests. Build a subset there with `nix build .#checks.<system>.<name>`, or give `nix flake check` a remote builder with the `kvm` feature; `test --vm` reads only the local `system-features` and still skips the VM tests.
+```json
+{
+  "checkerVersion": "v0.6.1",
+  "issues": [],
+  "notices": [],
+  "release": {
+    "tag": "v0.6.1",
+    "version": "0.6.1"
+  },
+  "revision": "a312749162280eb9b157c5841c938242cab38065",
+  "rules": {
+    "extra-nixpkgs": "pass",
+    "formatter": "pass",
+    "lock": "pass",
+    "no-policy-input": "pass",
+    "outputs-empty": "pass",
+    "outputs-evaluate": "pass",
+    "outputs-removal": "pass",
+    "root-nixpkgs": "pass",
+    "shell": "pass",
+    "sibling-follows-nixpkgs": "pass",
+    "sibling-one-revision": "pass",
+    "sibling-tag": "pass"
+  },
+  "siblings": [],
+  "status": "pass"
+}
+```
 
-The checker needs a Nix whose `nix derivation show` reports format version 4, such as Nix 2.34; CI uses Nix 2.34.6.
+Run the tests of the `Tests` and `VM tests` jobs the same way:
+
+```bash
+nix run github:petohorvath/nixos-project-policy/v0.6 -- test . --nixpkgs locked
+nix run github:petohorvath/nixos-project-policy/v0.6 -- test . --nixpkgs stable --vm
+```
+
+## Commands
+
+| Command                                             | Action                                                                                                         |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `check REPO`                                        | Applies the input and public-output rules, starts the default development shell, and evaluates the formatter   |
+| `test REPO --nixpkgs locked\|stable\|unstable`      | Evaluates every output and builds the entries of the `checks` output that are not VM tests                     |
+| `test REPO --nixpkgs locked\|stable\|unstable --vm` | Builds only the VM tests: the entries of the `checks` output that require `nixos-test`                         |
+| `ci REPO [--systems JSON]`                          | Prints the CI job matrices and the required status names                                                       |
+| `survey WORKSPACE`                                  | Runs `check` on every Git repo directly under `WORKSPACE` and prints a table of rule results to standard error |
+| `validate`                                          | Validates the bundled pins and repo list                                                                       |
+
+`check` and `test` cover the host system. Each command prints a JSON report and exits 0 on success, 1 when a rule or test fails, and 2 when the request cannot be processed. `--help` lists each command's arguments.
+
+`test` builds each entry whose `requiredSystemFeatures` the host's `system-features` provide and lists the others under `skipped`. A mode whose nixpkgs revision equals that of an earlier mode, in the order locked, stable, unstable, passes without building and names that mode in `sameAs`.
+
+[docs/development.md](docs/development.md#checking-another-repo) shows how to run a local checkout of the checker against another repo.
+
+## Policy updates
+
+`v0.6` moves to every patch release, so pin bumps and fixes reach the repo without a change to its caller. Breaking rule changes start a new minor series, such as `v0.7`, and [CHANGELOG.md](CHANGELOG.md) describes the migration to it.
+
+A new pin reaches a release only after every repo listed in [data/repos.json](data/repos.json) passes its tests with it. [docs/releases.md](docs/releases.md) describes pin bumps and releases.
 
 Nix caches the `v0.6` reference for up to an hour. Add `--refresh` after `nix run` to use a patch release published within that time.
 
-## Pin bumps
+## Limitations
 
-1. The [Propose pin bump](.github/workflows/pins.yml) workflow runs weekly, or on manual dispatch with both an exact `stable_revision` and `unstable_revision`. When the pins change, it opens the `automation/pin-bump` PR, which updates the pins, sets `VERSION` to the next patch release, and adds a changelog section.
-2. The [Pin-bump tests](.github/workflows/pin-bump-tests.yml) workflow runs `test` and `test --vm` with `--nixpkgs stable` and `--nixpkgs unstable` on each system from the PR against the `main` branch of every repo in [data/repos.json](data/repos.json). Fix a failing repo through a PR in that repo, then re-run the failed jobs.
-3. After a human merges the PR, the [Tag pin-bump release](.github/workflows/pin-bump-release.yml) workflow tags `vX.Y.Z`, moves `vX.Y` to it, and publishes a GitHub release whose notes are the version's changelog section.
+- `check` fails on a shallow clone, which can lack the last release tag.
+- `check` and `test` execute the checked repo's code, such as its development shell and builds.
+- On a host without KVM, plain `nix flake check` fails when the repo has VM tests. Build the other entries with `nix build .#checks.<system>.<name>`, or give `nix flake check` a remote builder with the `kvm` feature; `test --vm` reads only the local `system-features` and still skips the VM tests.
 
-The proposal needs Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to create and approve pull requests". Listed repos must be public. If rulesets are added, let GitHub Actions force-push `automation/pin-bump`, create `vX.Y.Z` tags, and force-update `vX.Y` tags.
+## Contributing
 
-## Releases
+Changes go through pull requests that a human approves. [CONTRIBUTING.md](CONTRIBUTING.md) describes the process, and [docs/development.md](docs/development.md) the development shell and checks. Report problems and propose rule changes in [GitHub Issues](https://github.com/petohorvath/nixos-project-policy/issues).
 
-`VERSION` holds the current version; its release tag adds a `v` prefix. Patch releases carry pin bumps and fixes. A breaking change bumps `VERSION` to the next minor version in the PR that makes it, so every patch release from `main` stays compatible with its series.
+## License
 
-For a release by hand, merge a PR that sets `VERSION` and moves the `Unreleased` changelog entries under the version heading. Tag the merge commit `vX.Y.Z`, create or move `vX.Y` to it, and publish a GitHub release for `vX.Y.Z` with the version's changelog section as its notes. Pin-bump proposals fail until the tag for `VERSION` exists. Never move or reuse a `vX.Y.Z` tag.
-
-## Development
-
-Follow [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/development.md](docs/development.md). Design decisions are in [docs/adr/](docs/adr/), and release changes in [CHANGELOG.md](CHANGELOG.md). Original code uses the [MIT license](LICENSE).
+`MIT`; see [LICENSE](LICENSE).

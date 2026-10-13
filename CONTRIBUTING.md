@@ -12,4 +12,4 @@ For a new requirement, document its scope, exceptions, automatic checks, and rev
 
 Keep usage and design in the docs. Keep implementation history and validation evidence in commits, PRs, and CI results. Describe release changes in [CHANGELOG.md](CHANGELOG.md).
 
-For a release, follow [releases](README.md#releases). Pin bumps are automated patch releases; see [pin bumps](README.md#pin-bumps).
+For a release, follow [releases](docs/releases.md#manual-releases). Pin bumps are automated patch releases; see [pin bumps](docs/releases.md#pin-bumps).

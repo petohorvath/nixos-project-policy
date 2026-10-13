@@ -12,7 +12,7 @@ Pin bumps are automated patch releases:
 
 The proposal needs Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to create and approve pull requests". Listed repos must be public. If rulesets are added, let GitHub Actions force-push `automation/pin-bump`, create `vX.Y.Z` tags, and force-update `vX.Y` tags.
 
-## Manual releases
+## Release by hand
 
 1. Merge a PR that sets `VERSION` and moves the `Unreleased` changelog entries under the version heading.
 2. Tag the merge commit `vX.Y.Z`, and create or move `vX.Y` to it.

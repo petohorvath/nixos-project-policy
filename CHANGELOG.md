@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Make `petohorvath/nix-libnet` a listed repo, so the Pin-bump tests workflow runs `test` and `test --vm` on it with the proposed pins.
+- Make `petohorvath/nix-libnet` and `petohorvath/nix-nftypes` listed repos, so the Pin-bump tests workflow runs `test` and `test --vm` on them with the proposed pins.
 
 ## 0.6.1
 

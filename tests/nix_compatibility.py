@@ -118,10 +118,10 @@ class NixCompatibilityTests(unittest.TestCase):
   };
 }
 """.replace("REVISION", revision).replace("SYSTEM", system)
-            # A lazy derivation hides requiredSystemFeatures, as NixOS tests do.
+            # The only VM test is a lazy derivation, which hides
+            # requiredSystemFeatures as NixOS tests do, so planning and the
+            # split both depend on reading its derivation.
             vm = (
-                'vm-boot = pkgs.runCommand "vm-boot" { requiredSystemFeatures = '
-                '[ "nixos-test" "policy-unavailable" ]; } "exit 1"; '
                 "vm-lazy = nixpkgs.lib.lazyDerivation { derivation = "
                 'pkgs.runCommand "vm-lazy" { requiredSystemFeatures = '
                 '[ "nixos-test" "policy-unavailable" ]; } "exit 1"; };'
@@ -141,13 +141,8 @@ class NixCompatibilityTests(unittest.TestCase):
                         ((), ["behavior"], {}),
                         (
                             ("--vm",),
-                            ["vm-boot", "vm-lazy"] if entry else [],
-                            {
-                                "vm-boot": ["policy-unavailable"],
-                                "vm-lazy": ["policy-unavailable"],
-                            }
-                            if entry
-                            else {},
+                            ["vm-lazy"] if entry else [],
+                            {"vm-lazy": ["policy-unavailable"]} if entry else {},
                         ),
                     ]:
                         report = json.loads(

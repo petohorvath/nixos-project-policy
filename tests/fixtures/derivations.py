@@ -7,6 +7,8 @@ format version 4, which keys derivations by store path name.
 
 import json
 
+from tools import tests_runner
+
 SYSTEMS = ["x86_64-linux", "aarch64-linux", "riscv64-linux"]
 
 
@@ -14,6 +16,11 @@ def repo_checks(vm_tests):
     """The entries of a fixture repo's `checks` output on one system."""
     vm = {"vm-boot": ["kvm", "nixos-test"]} if vm_tests else {}
     return {"behavior": [], **vm}
+
+
+def repo_systems(vm_systems):
+    """The fixture repo's entries on every system; vm_systems get a VM test."""
+    return {system: repo_checks(system in vm_systems) for system in SYSTEMS}
 
 
 def drv_path(name):
@@ -46,7 +53,7 @@ def answer(command, systems):
     return show(command, entries)
 
 
-def show(command, checks, structured=(), version=4):
+def show(command, checks, structured=()):
     """Answer `nix derivation show PATH...` for entries of checks.
 
     Entries named in structured keep their features in `structuredAttrs`, as
@@ -62,4 +69,6 @@ def show(command, checks, structured=(), version=4):
         elif checks[name]:
             derivation["env"]["requiredSystemFeatures"] = " ".join(checks[name])
         derivations[path.removeprefix("/nix/store/")] = derivation
-    return json.dumps({"derivations": derivations, "version": version})
+    return json.dumps(
+        {"derivations": derivations, "version": tests_runner.DERIVATION_FORMAT}
+    )

@@ -23,6 +23,9 @@ else:
 MODES = ("locked", "stable", "unstable")
 SYSTEM = re.compile(r"[a-z0-9_]+-[a-z0-9_]+")
 VM_FEATURE = "nixos-test"
+# The `nix derivation show` format that Nix 2.34 reports, keyed by store path
+# name.
+DERIVATION_FORMAT = 4
 
 
 def run(root, mode, pins, *, vm=False, fingerprints):
@@ -94,12 +97,12 @@ def run(root, mode, pins, *, vm=False, fingerprints):
                 "Resolved root nixpkgs does not match the expected revision"
             )
         attribute = f"checks.{system}"
-        checks = entry_features(
+        required_features = entry_features(
             lambda command: nix(result, command), str(root), attribute, flags
         )
         entries = {
             name: features
-            for name, features in checks.items()
+            for name, features in required_features.items()
             if (VM_FEATURE in features) == vm
         }
         result["checks"] = sorted(entries)
@@ -172,30 +175,40 @@ def entry_features(nix_output, flake, attribute, flags):
             )
         )
     except (subprocess.SubprocessError, OSError) as error:
-        raise ValueError(f"{attribute} does not evaluate: {error}") from error
+        raise ValueError(
+            f"{attribute} does not evaluate to derivations: {error}"
+        ) from error
     if not isinstance(paths, dict) or not paths:
         raise ValueError(f"{attribute} must contain at least one entry")
     if not all(
         isinstance(path, str) and path.endswith(".drv") for path in paths.values()
     ):
         raise ValueError(f"The entries of {attribute} must be derivations")
-    shown = json.loads(nix_output(["nix", "derivation", "show", *paths.values()]))
-    # Format version 4, which Nix 2.34 reports, keys derivations by store path
-    # name.
-    if not isinstance(shown, dict) or shown.get("version") != 4:
-        raise ValueError("nix derivation show must report format version 4")
+    show_output = json.loads(nix_output(["nix", "derivation", "show", *paths.values()]))
+    if (
+        not isinstance(show_output, dict)
+        or show_output.get("version") != DERIVATION_FORMAT
+    ):
+        raise ValueError(
+            f"nix derivation show must report format version {DERIVATION_FORMAT}"
+        )
     features = {}
     for name, path in paths.items():
-        derivation = shown["derivations"][path.rsplit("/", 1)[1]]
-        if "structuredAttrs" in derivation:
-            found = derivation["structuredAttrs"].get("requiredSystemFeatures", [])
-        else:
-            found = derivation["env"].get("requiredSystemFeatures", "").split()
-        if not isinstance(found, list) or not all(
-            isinstance(feature, str) for feature in found
+        try:
+            derivation = show_output["derivations"][path.rsplit("/", 1)[1]]
+            if "structuredAttrs" in derivation:
+                required = derivation["structuredAttrs"].get(
+                    "requiredSystemFeatures", []
+                )
+            else:
+                required = derivation["env"].get("requiredSystemFeatures", "").split()
+        except (AttributeError, KeyError, TypeError) as error:
+            raise ValueError(f"nix derivation show does not describe {name}") from error
+        if not isinstance(required, list) or not all(
+            isinstance(feature, str) for feature in required
         ):
             raise ValueError(f"requiredSystemFeatures of {name} must be strings")
-        features[name] = found
+        features[name] = required
     return features
 
 

@@ -126,11 +126,24 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
         )
 
     def test_an_unknown_derivation_format_or_malformed_features_fail(self):
-        self.show_version = 3
-        code, report = self.run_test("locked")
-        self.assertEqual(code, 1, report)
-        self.assertIn("format version 4", " ".join(report["issues"]))
-        self.show_version = 4
+        behavior = derivations.drv_path("behavior").removeprefix("/nix/store/")
+        for output, problem in [
+            (
+                {"derivations": {behavior: {"env": {}}}, "version": 3},
+                "format version 4",
+            ),
+            ({"derivations": {}, "version": 4}, "does not describe behavior"),
+            (
+                {"derivations": {behavior: {"env": []}}, "version": 4},
+                "does not describe behavior",
+            ),
+        ]:
+            with self.subTest(output=output):
+                self.show_output = json.dumps(output)
+                code, report = self.run_test("locked")
+                self.assertEqual(code, 1, report)
+                self.assertIn(problem, " ".join(report["issues"]))
+        self.show_output = None
         self.checks = {"vm-boot": ["kvm", 1]}
         self.structured = {"vm-boot"}
         code, report = self.run_test("locked", "--vm")

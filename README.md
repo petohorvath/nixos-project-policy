@@ -32,6 +32,8 @@ nix run github:petohorvath/nixos-project-policy/v0.6 -- check .
 
 `test` evaluates every output and builds the entries of the `checks` output, except the VM tests: the entries that require `nixos-test`. `test --vm` builds only the VM tests, without evaluating the other outputs. Both build each entry whose `requiredSystemFeatures` the host's `system-features` provide and list the others under `skipped`. A mode whose nixpkgs revision equals that of an earlier mode, in the order locked, stable, unstable, passes without building and names that mode in `sameAs`. On a host without KVM, plain `nix flake check` fails instead when the repo has VM tests. Build a subset there with `nix build .#checks.<system>.<name>`, or give `nix flake check` a remote builder with the `kvm` feature; `test --vm` reads only the local `system-features` and still skips the VM tests.
 
+The checker needs a Nix whose `nix derivation show` reports format version 4, such as Nix 2.34; CI uses Nix 2.34.6.
+
 Nix caches the `v0.6` reference for up to an hour. Add `--refresh` after `nix run` to use a patch release published within that time.
 
 ## Pin bumps

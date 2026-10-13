@@ -38,6 +38,7 @@ class CiTests(RepoTestCase):
     def setUp(self):
         super().setUp()
         self.vm_systems = set()
+        self.empty_systems = set()
         self.evaluation_status = 0
         self.evaluated = []
         self.enterContext(
@@ -56,10 +57,9 @@ class CiTests(RepoTestCase):
             self.evaluated.append(command[3].removeprefix(prefix))
         elif command[:3] != ["nix", "derivation", "show"]:
             raise AssertionError(command)
-        systems = {
-            system: derivations.repo_checks(system in self.vm_systems)
-            for system in derivations.SYSTEMS
-        }
+        systems = derivations.repo_systems(self.vm_systems)
+        for system in self.empty_systems:
+            systems[system] = {}
         output = derivations.answer(command, systems)
         return subprocess.CompletedProcess(command, 0, output)
 
@@ -168,6 +168,13 @@ class CiTests(RepoTestCase):
         code, report = self.ci()
         self.assertEqual(code, 2, report)
         self.assertNotIn("requiredChecks", report)
+
+    def test_a_system_with_an_empty_checks_output_is_an_error(self):
+        self.empty_systems = {"aarch64-linux"}
+        code, report = self.ci()
+        self.assertEqual(code, 2, report)
+        self.assertIn("checks.aarch64-linux", report["error"])
+        self.assertIn("at least one entry", report["error"])
 
 
 class WorkflowTests(unittest.TestCase):
@@ -282,8 +289,7 @@ class WorkflowTests(unittest.TestCase):
                 f"sys.path.insert(0, {str(policy.SOURCE_ROOT)!r})\n"
                 "from tests.fixtures import derivations\n"
                 "vm = json.loads(os.environ['VM_SYSTEMS'])\n"
-                "systems = {system: derivations.repo_checks(system in vm)"
-                " for system in derivations.SYSTEMS}\n"
+                "systems = derivations.repo_systems(vm)\n"
                 "print(derivations.answer(['nix', *sys.argv[1:]], systems))\n"
             )
             stub.chmod(0o755)

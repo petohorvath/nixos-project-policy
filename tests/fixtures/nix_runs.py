@@ -5,6 +5,7 @@ import json
 import subprocess
 from unittest.mock import patch
 
+from tests.fixtures import derivations
 from tests.fixtures.data import nixpkgs
 from tests.fixtures.repos import RepoFixture
 from tools import policy
@@ -15,8 +16,9 @@ class NixRunFixture(RepoFixture):
 
     `metadata` is None to echo the repo's lock with any nixpkgs override
     applied, or a fixed `locks` graph to simulate what Nix resolved. `checks`
-    maps each check name to its required system features, and `features` is
-    the host's `system-features`.
+    maps each entry name to its derivation's required system features, kept
+    in `structuredAttrs` for the names in `structured`. `features` is the
+    host's `system-features`.
     """
 
     def prepare(self):
@@ -24,6 +26,9 @@ class NixRunFixture(RepoFixture):
         self.host = "x86_64-linux"
         self.metadata = None
         self.checks = {"behavior": []}
+        self.structured = set()
+        # A raw `nix derivation show` answer, or None to describe `checks`.
+        self.show_output = None
         self.features = "benchmark big-parallel nixos-test uid-range"
         self.commands = []
         self.fail_stage = None
@@ -42,8 +47,15 @@ class NixRunFixture(RepoFixture):
             return subprocess.CompletedProcess(
                 command, 0, json.dumps(self.resolve(command))
             )
+        if command[:2] == ["nix", "eval"] and "--impure" in command:
+            return subprocess.CompletedProcess(command, 0, self.host)
         if command[:2] == ["nix", "eval"]:
-            output = self.host if "--impure" in command else json.dumps(self.checks)
+            output = json.dumps(derivations.drv_paths(self.checks))
+            return subprocess.CompletedProcess(command, 0, output)
+        if command[:3] == ["nix", "derivation", "show"]:
+            output = self.show_output or derivations.show(
+                command, self.checks, self.structured
+            )
             return subprocess.CompletedProcess(command, 0, output)
         if command[:3] == ["nix", "config", "show"]:
             return subprocess.CompletedProcess(command, 0, f"{self.features}\n")

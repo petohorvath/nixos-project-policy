@@ -23,6 +23,9 @@ else:
 MODES = ("locked", "stable", "unstable")
 SYSTEM = re.compile(r"[a-z0-9_]+-[a-z0-9_]+")
 VM_FEATURE = "nixos-test"
+# The `nix derivation show` format that Nix 2.34 reports, keyed by store path
+# name.
+DERIVATION_FORMAT = 4
 
 
 def run(root, mode, pins, *, vm=False, fingerprints):
@@ -94,36 +97,12 @@ def run(root, mode, pins, *, vm=False, fingerprints):
                 "Resolved root nixpkgs does not match the expected revision"
             )
         attribute = f"checks.{system}"
-        try:
-            checks = json.loads(
-                nix(
-                    result,
-                    [
-                        "nix",
-                        "eval",
-                        "--json",
-                        f"{root}#{attribute}",
-                        "--apply",
-                        "builtins.mapAttrs (_: check: check.requiredSystemFeatures or [ ])",
-                        *flags,
-                    ],
-                )
-            )
-        except (subprocess.SubprocessError, OSError) as error:
-            raise ValueError(f"{attribute} does not evaluate: {error}") from error
-        if not isinstance(checks, dict) or not checks:
-            raise ValueError(f"{attribute} must contain at least one check")
-        if not all(
-            isinstance(features, list)
-            and all(isinstance(feature, str) for feature in features)
-            for features in checks.values()
-        ):
-            raise ValueError(
-                f"requiredSystemFeatures in {attribute} must be lists of strings"
-            )
+        required_features = entry_features(
+            lambda command: nix(result, command), str(root), attribute, flags
+        )
         entries = {
             name: features
-            for name, features in checks.items()
+            for name, features in required_features.items()
             if (VM_FEATURE in features) == vm
         }
         result["checks"] = sorted(entries)
@@ -172,6 +151,65 @@ def run(root, mode, pins, *, vm=False, fingerprints):
         if result["issues"]:
             result["status"] = "fail"
     return result
+
+
+def entry_features(nix_output, flake, attribute, flags):
+    """Map each entry of the `checks` set at flake#attribute to its features.
+
+    nix_output(command) returns the standard output of a Nix command. The
+    features come from the instantiated derivations: lazy derivations, such as
+    NixOS tests, have no `requiredSystemFeatures` attribute.
+    """
+    try:
+        paths = json.loads(
+            nix_output(
+                [
+                    "nix",
+                    "eval",
+                    "--json",
+                    f"{flake}#{attribute}",
+                    "--apply",
+                    "builtins.mapAttrs (_: entry: entry.drvPath)",
+                    *flags,
+                ]
+            )
+        )
+    except (subprocess.SubprocessError, OSError) as error:
+        raise ValueError(
+            f"{attribute} does not evaluate to derivations: {error}"
+        ) from error
+    if not isinstance(paths, dict) or not paths:
+        raise ValueError(f"{attribute} must contain at least one entry")
+    if not all(
+        isinstance(path, str) and path.endswith(".drv") for path in paths.values()
+    ):
+        raise ValueError(f"The entries of {attribute} must be derivations")
+    show_output = json.loads(nix_output(["nix", "derivation", "show", *paths.values()]))
+    if (
+        not isinstance(show_output, dict)
+        or show_output.get("version") != DERIVATION_FORMAT
+    ):
+        raise ValueError(
+            f"nix derivation show must report format version {DERIVATION_FORMAT}"
+        )
+    features = {}
+    for name, path in paths.items():
+        try:
+            derivation = show_output["derivations"][path.rsplit("/", 1)[1]]
+            if "structuredAttrs" in derivation:
+                required = derivation["structuredAttrs"].get(
+                    "requiredSystemFeatures", []
+                )
+            else:
+                required = derivation["env"].get("requiredSystemFeatures", "").split()
+        except (AttributeError, KeyError, TypeError) as error:
+            raise ValueError(f"nix derivation show does not describe {name}") from error
+        if not isinstance(required, list) or not all(
+            isinstance(feature, str) for feature in required
+        ):
+            raise ValueError(f"requiredSystemFeatures of {name} must be strings")
+        features[name] = required
+    return features
 
 
 def root_nixpkgs(lock):

@@ -35,13 +35,13 @@ class NixCompatibilityTests(unittest.TestCase):
             ).replace("SYSTEM", system)
             for output, outcome in [
                 ("", "does not evaluate"),
-                (f'checks."{system}" = {{}};', "at least one check"),
+                (f'checks."{system}" = {{}};', "at least one entry"),
                 (
                     'checks."another-system" = { behavior = null; };',
                     "does not evaluate",
                 ),
-                # The name guard passes; nix flake check still validates values.
-                (f'checks."{system}" = {{ behavior = null; }};', "flake check"),
+                # Reading each entry's derivation rejects non-derivations.
+                (f'checks."{system}" = {{ behavior = null; }};', "does not evaluate"),
                 (f'checks."{system}" = {{ behavior = {build}; }};', None),
                 (
                     f'checks."{system}" = '
@@ -88,14 +88,6 @@ class NixCompatibilityTests(unittest.TestCase):
                         self.assertEqual(
                             report["skipped"], {"unavailable": ["policy-unavailable"]}
                         )
-                    elif outcome == "flake check":
-                        self.assertEqual(report["checks"], ["behavior"])
-                        self.assertEqual(
-                            report["commands"][-1]["command"][:3],
-                            ["nix", "flake", "check"],
-                        )
-                        self.assertIn("--no-build", report["commands"][-1]["command"])
-                        self.assertNotEqual(report["commands"][-1]["returncode"], 0)
                     else:
                         self.assertIn(outcome, " ".join(report["issues"]))
 
@@ -126,9 +118,13 @@ class NixCompatibilityTests(unittest.TestCase):
   };
 }
 """.replace("REVISION", revision).replace("SYSTEM", system)
+            # The only VM test is a lazy derivation, which hides
+            # requiredSystemFeatures as NixOS tests do, so planning and the
+            # split both depend on reading its derivation.
             vm = (
-                'vm-boot = pkgs.runCommand "vm-boot" { requiredSystemFeatures = '
-                '[ "nixos-test" "policy-unavailable" ]; } "exit 1";'
+                "vm-lazy = nixpkgs.lib.lazyDerivation { derivation = "
+                'pkgs.runCommand "vm-lazy" { requiredSystemFeatures = '
+                '[ "nixos-test" "policy-unavailable" ]; } "exit 1"; };'
             )
             for entry, vm_jobs in [("", 0), (vm, 3)]:
                 with self.subTest(vm_tests=bool(entry)):
@@ -145,8 +141,8 @@ class NixCompatibilityTests(unittest.TestCase):
                         ((), ["behavior"], {}),
                         (
                             ("--vm",),
-                            ["vm-boot"] if entry else [],
-                            {"vm-boot": ["policy-unavailable"]} if entry else {},
+                            ["vm-lazy"] if entry else [],
+                            {"vm-lazy": ["policy-unavailable"]} if entry else {},
                         ),
                     ]:
                         report = json.loads(

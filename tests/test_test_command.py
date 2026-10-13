@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 import unittest
 
+from tests.fixtures import derivations
 from tests.fixtures.cases import RepoTestCase
 from tests.fixtures.data import NEW_PAIR, NEW_STABLE, NEW_UNSTABLE, STABLE, lockfile
 from tests.fixtures.nix_runs import NixRunFixture
@@ -101,6 +102,53 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
         code, report = self.run_test("locked", "--vm")
         self.assertEqual(code, 0, report)
         self.assertEqual(report["checks"], [])
+        self.assertEqual(self.nix(["nix", "build"]), [])
+
+    def test_features_come_from_the_derivation_in_either_attribute_format(self):
+        # NixOS tests are lazy derivations without a requiredSystemFeatures
+        # attribute, so only the instantiated derivation shows the features.
+        self.checks = {
+            "behavior": [],
+            "vm-env": ["kvm", "nixos-test"],
+            "vm-structured": ["kvm", "nixos-test"],
+        }
+        self.structured = {"vm-structured"}
+        self.features = "nixos-test"
+        code, report = self.run_test("locked", "--vm")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["checks"], ["vm-env", "vm-structured"])
+        self.assertEqual(
+            report["skipped"], {"vm-env": ["kvm"], "vm-structured": ["kvm"]}
+        )
+        (show,) = self.nix(["nix", "derivation", "show"])
+        self.assertCountEqual(
+            show[3:], [derivations.drv_path(name) for name in self.checks]
+        )
+
+    def test_an_unknown_derivation_format_or_malformed_features_fail(self):
+        behavior = derivations.drv_path("behavior").removeprefix("/nix/store/")
+        for output, problem in [
+            (
+                {"derivations": {behavior: {"env": {}}}, "version": 3},
+                "format version 4",
+            ),
+            ({"derivations": {}, "version": 4}, "does not describe behavior"),
+            (
+                {"derivations": {behavior: {"env": []}}, "version": 4},
+                "does not describe behavior",
+            ),
+        ]:
+            with self.subTest(output=output):
+                self.show_output = json.dumps(output)
+                code, report = self.run_test("locked")
+                self.assertEqual(code, 1, report)
+                self.assertIn(problem, " ".join(report["issues"]))
+        self.show_output = None
+        self.checks = {"vm-boot": ["kvm", 1]}
+        self.structured = {"vm-boot"}
+        code, report = self.run_test("locked", "--vm")
+        self.assertEqual(code, 1, report)
+        self.assertIn("vm-boot", " ".join(report["issues"]))
         self.assertEqual(self.nix(["nix", "build"]), [])
 
     def test_vm_tests_without_kvm_pass_as_skipped_without_a_build(self):
@@ -201,13 +249,13 @@ class TestCommandTests(NixRunFixture, RepoTestCase):
 
     def test_empty_or_missing_checks_fail_before_building(self):
         for checks, problem in [
-            ([], "at least one check"),
-            ({}, "at least one check"),
-            (None, "at least one check"),
-            (["behavior"], "at least one check"),
-            ("behavior", "at least one check"),
-            ({"behavior": "kvm"}, "requiredSystemFeatures"),
-            ({"behavior": [1]}, "requiredSystemFeatures"),
+            ([], "at least one entry"),
+            ({}, "at least one entry"),
+            (None, "at least one entry"),
+            (["behavior"], "at least one entry"),
+            ("behavior", "at least one entry"),
+            ({"behavior": "kvm"}, "derivations"),
+            ({"behavior": None}, "derivations"),
         ]:
             for mode in ["locked", "unstable"]:
                 with self.subTest(checks=checks, nixpkgs=mode):

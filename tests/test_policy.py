@@ -101,6 +101,7 @@ class RecordTests(unittest.TestCase):
             report["repos"],
             [
                 "petohorvath/nix-libnet",
+                "petohorvath/nix-nftypes",
                 "petohorvath/nixos-cross-config",
                 "petohorvath/nixos-registry",
             ],

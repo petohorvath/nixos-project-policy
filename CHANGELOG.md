@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.6.2
+
+- Update the stable pin (`nixos-26.05`) to `8ce73368d1efd4d657e9064d29b144a52046b4e8` and the unstable pin to `fe13242281a67641c0102cdb1087f0ebe586c7df`.
 - Make `petohorvath/nix-libnet` and `petohorvath/nix-nftypes` listed repos, so the Pin-bump tests workflow runs `test` and `test --vm` on them with the proposed pins.
 
 ## 0.6.1

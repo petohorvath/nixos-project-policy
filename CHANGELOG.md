@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.6.3
+
+- Update the stable pin (`nixos-26.05`) to `6f06d204d8f2d8761d9da78778745974a3216381` and the unstable pin to `31ecbaca1bdefa45dffc409f0250bd8039ea0010`.
+
 ## 0.6.2
 
 - Update the stable pin (`nixos-26.05`) to `1f607aa79b6356ed45d3cd3c8079c196e79efa2c` and the unstable pin to `3ec636362e1816bc2f0888fa0fa2c69f1bc9e504`.

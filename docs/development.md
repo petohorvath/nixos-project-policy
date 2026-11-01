@@ -4,7 +4,7 @@
 
 Install Nix with `nix-command` and `flakes` enabled. CI uses Nix 2.34.6 to enter the pinned environment.
 
-For automatic shell activation, install direnv with `use flake` support. Enable direnv in the interactive shell. [Nix-direnv](https://github.com/nix-community/nix-direnv#installation) can supply flake support if needed. The repository's `.envrc` reports missing prerequisites.
+For automatic shell activation, install direnv and enable it in the interactive shell. The root `.envrc` uses [nix-direnv](https://github.com/nix-community/nix-direnv) for flake support, reusing an installed version of at least 3.2.0 or downloading the checksum-verified 3.2.0 release on first activation. This download requires network access.
 
 Review `.envrc`, then run `direnv allow`. Alternatively, run `nix develop --no-update-lock-file`. Host Nix is required for both methods; the development shell then supplies its pinned Nix executable.
 
